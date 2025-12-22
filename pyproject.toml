@@ -1,0 +1,7 @@
+[project]
+name = "annealedrl"
+version = "0.1.0"
+description = "annealed RL experiments"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
