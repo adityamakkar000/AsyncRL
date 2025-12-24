@@ -1,0 +1,182 @@
+from src.evals.config import evalConfig
+import subprocess
+from loguru import logger
+import time
+from src.evals.utils import (
+    ping_server,
+    terminate_process,
+    format_command,
+    hash_dictConfig,
+)
+from openbench import run_eval
+from omegaconf import DictConfig, OmegaConf, MISSING
+import os
+
+SERVED_MODEL_NAME = "eval_model"
+IP = "localhost"
+PORT = "8000"
+GPU_MEMORY_UTILIZATION = "0.98"
+EVAL_LOG_DIR = "logs/eval_logs"
+DISPLAY = "plain"
+
+
+class EvalRunner:
+    def __init__(self, config: evalConfig):
+        self.config = config
+        self.vllm_config = config.vllm_config
+        self.model_config = config.model_config
+
+        self.check_config()
+        self.vllm_process = None
+        self.eval_process = None
+
+    def check_config(self):
+        # model config
+        if (
+            self.model_config.use_best_ckpt
+            and self.model_config.step_number is not None
+        ):
+            raise ValueError("Cannot set both use_best_ckpt and step_number.")
+        if (
+            not self.model_config.use_best_ckpt
+            and self.model_config.step_number is None
+        ):
+            raise ValueError("Must set either use_best_ckpt or step_number.")
+
+        # vllm config
+        if type(self.config.vllm_config.max_batched_tokens) == str:
+            if self.config.vllm_config.max_batched_tokens != "auto":
+                raise ValueError(
+                    "If max_batched_tokens is a string, it must be 'auto'."
+                )
+        dtypes = ["auto", "bfloat16", "float16", "float32"]
+        if not self.config.vllm_config.dtype in dtypes:
+            raise ValueError(
+                f"dtype must be one of {dtypes}, but got {self.config.vllm_config.dtype}."
+            )
+
+    def load_model(self):
+        """
+        #TODO:
+        load the model from checkpoint
+        setup wandb
+
+        """
+
+        raise NotImplementedError()
+
+    def save_model_to_hf(self):
+        """
+        save the local model to safetensors local directory
+        so that vllm can load it
+
+        """
+
+        raise NotImplementedError()
+
+    def launch_vllm(self):
+        # TODO:
+        # after we haev saved our own model
+        # use flag vllm serve <path_to_model>
+        # https://discuss.vllm.ai/t/how-to-use-local-model-when-using-vllm-serve/1149
+
+        # args: https://docs.vllm.ai/en/v0.5.4/models/engine_args.html
+        command = [
+            "vllm",
+            "serve",
+            # variable args
+            "--data-parallel-size",
+            str(self.vllm_config.data_parallel_size),
+            "--tensor-parallel-size",
+            str(self.vllm_config.tensor_parallel_size),
+            "--max-num-seqs",
+            str(self.vllm_config.max_sequences),
+            "--max-num-batched-tokens",
+            str(self.vllm_config.max_batched_tokens),
+            "--dtype",
+            self.vllm_config.dtype,
+            # fixed args
+            "--gpu-memory-utilization",
+            GPU_MEMORY_UTILIZATION,
+            "--port",
+            PORT,
+            "--disable-log-requests",
+            "--enable-prefix-caching",
+            "--served-model-name",
+            SERVED_MODEL_NAME,
+        ]
+
+        logger.info(f"Launching vLLM with command: \n{format_command(command)}")
+
+        self.vllm_process = subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL if not self.config.debug else None,
+        )
+        start = time.perf_counter()
+        while not ping_server(IP, PORT):
+            logger.info("Waiting for vLLM server to be ready...")
+            time.sleep(5)
+        end = time.perf_counter()
+        logger.info(f"vLLM server is ready in {end - start:.2f} seconds.")
+
+    def launch_eval(self):
+        log_file = hash_dictConfig(self.config)
+        log_path = os.path.join(os.path.abspath(EVAL_LOG_DIR), f"{log_file}.eval")
+        if not os.path.exists(log_path):
+            logger.info(f"launching new evaluation ...")
+            # args: https://github.com/groq/openbench?tab=readme-ov-file#commands-and-options
+            command = [
+                "bench",
+                "eval",
+                self.config.task,
+                # variable args
+                "--max-connections",
+                str(self.config.max_connections),
+                "--epochs",
+                str(self.config.epochs) if not self.config.debug else "1",
+                "--temperature",
+                str(self.config.temperature),
+                "--top-p",
+                str(self.config.top_p),
+                "--max-tokens",
+                str(self.config.max_tokens),
+                # fix args
+                "--model",
+                "vllm/" + SERVED_MODEL_NAME,
+                "--log-dir",
+                EVAL_LOG_DIR,
+                "--display",
+                DISPLAY,
+                "--logfile",
+                log_file,
+                "--log-samples",
+            ]
+            if self.config.debug:
+                command += ["--limit", "10", "--debug"]
+        else:
+            logger.info(f"resuming evaluation from existing run ...")
+            command = [
+                "bench",
+                "eval-retry",
+                log_path,
+                # fixed args
+                "--log-samples",
+            ]
+
+        logger.info(f"Launching evaluation with command: \n{format_command(command)}")
+        self.eval_process = subprocess.run(command)
+
+    def cleanup(self):
+        logger.info("Cleaning up...")
+        self.vllm_proess = terminate_process(self.vllm_process, "vLLM")
+        self.eval_process = terminate_process(self.eval_process, "openbench")
+
+    def run_evaluation(self):
+        try:
+            # TODO:
+            # self.load_model()
+            # self.save_model_to_hf()
+            self.launch_vllm()
+            self.launch_eval()
+        finally:
+            self.cleanup()

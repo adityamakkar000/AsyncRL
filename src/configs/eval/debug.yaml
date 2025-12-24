@@ -1,0 +1,5 @@
+defaults: 
+  - main 
+  - _self_ 
+
+debug: true
