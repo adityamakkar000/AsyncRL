@@ -31,28 +31,18 @@ class EvalRunner:
 
     def check_config(self):
         # model config
-        if (
-            self.model_config.use_best_ckpt
-            and self.model_config.step_number is not None
-        ):
+        if self.model_config.use_best_ckpt and self.model_config.step_number is not None:
             raise ValueError("Cannot set both use_best_ckpt and step_number.")
-        if (
-            not self.model_config.use_best_ckpt
-            and self.model_config.step_number is None
-        ):
+        if not self.model_config.use_best_ckpt and self.model_config.step_number is None:
             raise ValueError("Must set either use_best_ckpt or step_number.")
 
         # vllm config
         if isinstance(self.config.vllm_config.max_batched_tokens, str):
             if self.config.vllm_config.max_batched_tokens != "auto":
-                raise ValueError(
-                    "If max_batched_tokens is a string, it must be 'auto'."
-                )
+                raise ValueError("If max_batched_tokens is a string, it must be 'auto'.")
         dtypes = ["auto", "bfloat16", "float16", "float32"]
         if self.config.vllm_config.dtype not in dtypes:
-            raise ValueError(
-                f"dtype must be one of {dtypes}, but got {self.config.vllm_config.dtype}."
-            )
+            raise ValueError(f"dtype must be one of {dtypes}, but got {self.config.vllm_config.dtype}.")
 
     def load_model(self):
         """

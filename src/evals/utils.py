@@ -1,8 +1,9 @@
+import hashlib
+import json
 import subprocess
+
 import requests
 from loguru import logger
-import json
-import hashlib
 from omegaconf import DictConfig, OmegaConf
 
 
