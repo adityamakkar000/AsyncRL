@@ -1,0 +1,16 @@
+line-length = 120
+target-version = "py311"
+respect-gitignore = true
+
+[format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+exclude = ["*.ipynb"]
+
+[lint]
+exclude = ["*.ipynb"]
+extend-select = [
+    "F", 
+    "I",
+]
