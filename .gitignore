@@ -1,4 +1,7 @@
 .venv/* 
 .ruff_cache/* 
-
-
+.env
+**/logs/*
+*.pyc
+**/outputs/*
+*.log 

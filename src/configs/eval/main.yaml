@@ -1,0 +1,13 @@
+defaults:
+  - base_eval_config 
+  - model_config: main
+  - vllm_config: main
+  - _self_
+
+
+task: "aime_2025"
+max_connections: 100 
+temperature: 1.0
+top_p: 1.0
+max_tokens: 8192
+
