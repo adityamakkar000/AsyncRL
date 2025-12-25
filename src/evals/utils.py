@@ -7,6 +7,14 @@ from omegaconf import DictConfig, OmegaConf
 
 
 def ping_server(host: str, port: int) -> bool:
+    """
+    Ping a server to check if it's alive.
+    Args:
+        host (str): The server host.
+        port (int): The server port.
+    Returns:
+        bool: True if the server responds, False otherwise.
+    """
     try:
         response = requests.get(f"http://{host}:{port}/ping", timeout=5)
         return response.status_code == 200
@@ -15,6 +23,15 @@ def ping_server(host: str, port: int) -> bool:
 
 
 def terminate_process(process: subprocess.Popen | None, name: str) -> None:
+    """
+    Terminate a subprocess if it exists.
+    Args:
+        process (subprocess.Popen | None): The process to terminate.
+        name (str): Name of the process for logging purposes.
+    Returns:
+        None
+
+    """
     if process is not None:
         logger.info(f"Terminating {name} process...")
         # process might have already exited
@@ -28,6 +45,14 @@ def terminate_process(process: subprocess.Popen | None, name: str) -> None:
 
 
 def format_command(cmd: list[str]) -> str:
+    """
+    Format a command list into a readable string.
+    Args:
+        cmd (list[str]): The command as a list of strings.
+    Returns:
+        str: Formatted command string.
+    """
+
     out = [cmd[0] + " " + cmd[1]]
     i = 2
     while i < len(cmd):
@@ -45,6 +70,17 @@ def format_command(cmd: list[str]) -> str:
 
 
 def hash_dictConfig(d: DictConfig) -> str:
+    """
+    Hash a DictConfig object.
+    Args:
+        d (DictConfig): The DictConfig object to hash.
+    Returns:
+        str: The SHA-256 hash of the DictConfig.
+    """
+
+    # TODO:
+    # find a way to only include some keys
+
     hash_obj = OmegaConf.to_container(
         d,
         resolve=True,
