@@ -6,7 +6,7 @@ import hashlib
 from omegaconf import DictConfig, OmegaConf
 
 
-def ping_server(host: str, port: int) -> bool:
+def ping_server(host: str, port: int | str) -> bool:
     """
     Ping a server to check if it's alive.
     Args:
@@ -38,7 +38,7 @@ def terminate_process(process: subprocess.Popen | None, name: str) -> None:
         try:
             process.terminate()
             process.wait()
-        except Exception as e:
+        except Exception:
             ...
         logger.info(f"{name} process terminated.")
     return None
