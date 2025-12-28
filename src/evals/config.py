@@ -22,7 +22,7 @@ class modelConfig:
 
 @dataclass
 class evalConfig:
-    task: str = MISSING
+    tasks: list[str] = MISSING
     model_config: modelConfig = field(default_factory=modelConfig)
     vllm_config: vLLMConfig = field(default_factory=vLLMConfig)
     temperature: float = 1.0

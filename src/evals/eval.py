@@ -18,6 +18,7 @@ PORT = "8000"
 GPU_MEMORY_UTILIZATION = "0.98"
 EVAL_LOG_DIR = "logs/eval_logs"
 DISPLAY = "plain"
+MAX_TASKS = "5"
 
 
 class EvalRunner:
@@ -109,48 +110,67 @@ class EvalRunner:
         logger.info(f"vLLM server is ready in {end - start:.2f} seconds.")
 
     def launch_eval(self):
-        log_file = hash_dictConfig(self.config)
-        log_path = os.path.join(os.path.abspath(EVAL_LOG_DIR), f"{log_file}.eval")
+        log_file_template = hash_dictConfig(self.config)
+        log_path = os.path.join(os.path.abspath(EVAL_LOG_DIR), log_file_template)
+
         if not os.path.exists(log_path):
             logger.info("launching new evaluation ...")
             # args: https://github.com/groq/openbench?tab=readme-ov-file#commands-and-options
-            command = [
-                "bench",
-                "eval",
-                self.config.task,
-                # variable args
-                "--max-connections",
-                str(self.config.max_connections),
-                "--epochs",
-                str(self.config.epochs) if not self.config.debug else "1",
-                "--temperature",
-                str(self.config.temperature),
-                "--top-p",
-                str(self.config.top_p),
-                "--max-tokens",
-                str(self.config.max_tokens),
-                # fix args
-                "--model",
-                "vllm/" + SERVED_MODEL_NAME,
-                "--log-dir",
-                EVAL_LOG_DIR,
-                "--display",
-                DISPLAY,
-                "--logfile",
-                log_file,
-                "--log-samples",
-            ]
+            command = (
+                [
+                    "bench",
+                    "eval",
+                ]
+                + self.config.tasks
+                + [
+                    # variable args
+                    "--max-connections",
+                    str(self.config.max_connections),
+                    "--epochs",
+                    str(self.config.epochs) if not self.config.debug else "1",
+                    "--temperature",
+                    str(self.config.temperature),
+                    "--top-p",
+                    str(self.config.top_p),
+                    "--max-tokens",
+                    str(self.config.max_tokens),
+                    # fix args
+                    "--model",
+                    "vllm/" + SERVED_MODEL_NAME,
+                    "--max-tasks",
+                    MAX_TASKS,
+                    "--log-dir",
+                    f"{EVAL_LOG_DIR}/{log_file_template}",
+                    "--display",
+                    DISPLAY,
+                    "--log-samples",
+                ]
+            )
             if self.config.debug:
                 command += ["--limit", "10", "--debug"]
+
         else:
+            """
+            #TODO: restarting has some problems with openbench 
+             if we really need to restart an eval
+             we can just make seperate processes for each task 
+             current issues 
+             1. eval retry uses the intearactive dashbord dispaly -- doesn't support display arg
+             2. it retries but fails with more then one task
+            """
             logger.info("resuming evaluation from existing run ...")
-            command = [
-                "bench",
-                "eval-retry",
-                log_path,
-                # fixed args
-                "--log-samples",
-            ]
+            log_files = [f"{log_path}/{f}" for f in os.listdir(log_path) if f.endswith(".eval")]
+            command = (
+                [
+                    "bench",
+                    "eval-retry",
+                ]
+                + log_files
+                + [
+                    # fixed args
+                    "--log-samples",
+                ]
+            )
 
         logger.info(f"Launching evaluation with command: \n{format_command(command)}")
         subprocess.run(command)
