@@ -49,15 +49,15 @@ class mainModel(mainMixin, HFMixin):
         model_size = self.config.chosen_model_size
         if model_size == "0.6B":
             QWEN3_CONFIG = {
-                "vocab_size": 151936,  # Vocabulary size
-                "d_ff": 3072,  # Size of the intermediate dimension in FeedForward
-                "sequence_len": 8192,  # Context length that was used to train the model
-                "model_dim": 1024,  # Embedding dimension
-                "n_heads": 16,  # Number of attention heads
-                "n_groups": 8,  # Key-Value groups for grouped-query attention
-                "n_layers": 28,  # Number of layers
-                "head_dim": 128,  # Size of the heads in GQA
-                "model_dtype": jnp.float32,  # Lower-precision dtype to reduce memory usage
+                "vocab_size": 151936,
+                "d_ff": 3072,
+                "sequence_len": 8192,
+                "model_dim": 1024,
+                "n_heads": 16,
+                "n_groups": 8,
+                "n_layers": 28,
+                "head_dim": 128,
+                "model_dtype": jnp.float32,
             }
 
         return QWEN3_CONFIG
