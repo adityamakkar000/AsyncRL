@@ -5,11 +5,15 @@ description = "annealed RL experiments"
 readme = "README.md"
 requires-python = "==3.11.13"
 dependencies = [
+    "einops>=0.8.1",
     "hydra-core>=1.3.2",
     "jax[tpu]>=0.6.2",
+    "jaxtyping>=0.3.4",
     "pre-commit>=4.5.1",
     "ruff>=0.14.10",
     "stax",
+    "torch>=2.9.0",
+    "transformers>=4.57.3",
 ]
 
 [project.optional-dependencies]
