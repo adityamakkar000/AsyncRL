@@ -33,7 +33,7 @@ def make_tril_mask(t: int, T: int) -> jax.Array:
 
 def make_attention_mask(t: int, T: int, seq_lens: jax.Array) -> jax.Array:
     prompt_mask = create_prompt_mask(padding_len=T, seq_lens=seq_lens)
-    tril = make_tril_mask(t, T)[None, None, :, :]  # 1,1, t, T
+    tril = make_tril_mask(t, T)[None, None, :, :]
     return prompt_mask[:, None, None, :] * tril
 
 
@@ -80,14 +80,14 @@ class RoPE(nn.Module):
     def setup(self):
         assert self.model_dim % 2 == 0, "Hidden dimension must be even"
 
-        m = jnp.arange(0, self.sequence_len, dtype=self.model_dtype)  # [0, 1, ..., t-1] , 1 x t
-        pos = jnp.arange(0, self.model_dim, 2, dtype=self.model_dtype) / self.model_dim  # [0, 2, 4, ... d-2] 1 x C/2
-        theta = 1.0 / (1000000**pos)  # 1 x C/2
+        m = jnp.arange(0, self.sequence_len, dtype=self.model_dtype)
+        pos = jnp.arange(0, self.model_dim, 2, dtype=self.model_dtype) / self.model_dim
+        theta = 1.0 / (1000000**pos)
 
-        inp = jnp.einsum("t,k->tk", m, theta)  # t x c/2
+        inp = jnp.einsum("t,k->tk", m, theta)
 
-        self.sin = jnp.sin(inp)  # t x c/2
-        self.cos = jnp.cos(inp)  # t x c/2
+        self.sin = jnp.sin(inp)
+        self.cos = jnp.cos(inp)
 
     def __call__(self, x: Array, t_start: int):
         B, h, T, C = x.shape
@@ -95,12 +95,9 @@ class RoPE(nn.Module):
         cos = jax.lax.dynamic_slice(self.cos, (t_start, 0), (T, self.cos.shape[-1]))[None, None]
         sin = jax.lax.dynamic_slice(self.sin, (t_start, 0), (T, self.sin.shape[-1]))[None, None]
 
-        # cos = self.cos[t_start : t_start + T, :][None, None]  # 1, 1, t, c/2
-        # sin = self.sin[t_start : t_start + T, :][None, None]  # 1, 1, t, c/2
+        x1, x2 = x[..., : C // 2], x[..., C // 2 :]
 
-        x1, x2 = x[..., : C // 2], x[..., C // 2 :]  # B h T c/2
-
-        out = jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)  # B, h, t, C
+        out = jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
         return out
 
 
@@ -118,7 +115,7 @@ class GroupedQueryAttention(nn.Module):
         assert self.n_heads % self.n_groups == 0, "Number of heads must be divisible by number of kv groups"
         assert self.model_dim % self.n_heads == 0, "Model dim must be divisible by number of heads"
 
-        self.kv_group_size = self.n_heads // self.n_groups  # number of heads in each kv group
+        self.kv_group_size = self.n_heads // self.n_groups
         self.d_out = self.n_heads * self.head_dim
 
     @nn.compact
@@ -129,21 +126,21 @@ class GroupedQueryAttention(nn.Module):
         # KV = [B, g, T, d]
         k_cache, v_cache = kv_cache.k, kv_cache.v
 
-        q = nn.Dense(features=self.d_out, use_bias=False, dtype=self.model_dtype)(x)  # [B, t, h * d]
+        q = nn.Dense(features=self.d_out, use_bias=False, dtype=self.model_dtype)(x)
         k = nn.Dense(
             features=self.n_groups * self.head_dim,
             use_bias=False,
             dtype=self.model_dtype,
-        )(x)  # [B, t, 2 * n_groups * head_dim]
+        )(x)
         v = nn.Dense(
             features=self.n_groups * self.head_dim,
             use_bias=False,
             dtype=self.model_dtype,
         )(x)
 
-        q = einops.rearrange(q, "... t (h d) -> ... h t d", d=self.head_dim)  # [B, h, t, d]
-        k = einops.rearrange(k, "... t (g d) -> ... g t d", d=self.head_dim)  # [B, g, t, d]
-        v = einops.rearrange(v, "... t (g d) -> ... g t d", d=self.head_dim)  # [B, g, t, d]
+        q = einops.rearrange(q, "... t (h d) -> ... h t d", d=self.head_dim)
+        k = einops.rearrange(k, "... t (g d) -> ... g t d", d=self.head_dim)
+        v = einops.rearrange(v, "... t (g d) -> ... g t d", d=self.head_dim)
 
         if self.q_norm:
             q = RMSNorm(self.model_dtype)(q)
@@ -154,8 +151,6 @@ class GroupedQueryAttention(nn.Module):
         queries = RoPE(self.max_sequence_len, q.shape[-1], self.model_dtype)(q, t_start)
         k = RoPE(self.max_sequence_len, k.shape[-1], self.model_dtype)(k, t_start)
 
-        print(f"start: {t_start}, T: {T}")
-
         k, v = jax.tree.map(
             lambda cache, val: jax.lax.dynamic_update_slice_in_dim(cache, val.astype(cache.dtype), t_start, axis=2),
             (k_cache, v_cache),
@@ -165,8 +160,6 @@ class GroupedQueryAttention(nn.Module):
 
         keys = einops.repeat(k, "b g t d -> b (g r) t d", r=self.kv_group_size)
         values = einops.repeat(v, "b g t d -> b (g r) t d", r=self.kv_group_size)
-
-        print(f"q: {queries.shape}, k: {keys.shape}, x: {x.shape}")
 
         wei = jnp.einsum(
             "...td, ...Td -> ...tT",
