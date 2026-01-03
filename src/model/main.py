@@ -35,6 +35,7 @@ class mainModel(mainMixin, HFMixin):
     # TODO: change to DictConfig
     def __init__(self, config: config):
         self.config = config
+        self.model = None
         super().__init__()
 
     def load_from_hf(self):
@@ -159,6 +160,8 @@ class mainModel(mainMixin, HFMixin):
 
         qwen3_params = self.update_weights(params)
 
+        self.model = model
+
         return qwen3_params, optax_state, model
 
     def load_to_hf():
@@ -190,13 +193,12 @@ class mainModel(mainMixin, HFMixin):
     def __call__(
         self,
         *,
-        model: Qwen3,
         x: Array,
         params: Array,
         kv_cache: list[KVCache],
         tx: Optional[GradientTransformation] = None,
         sequence_lens: Array,
     ) -> Array:
-        logits, cache = model.apply(params, x, sequence_lens, kv_cache)
+        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache)
 
         return logits, cache
