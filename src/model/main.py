@@ -4,23 +4,14 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-import jax
 import jax.numpy as jnp
 from huggingface_hub import snapshot_download
 from jaxtyping import Array, PyTree
 from optax import GradientTransformation
-from qwen3 import KVCache, Qwen3
 from safetensors import safe_open
-from stax.model_module import HFMixin, mainMixin
+from stax.model_module import HFModelBase
 
-jax.config.update("jax_default_matmul_precision", "highest")
-jax.numpy.set_printoptions(precision=9)
-
-## config should have
-# - hf_weight_download_dir = "hf_qwen3_0_6b"
-# - chosen_model_size = 0.6B
-# - model_name = Qwen/Qwen3-0.6B
-# - batch_size
+from src.model.qwen3 import KVCache, Qwen3
 
 
 @dataclass
@@ -31,10 +22,11 @@ class config:
     batch_size: int = 3
 
 
-class mainModel(mainMixin, HFMixin):
+class mainModel(HFModelBase):
     # TODO: change to DictConfig
     def __init__(self, config: config):
         self.config = config
+        self.model = None
         super().__init__()
 
     def load_from_hf(self):
@@ -158,6 +150,7 @@ class mainModel(mainMixin, HFMixin):
         optax_state = tx.init(params) if tx is not None else None
 
         qwen3_params = self.update_weights(params)
+        self.model = model
 
         return qwen3_params, optax_state, model
 
