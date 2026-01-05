@@ -1,3 +1,3 @@
-from model.qwen3 import Qwen3
+from src.model.main import Model
 
-__all__ = ["Qwen3"]
+__all__ = ["Model"]
