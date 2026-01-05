@@ -171,17 +171,14 @@ def get_qwen_3_weights(params: PyTree, name: str) -> PyTree:
                 param_ending = jax_param_key.split(".")[-1]
                 jax_path = jax_param_key.split(".")[0].split("/")
 
-                jax_param = params
-
                 for node in jax_path:
-                    jax_param = jax_param[node]
+                    params = params[node]
 
+                new_param = torch_hf_params[hf_param_key].float()
                 if "kernel" in param_ending:
-                    new_param = torch_hf_params[hf_param_key].float().T.numpy()
-                else:
-                    new_param = torch_hf_params[hf_param_key].float().numpy()
+                    new_param = new_param.T
 
-                assert new_param.shape == jax_param[param_ending].shape
-                jax_param[param_ending] = new_param
+                assert new_param.shape == params[param_ending].shape
+                params[param_ending] = new_param.numpy()
 
     return params

@@ -17,7 +17,7 @@ model_names = [f"Qwen/Qwen3-{size}B" for size in sizes]
 shardingType = Optional[PyTree[Sharding, ...]]
 
 
-class mainModel(HFModelBase):
+class Model(HFModelBase):
     def __init__(self, config: ModelConfig):
         self.config = config
         self.model = Qwen3.from_config(config.model_config)
@@ -44,7 +44,7 @@ class mainModel(HFModelBase):
             return jax.eval_shape(init_state, rng, x_init, seq_lens)
         else:
             out_state = init_state(rng, x_init, seq_lens)
-            out_state["params"] = get_qwen_3_weights({"params": out_state["params"]}, name=self.config.hf_model_name)
+            out_state["params"] = get_qwen_3_weights(out_state["params"], name=self.config.hf_model_name)
 
         if sharding is None:
             single_sharding = SingleDeviceSharding(jax.devices()[0])
