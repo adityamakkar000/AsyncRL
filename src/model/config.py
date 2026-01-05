@@ -13,7 +13,7 @@ class KVCache:
 
 
 @dataclass
-class modelConfig:
+class QwenConfig:
     vocab_size: int = MISSING
     d_ff: int = MISSING
     sequence_len: int = MISSING
@@ -23,3 +23,9 @@ class modelConfig:
     head_dim: int = MISSING
     n_layers: int = MISSING
     model_dtype: str = "float32"
+
+
+@dataclass
+class ModelConfig:
+    hf_model_name: str
+    model_config: QwenConfig

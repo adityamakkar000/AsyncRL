@@ -1,5 +1,12 @@
+import glob
+import os
+import re
+
 import jax
 import jax.numpy as jnp
+from huggingface_hub import snapshot_download
+from jaxtyping import PyTree
+from safetensors import safe_open
 
 
 def convert_dtype(dtype_str: str) -> jnp.dtype:
@@ -102,3 +109,79 @@ def make_attention_mask(t: int, T: int, seq_lens: jax.Array) -> jax.Array:
     prompt_mask = create_prompt_mask(padding_len=T, seq_lens=seq_lens)
     tril = make_tril_mask(t, T)[None, None, :, :]
     return prompt_mask[:, None, None, :] * tril
+
+
+HF_MAPPING = {  # embedding
+    r"model\.embed_tokens\.weight": "token_emb.embedding",
+    # block norms
+    r"model\.layers\.([0-9]+)\.input_layernorm\.weight": r"Block_\1/RMSNorm_0.gamma",
+    r"model\.layers\.([0-9]+)\.post_attention_layernorm\.weight": r"Block_\1/RMSNorm_1.gamma",
+    # gqa
+    r"model\.layers\.([0-9]+)\.self_attn\.q_proj\.weight": r"Block_\1/GroupedQueryAttention_0/Dense_0.kernel",
+    r"model\.layers\.([0-9]+)\.self_attn\.k_proj\.weight": r"Block_\1/GroupedQueryAttention_0/Dense_1.kernel",
+    r"model\.layers\.([0-9]+)\.self_attn\.v_proj\.weight": r"Block_\1/GroupedQueryAttention_0/Dense_2.kernel",
+    r"model\.layers\.([0-9]+)\.self_attn\.o_proj\.weight": r"Block_\1/GroupedQueryAttention_0/Dense_3.kernel",
+    # gqa norms
+    r"model\.layers\.([0-9]+)\.self_attn\.q_norm\.weight": r"Block_\1/GroupedQueryAttention_0/RMSNorm_0.gamma",
+    r"model\.layers\.([0-9]+)\.self_attn\.k_norm\.weight": r"Block_\1/GroupedQueryAttention_0/RMSNorm_1.gamma",
+    # mlp
+    r"model\.layers\.([0-9]+)\.mlp\.gate_proj\.weight": r"Block_\1/FeedForward_0/Dense_0.kernel",
+    r"model\.layers\.([0-9]+)\.mlp\.up_proj\.weight": r"Block_\1/FeedForward_0/Dense_1.kernel",
+    r"model\.layers\.([0-9]+)\.mlp\.down_proj\.weight": r"Block_\1/FeedForward_0/Dense_2.kernel",
+    # final rms
+    r"model\.norm\.weight": "RMSNorm_0.gamma",
+    r"lm_head\.weight": "Dense_0.kernel",
+}
+
+
+def download_hf_weights(name: str):
+    if not os.path.isdir(name):
+        snapshot_download(
+            repo_id=name,
+            local_dir=name,
+        )
+
+
+def get_jax_key(main_key: str) -> str | None:
+    matching_keys = []
+    for hf_key, jax_p in HF_MAPPING.items():
+        if re.match(hf_key, main_key):
+            matching_keys.append(re.sub(hf_key, jax_p, main_key))
+
+    if len(matching_keys) == 1:
+        return matching_keys[0]
+
+    raise TypeError(f"couldnt find key: {main_key}")
+
+
+def get_qwen_3_weights(params: PyTree, name: str) -> PyTree:
+    download_hf_weights(name)
+    torch_hf_params = {}
+
+    files = list(glob.glob(name + "/*safetensors"))
+    for file in files:
+        with safe_open(file, framework="torch") as f:
+            for hf_param_key in f.keys():
+                torch_hf_params[hf_param_key] = f.get_tensor(hf_param_key)
+                jax_param_key = get_jax_key(hf_param_key)
+
+                if jax_param_key is None:
+                    raise TypeError("Could not find matching JAX key.")
+
+                param_ending = jax_param_key.split(".")[-1]
+                jax_path = jax_param_key.split(".")[0].split("/")
+
+                jax_param = params
+
+                for node in jax_path:
+                    jax_param = jax_param[node]
+
+                if "kernel" in param_ending:
+                    new_param = torch_hf_params[hf_param_key].float().T.numpy()
+                else:
+                    new_param = torch_hf_params[hf_param_key].float().numpy()
+
+                assert new_param.shape == jax_param[param_ending].shape
+                jax_param[param_ending] = new_param
+
+    return params
