@@ -107,8 +107,8 @@ def make_attention_mask(t: int, T: int, seq_lens: jax.Array) -> jax.Array:
         return query_position <= key_position[-t:, :]
 
     prompt_mask = create_prompt_mask(padding_len=T, seq_lens=seq_lens)
-    tril = make_tril_mask(t, T)[None, None, :, :]
-    return prompt_mask[:, None, None, :] * tril
+    tril = make_tril_mask(t, T)[None, :, :, None]  # 1,1, t, T
+    return prompt_mask[:, None, :, None] * tril
 
 
 HF_MAPPING = {  # embedding
