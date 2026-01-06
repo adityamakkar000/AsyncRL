@@ -1,0 +1,16 @@
+# mesh config for https://github.com/adityamakkar000/mesh
+
+commands:
+  - curl -LsSf https://astral.sh/uv/install.sh | sh
+
+ignore:
+  - "*.pyc"
+  - "*/__pycache__/*"
+  - "*/git/*"
+  - "*/venv/*"
+
+prerun:
+  - uv venv --clear
+  - source .venv/bin/activate
+  - uv sync --extra eval 
+
