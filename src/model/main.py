@@ -70,8 +70,8 @@ class Model(HFModelBase):
         initial_cache: list[KVCache] = []
         for _ in range(n_layers):
             length = 0
-            k = jnp.zeros((B, n_groups, max_sequence_len, head_dim), dtype=jnp.bfloat16)
-            v = jnp.zeros((B, n_groups, max_sequence_len, head_dim), dtype=jnp.bfloat16)
+            k = jnp.zeros((B, max_sequence_len, n_groups, head_dim), dtype=jnp.bfloat16)
+            v = jnp.zeros((B, max_sequence_len, n_groups, head_dim), dtype=jnp.bfloat16)
             _cache = KVCache(
                 k=k,
                 v=v,

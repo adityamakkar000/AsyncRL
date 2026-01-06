@@ -63,6 +63,7 @@ class RoPE(nn.Module):
         self.cos = jnp.cos(inp)
 
     def __call__(self, x: Array, t_start: int):
+        x = einops.rearrange(x, "b t g d -> b g t d")
         B, h, T, C = x.shape
 
         cos = jax.lax.dynamic_slice(self.cos, (t_start, 0), (T, self.cos.shape[-1]))[None, None]
@@ -71,6 +72,8 @@ class RoPE(nn.Module):
         x1, x2 = x[..., : C // 2], x[..., C // 2 :]
 
         out = jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
+
+        out = einops.rearrange(out, pattern="b g t d -> b t g d")
         return out
 
 
@@ -108,9 +111,9 @@ class GroupedQueryAttention(nn.Module):
             dtype=self.model_dtype,
         )(x)
 
-        q = einops.rearrange(q, "... t (h d) -> ... h t d", d=self.head_dim)
-        k = einops.rearrange(k, "... t (g d) -> ... g t d", d=self.head_dim)
-        v = einops.rearrange(v, "... t (g d) -> ... g t d", d=self.head_dim)
+        q = einops.rearrange(q, "... t (h d) -> ... t h d", d=self.head_dim)
+        k = einops.rearrange(k, "... t (g d) -> ... t g d", d=self.head_dim)
+        v = einops.rearrange(v, "... t (g d) -> ... t g d", d=self.head_dim)
 
         if self.q_norm:
             q = RMSNorm(self.model_dtype)(q)
@@ -125,32 +128,33 @@ class GroupedQueryAttention(nn.Module):
             k_cache, v_cache = kv_cache.k, kv_cache.v
 
             k, v = jax.tree.map(
-                lambda cache, val: jax.lax.dynamic_update_slice_in_dim(cache, val.astype(cache.dtype), t_start, axis=2),
+                lambda cache, val: jax.lax.dynamic_update_slice_in_dim(cache, val.astype(cache.dtype), t_start, axis=1),
                 (k_cache, v_cache),
                 (k, v),
             )
             kv_cache = KVCache(k=k_cache, v=v_cache, length=t_start + T)
 
-        # TODO: map over keys/values instead of reshape
-        keys = einops.repeat(k, "b g t d -> b (g r) t d", r=self.kv_group_size)
-        values = einops.repeat(v, "b g t d -> b (g r) t d", r=self.kv_group_size)
+        queries = einops.rearrange(queries, pattern="b t (g r) d -> b t g r d", g=k.shape[2])
 
         wei = jnp.einsum(
-            "...td, ...Td -> ...tT",
+            "btgrd, bTgd -> btTgr",
             queries.astype(jnp.float32),
-            keys.astype(jnp.float32),
+            k.astype(jnp.float32),
         ) / jnp.sqrt(self.head_dim)
+
+        wei = einops.rearrange(wei, pattern="b t T g r -> b t T (g r)")
 
         attention_mask = make_attention_mask(t=T, T=k.shape[-2], seq_lens=seq_lens)
         wei = jnp.where(attention_mask == 1, wei, -jnp.inf)
-        wei = jax.nn.softmax(wei, axis=-1)
+        wei = jax.nn.softmax(wei, axis=-2)
         nan_mask = ~jnp.isnan(wei)
         wei = jnp.where(nan_mask == 1, wei, 0)
 
-        out = jnp.einsum("...htT, ...hTd -> ...htd", wei, values.astype(jnp.float32))
-        out = einops.rearrange(out, "... h t d -> ... t (h d)")
-        out = nn.Dense(features=self.model_dim, use_bias=False, dtype=self.model_dtype)(out)
+        wei = einops.rearrange(tensor=wei, pattern="b t T (g r) -> b t T g r", g=k.shape[2])
 
+        out = jnp.einsum("btTgr, bTgd -> btgrd", wei, v.astype(jnp.float32))
+        out = einops.rearrange(out, "b t g r d -> b t (g r d)")
+        out = nn.Dense(features=self.model_dim, use_bias=False, dtype=self.model_dtype)(out)
         return out, kv_cache
 
 
