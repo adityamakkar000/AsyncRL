@@ -3,7 +3,8 @@
 ## Setup
 
 1. Git clone and then run `uv sync`
-2. Run `pre-commit install` 
+2. Run `pre-commit install`
+3. Install `https://github.com/adityamakkar000/Mesh` 
 
 ## Train
 
