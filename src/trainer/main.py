@@ -2,6 +2,7 @@ from functools import partial
 
 import optax
 import stax
+from omegaconf import DictConfig
 
 from src.model import Model
 
@@ -14,7 +15,7 @@ class Trainer:
     A Trainer class to handle the training process of a machine learning model using JAX on TPUs.
     """
 
-    def __init__(self, config: TrainerConfig):
+    def __init__(self, config: DictConfig[TrainerConfig]):
         """
         Initialize the training module.
 
@@ -30,9 +31,10 @@ class Trainer:
         self._init_state()
 
         self._setup_jax()
-        self._setup_dataset()
+        self._setup_functions()
         self._setup_optimizer()
         self._setup_model()
+        self._setup_dataset()
         self._checkpointer_setup()
     
 
@@ -62,7 +64,8 @@ class Trainer:
 
         self.params = None 
         self.opt_state = None
-        self.sharding = None
+        self.params_sharding = None
+        self.opt_state_sharding = None
 
         self.train_dataset = None
         self.eval_dataset = None
@@ -74,6 +77,11 @@ class Trainer:
         """ Setup JAX for distributed training on TPUs. """
         stax.init_distributed_jax()
 
+    @partial(setup, component="train/eval functions")
+    def _setup_functions(self):
+        """ Setup training and evaluation functions. """
+        pass
+
     @partial(setup, component="dataset")
     def _setup_dataset(self):
         """ Setup the dataset for training. """
@@ -84,12 +92,16 @@ class Trainer:
         """ Setup the model for training. """
         if self.tx is None:
             raise ValueError("Optimizer must be set up before the model.")
+        if self.params_sharding is None or self.opt_state_sharding is None:
+            raise ValueError("Sharding must be set up before the model.")
 
         self.model = Model(self.config.model_config)
+
+        sharding = (self.params_sharding, self.opt_state_sharding)
         out_state = self.model.init_state(
             rng=self.key(),
             tx=self.tx,
-            sharding=self.sharding, 
+            sharding=sharding, 
             abstract=False
         )
         self.params = out_state['params']
@@ -136,4 +148,5 @@ class Trainer:
         pass
 
 
+    def train(self): ...
 
