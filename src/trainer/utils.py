@@ -1,3 +1,4 @@
+import jax
 import time
 from functools import wraps
 from typing import Any, Callable
@@ -25,4 +26,14 @@ def setup(setup_fn: Callable[[Any], None], component: str):
         end = time.time()
         logger.info("{} setup complete in {:.2f} seconds.", component, end - start)
     return wrapper
+
+
+class Key:
+    def __init__(self, seed: int):
+        self.key = jax.random.PRNGKey(seed)
+
+    def __call__(self, num_keys: int = 1):
+        self.key, subkey = jax.random.split(self.key)
+        subkey = jax.random.fold_in(subkey, jax.process_index())
+        return jax.random.split(subkey, (num_keys, 2))
 

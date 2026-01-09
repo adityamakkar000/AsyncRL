@@ -3,8 +3,10 @@ from functools import partial
 import optax
 import stax
 
+from src.model import Model
+
 from .config import TrainerConfig
-from .utils import setup
+from .utils import Key, setup
 
 
 class Trainer:
@@ -24,10 +26,13 @@ class Trainer:
         self.validate_config()
 
         # setup methods 
+
+        self._init_state()
+
         self._setup_jax()
         self._setup_dataset()
-        self._setup_model()
         self._setup_optimizer()
+        self._setup_model()
         self._checkpointer_setup()
     
 
@@ -49,6 +54,20 @@ class Trainer:
             raise ValueError("checkpoint_interval must be a multiple of eval_interval when best_metric is set")
         if (cfg.warmup_steps + cfg.decay_steps) > 1.0:
             raise ValueError("warmup_steps and decay_steps must sum to at most 1.0")
+    
+    def _init_state(self):
+
+        self.model = None 
+        self.tx = None
+
+        self.params = None 
+        self.opt_state = None
+        self.sharding = None
+
+        self.train_dataset = None
+        self.eval_dataset = None
+
+        self.key = Key(self.config.seed)
 
     @partial(setup, component="JAX")
     def _setup_jax(self):
@@ -63,7 +82,18 @@ class Trainer:
     @partial(setup, component="model")
     def _setup_model(self):
         """ Setup the model for training. """
-        pass
+        if self.tx is None:
+            raise ValueError("Optimizer must be set up before the model.")
+
+        self.model = Model(self.config.model_config)
+        out_state = self.model.init_state(
+            rng=self.key(),
+            tx=self.tx,
+            sharding=self.sharding, 
+            abstract=False
+        )
+        self.params = out_state['params']
+        self.opt_state = out_state['opt_state']
 
     @partial(setup, component="optimizer")
     def _setup_optimizer(self):
