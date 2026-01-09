@@ -44,9 +44,9 @@ class Model(HFModelBase):
 
         if abstract:
             return jax.eval_shape(init_state, rng, x_init, seq_lens)
-        else:
-            out_state = init_state(rng, x_init, seq_lens)
-            out_state["params"] = get_qwen_3_weights(out_state["params"], name=self.config.hf_model_name)
+
+        out_state = init_state(rng, x_init, seq_lens)
+        out_state["params"] = get_qwen_3_weights(out_state["params"], name=self.config.hf_model_name)
 
         if sharding is None:
             single_sharding = SingleDeviceSharding(jax.devices()[0])
