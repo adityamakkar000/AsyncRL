@@ -1,5 +1,6 @@
 # mesh config for https://github.com/adityamakkar000/mesh
 
+#TODO: how to transfer ssh keys for stax
 commands:
   - curl -LsSf https://astral.sh/uv/install.sh | sh
 
