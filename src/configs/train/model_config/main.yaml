@@ -1,0 +1,6 @@
+defaults:
+  - base_model_config
+  - model_config: main
+  - _self_
+
+hf_model_name: "Qwen/Qwen3-0.6B"

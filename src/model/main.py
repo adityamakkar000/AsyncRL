@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import Sharding, SingleDeviceSharding
 from jaxtyping import Array, PyTree
+from omegaconf import DictConfig
 from optax import GradientTransformation
 from stax.model_module import HFModelBase
 
@@ -14,15 +15,16 @@ from .utils import get_qwen_3_weights
 
 sizes = [0.6, 1.7, 4, 8]
 model_names = [f"Qwen/Qwen3-{size}B" for size in sizes]
-shardingType = Optional[PyTree[Sharding, ...]]
+shardingType = Optional[PyTree[Sharding]]
 
 
 class Model(HFModelBase):
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: DictConfig[ModelConfig]):
         self.config = config
+        self.validate_config()
         self.model = Qwen3.from_config(config.model_config)
 
-    def validate_config(self, config: ModelConfig):
+    def validate_config(self):
         if self.config.hf_model_name not in model_names:
             raise ValueError(f"Expected model size to be in {model_names}, got {self.config.hf_model_name}")
 
@@ -58,7 +60,7 @@ class Model(HFModelBase):
 
     def save_to_hf():
         # TODO: implement method to load model weights to huggingface
-        pass
+        return
 
     def init_kv_cache(self, x: Array) -> list[KVCache]:
         B = x.shape[0]
@@ -89,7 +91,7 @@ class Model(HFModelBase):
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
     ) -> PyTree:
-        logits, cache = self.model.apply({"params": params}, x, sequence_lens, kv_cache)
+        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache)
 
         return logits, cache
 

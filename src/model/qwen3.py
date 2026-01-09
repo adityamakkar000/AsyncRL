@@ -144,7 +144,7 @@ class GroupedQueryAttention(nn.Module):
 
         wei = einops.rearrange(wei, pattern="b t T g r -> b t T (g r)")
 
-        attention_mask = make_attention_mask(t=T, T=k.shape[-2], seq_lens=seq_lens)
+        attention_mask = make_attention_mask(t=T, T=k.shape[1], seq_lens=seq_lens)
         wei = jnp.where(attention_mask == 1, wei, -jnp.inf)
         wei = jax.nn.softmax(wei, axis=-2)
         nan_mask = ~jnp.isnan(wei)
