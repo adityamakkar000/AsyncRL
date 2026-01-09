@@ -1,8 +1,8 @@
-import jax
 import time
 from functools import wraps
 from typing import Any, Callable
 
+import jax
 from loguru import logger
 
 
@@ -32,8 +32,9 @@ class Key:
     def __init__(self, seed: int):
         self.key = jax.random.PRNGKey(seed)
 
-    def __call__(self, num_keys: int = 1):
+    def __call__(self, num_keys: int = 1, split_by_process: bool = False):
         self.key, subkey = jax.random.split(self.key)
-        subkey = jax.random.fold_in(subkey, jax.process_index())
+        if split_by_process:
+            subkey = jax.random.fold_in(subkey, jax.process_index())
         return jax.random.split(subkey, (num_keys, 2))
 
