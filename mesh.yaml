@@ -1,17 +1,18 @@
 # mesh config for https://github.com/adityamakkar000/mesh
-
-#TODO: how to transfer ssh keys for stax
 commands:
   - curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ignore:
   - "*.pyc"
   - "*/__pycache__/*"
-  - "*/git/*"
-  - "*/venv/*"
+  - "./git/*"
+  - "./venv/*"
 
 prerun:
   - uv venv --clear
   - source .venv/bin/activate
+  - mv id_rsa ~/.ssh/
+  - ssh-keyscan github.com >> ~/.ssh/known_hosts
   - uv sync --extra eval 
+  - rm /.ssh/id_rsa
 

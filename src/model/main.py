@@ -22,7 +22,7 @@ class Model(HFModelBase):
     def __init__(self, config: DictConfig[ModelConfig]):
         self.config = config
         self.validate_config()
-        self.model = Qwen3.from_config(config.model_config)
+        self.model = Qwen3.from_config(config.qwen_config)
 
     def validate_config(self):
         if self.config.hf_model_name not in model_names:
@@ -64,10 +64,10 @@ class Model(HFModelBase):
 
     def init_kv_cache(self, x: Array) -> list[KVCache]:
         B = x.shape[0]
-        n_layers = self.config.model_config.n_layers
-        n_groups = self.config.model_config.n_groups
-        max_sequence_len = self.config.model_config.sequence_len
-        head_dim = self.config.model_config.head_dim
+        n_layers = self.config.qwen_config.n_layers
+        n_groups = self.config.qwen_config.n_groups
+        max_sequence_len = self.config.qwen_config.sequence_len
+        head_dim = self.config.qwen_config.head_dim
 
         initial_cache: list[KVCache] = []
         for _ in range(n_layers):

@@ -31,4 +31,4 @@ class QwenConfig:
 @dataclass
 class ModelConfig:
     hf_model_name: str
-    model_config: QwenConfig
+    qwen_config: QwenConfig

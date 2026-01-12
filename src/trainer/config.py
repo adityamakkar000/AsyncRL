@@ -22,6 +22,10 @@ class WandBConfig:
     notes: Optional[str] = None
     tags: Optional[List[str]] = None
 
+@dataclass 
+class XLAFlag: 
+    name: str
+    value: str
 
 
 @dataclass
@@ -74,6 +78,9 @@ class TrainerConfig:
     max_checkpoints_to_keep: int = 5  # The maximum number of checkpoints to keep
 
     #gs configs
-    gs_bucket: str = "gs://arl-experiments" # main gs bucket
+    gs_bucket: str = "gs://arl-experiments/" # main gs bucket
     checkpoint_gs_bucket: str = "checkpoints"  # The GCS bucket to store checkpoints
     cache: str = "cache" # The GCS bucket to store jax cache
+
+    # jax
+    xla_flags: list[XLAFlag] = field(default_factory=lambda: [])  # Additional XLA flags to set
