@@ -2,12 +2,13 @@ from functools import partial
 
 import optax
 import stax
+from loguru import logger
 from omegaconf import DictConfig
 
 from src.model import Model
 
 from .config import TrainerConfig
-from .utils import Key, setup
+from .utils import Key, set_jax_cache, setup
 
 
 class Trainer:
@@ -32,11 +33,12 @@ class Trainer:
 
         self._setup_jax()
         self._setup_functions()
+        self._checkpointer_setup()
+        self._setup_dataset()
         self._setup_optimizer()
         self._setup_model()
-        self._setup_dataset()
-        self._checkpointer_setup()
-    
+
+        logger.info("Trainer initialization complete.")
 
     def validate_config(self):
         """ Method to validate the TrainerConfig parameters. """
@@ -72,10 +74,14 @@ class Trainer:
 
         self.key = Key(self.config.seed)
 
+        self.global_step = 0
+
     @partial(setup, component="JAX")
     def _setup_jax(self):
         """ Setup JAX for distributed training on TPUs. """
         stax.init_distributed_jax()
+        cache_path = self.config.gs_bucket + self.config.cache
+        set_jax_cache(cache_path)
 
     @partial(setup, component="train/eval functions")
     def _setup_functions(self):
@@ -147,6 +153,8 @@ class Trainer:
         """ Setup checkpointing mechanism. """
         pass
 
+    def train(self): 
 
-    def train(self): ...
+        for step in range(self.global_step, self.config.num_steps):
+            ...
 
