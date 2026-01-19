@@ -5,14 +5,12 @@ commands:
 ignore:
   - "*.pyc"
   - "*/__pycache__/*"
-  - "./git/*"
-  - "./venv/*"
+  - ".git/*"
+  - ".venv/*"
 
 prerun:
   - uv venv --clear
   - source .venv/bin/activate
-  - mv id_rsa ~/.ssh/
-  - ssh-keyscan github.com >> ~/.ssh/known_hosts
-  - uv sync --extra eval 
-  - rm /.ssh/id_rsa
-
+  - source .env
+  - git config --global url."https://${STAX_TOKEN}@github.com/".insteadOf "https://github.com/"
+  - uv sync

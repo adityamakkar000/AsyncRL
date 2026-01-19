@@ -1,3 +1,4 @@
+import os
 import time
 from functools import wraps
 from typing import Any, Callable
@@ -6,12 +7,17 @@ import jax
 from loguru import logger
 
 
+def log_info(message: str):
+    if os.environ.get("RANK", None) == 0:
+        logger.info(message)
+
+
 def setup(setup_fn: Callable[[Any], None], component: str):
     """
-    Takes in a function that setups a component (e.g., dataset, model, optimizer) 
+    Takes in a function that setups a component (e.g., dataset, model, optimizer)
     and returns a wrapped version that logs the time taken for setup.
 
-    Args: 
+    Args:
         setup_fn: The setup function to be wrapped. It should not return anything.
         component: A string representing the component being set up.
     Returns:
@@ -24,7 +30,8 @@ def setup(setup_fn: Callable[[Any], None], component: str):
         start = time.time()
         setup_fn(*args, **kwargs)
         end = time.time()
-        logger.info("{} setup complete in {:.2f} seconds.", component, end - start)
+        log_info(f"{component} setup complete in {end - start:.2f} seconds.")
+
     return wrapper
 
 
@@ -40,10 +47,8 @@ class Key:
 
 
 def set_jax_cache(path: str):
-    """ Sets the JAX cache directory to the specified path. """
+    """Sets the JAX cache directory to the specified path."""
     jax.config.update("jax_compilation_cache_dir", path)
     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-    jax.config.update(
-        "jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir"
-    )
+    jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
