@@ -1,5 +1,4 @@
 defaults:
-  - base_model_config
   - qwen_config: qwen_0.6b
   - _self_
 

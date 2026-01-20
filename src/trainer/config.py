@@ -9,7 +9,7 @@ from src.model import ModelConfig
 
 @dataclass
 class ShardingConfig:
-    sharding_type: Literal["dp", "fsdp", "single"] = "dp"
+    sharding_type: str = "single" # "single", "dp", "fsdp"
     opt_state_offload: bool = False
     data_shard_dim: int = 0
     min_bytes_for_fsdp: int = int(1e6)  # 1e6/(1024*1024) = 1MB
@@ -53,7 +53,7 @@ class TrainerConfig:
     num_steps: int = 1000  # The number of training epochs
     eval_interval: int = 100  # The interval (in steps) at which to evaluate the model
 
-    optimizer: Literal["adam", "adamw", "sgd"] = "adamw"  # The optimizer to use
+    optimizer: str = "adamw"  # "adamw", "adam", "sgd"
     weight_decay: Optional[float] = None  # The weight decay coefficient
 
     grad_clip: Optional[float] = None  # The maximum gradient norm for clipping

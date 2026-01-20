@@ -4,7 +4,7 @@ from functools import partial
 import optax
 import stax
 from loguru import logger
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 from src.model import Model
 
@@ -18,7 +18,7 @@ class Trainer:
     A Trainer class to handle the training process of a machine learning model using JAX on TPUs.
     """
 
-    def __init__(self, config: TrainerConfig):
+    def __init__(self, config: DictConfig | TrainerConfig):
         """
         Initialize the training module.
 
@@ -61,6 +61,8 @@ class Trainer:
             raise ValueError("checkpoint_interval must be a multiple of eval_interval when best_metric is set")
         if (cfg.warmup_steps + cfg.decay_steps) > 1.0:
             raise ValueError("warmup_steps and decay_steps must sum to at most 1.0")
+        if cfg.sharding_config.sharding_type not in ["single", "dp", "fsdp"]:
+            raise ValueError("sharding_type must be one of 'single', 'dp', or 'fsdp'")
 
     def _init_state(self):
         self.train_fn = None
