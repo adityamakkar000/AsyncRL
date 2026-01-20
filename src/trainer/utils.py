@@ -1,15 +1,9 @@
-import os
 import time
 from functools import wraps
 from typing import Any, Callable
 
 import jax
-from loguru import logger
-
-
-def log_info(message: str):
-    if os.environ.get("RANK", None) == 0:
-        logger.info(message)
+from stax import staxLogger as logger
 
 
 def setup(setup_fn: Callable[[Any], None], component: str):
@@ -26,11 +20,11 @@ def setup(setup_fn: Callable[[Any], None], component: str):
 
     @wraps(setup_fn)
     def wrapper(*args, **kwargs):
-        logger.info("Setting up {}...", component)
+        logger.info("Setting up {}", component)
         start = time.time()
         setup_fn(*args, **kwargs)
         end = time.time()
-        log_info(f"{component} setup complete in {end - start:.2f} seconds.")
+        logger.info(f"{component} setup complete in {end - start:.2f} seconds.")
 
     return wrapper
 

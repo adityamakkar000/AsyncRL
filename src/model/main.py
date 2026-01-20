@@ -6,7 +6,7 @@ from jax.sharding import Sharding, SingleDeviceSharding
 from jaxtyping import Array, PyTree
 from omegaconf import DictConfig
 from optax import GradientTransformation
-from stax.model_module import HFModelBase
+from stax.model_module import HFModelBase, modelBase
 
 from src.model.qwen3 import KVCache, Qwen3
 
@@ -18,7 +18,7 @@ model_names = [f"Qwen/Qwen3-{size}B" for size in sizes]
 shardingType = Optional[PyTree[Sharding]]
 
 
-class Model(HFModelBase):
+class Model(modelBase):
     def __init__(self, config: DictConfig[ModelConfig]):
         self.config = config
         self.validate_config()
@@ -82,6 +82,9 @@ class Model(HFModelBase):
             initial_cache.append(_cache)
 
         return initial_cache
+    
+    def load_from_ckpt(self, checkpointer, state, use_best = True):
+        pass 
 
     def __call__(
         self,

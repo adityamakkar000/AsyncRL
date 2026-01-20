@@ -22,26 +22,22 @@ class WandBConfig:
     notes: Optional[str] = None
     tags: Optional[List[str]] = None
 
-
-@dataclass
-class XLAFlag:
-    name: str
-    value: str
-
-
 @dataclass
 class AnnealedLoss:
     # TODO: represent the real experiment
     ...
 
+@dataclass
+class BestMetric:
+    name: str = MISSING  # Name of the metric to monitor
+    maximize: bool = False # Whether to maximize or minimize the metric
 
 @dataclass
 class TrainerConfig:
     experiment_name: str = MISSING  # The name of the experiment
     data_config: DataConfig = MISSING  # The configuration for the data module
-
     model_config: ModelConfig = MISSING  # The configuration for the model
-
+    
     grad_accumulation: int = 1  # The number of gradient accumulation steps
     sharding_config: ShardingConfig = field(default_factory=ShardingConfig)  # The configuration for sharding
 
@@ -55,7 +51,6 @@ class TrainerConfig:
 
     optimizer: str = "adamw"  # "adamw", "adam", "sgd"
     weight_decay: Optional[float] = None  # The weight decay coefficient
-
     grad_clip: Optional[float] = None  # The maximum gradient norm for clipping
 
     # cosine lr
@@ -75,13 +70,10 @@ class TrainerConfig:
     # experiment name
     # else will create new checkpoint dir
     checkpoint_interval: int = 1000  # The interval (in steps) at which to save checkpoints
-    best_metric: Optional[str] = None  # if set, save best checkpoint as well
+    best_metric: Optional[BestMetric] = None  # if set, save best checkpoint as well
     max_checkpoints_to_keep: int = 5  # The maximum number of checkpoints to keep
 
     # gs configs
-    gs_bucket: str = "gs://arl-experiments/"  # main gs bucket
+    gs_bucket: str = "gs://arl-experiments"  # main gs bucket
     checkpoint_gs_bucket: str = "checkpoints"  # The GCS bucket to store checkpoints
     cache: str = "cache"  # The GCS bucket to store jax cache
-
-    # jax
-    xla_flags: list[XLAFlag] = field(default_factory=lambda: [])  # Additional XLA flags to set
