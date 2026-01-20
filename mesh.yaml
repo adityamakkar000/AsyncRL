@@ -13,4 +13,4 @@ prerun:
   - source .venv/bin/activate
   - source .env
   - git config --global url."https://${STAX_TOKEN}@github.com/".insteadOf "https://github.com/"
-  - uv sync
+  - uv sync --extra eval

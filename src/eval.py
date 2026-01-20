@@ -7,7 +7,7 @@ from src.evals.config import evalConfig
 from src.evals.eval import EvalRunner
 
 cs = ConfigStore.instance()
-cs.store(name="base_eval_config", node=evalConfig)
+cs.store(name="base", node=evalConfig)
 
 
 @hydra.main(version_base=None, config_path="./configs/eval")
