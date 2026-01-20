@@ -3,14 +3,14 @@ from functools import partial
 
 import optax
 import stax
-from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from stax import staxLogger as logger
 
 from src.model import Model
 
 from .config import TrainerConfig
 from .steps import sft_step, standard_rl_step
-from .utils import Key, log_info, set_jax_cache, setup
+from .utils import Key, set_jax_cache, setup
 
 
 class Trainer:
@@ -30,18 +30,21 @@ class Trainer:
         self.validate_config()
 
         # setup methods
+        self._setup_jax()
 
         self._init_state()
-        self._setup_jax()
         self._setup_model()
         self._setup_optimizer()
-        self._setup_dataset()
+        self._setup_checkpointer()
+        
+        # self._setup_dataset()
 
-        self._checkpointer_setup()
+        
         self._setup_functions()
         self._setup_train_state() 
+        self._setup_writer()
 
-        log_info("Trainer initialization complete.")
+        logger.info("Trainer initialization complete.")
 
     def validate_config(self):
         """Method to validate the TrainerConfig parameters."""
@@ -64,6 +67,7 @@ class Trainer:
         if cfg.sharding_config.sharding_type not in ["single", "dp", "fsdp"]:
             raise ValueError("sharding_type must be one of 'single', 'dp', or 'fsdp'")
 
+    @partial(setup, component="initialized state")
     def _init_state(self):
         self.train_fn = None
         self.eval_fn = None
@@ -79,13 +83,16 @@ class Trainer:
         self.train_dataset = None
         self.eval_dataset = None
 
+        self.checkpointer = None
+        self.best_checkpointer = None 
+
         self.wandb_id = None
         self.logger = None
         self.key = Key(self.config.seed)
         self.global_step = 0
 
     @partial(setup, component="metric logger")
-    def _setup_logger(self):
+    def _setup_writer(self):
         config = self.config.wandb_config
         if config is None:
             self.logger = stax.BaseLogger()
@@ -195,14 +202,25 @@ class Trainer:
         )
 
     @partial(setup, component="checkpointer")
-    def _checkpointer_setup(self):
+    def _setup_checkpointer(self):
         """Setup checkpointing mechanism."""
-        pass
 
+        path = f"{self.config.gs_bucket}/{self.config.checkpoint_gs_bucket}/"
+        self.checkpointer  = stax.Checkpointer(
+            output_dir=path, 
+            max_to_keep=self.config.max_checkpoints_to_keep,
+        )
+
+        if self.config.best_metric is not None:
+            best_path = f"{path}/best/"
+            self.best_checkpointer = stax.Checkpointer(
+                output_dir=best_path,
+                max_to_keep=1,
+                best_key=self.config.best_metric.name,
+                best_mode= "max" if self.config.best_metric.maximize else "min",
+            )
 
     def make_save_tree(self):
-
-        return save_tree, metadata
         ...
 
     def restore_save_tree(self):

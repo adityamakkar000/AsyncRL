@@ -163,14 +163,14 @@ eval = [
 [package.metadata]
 requires-dist = [
     { name = "einops", specifier = ">=0.8.1" },
-    { name = "hydra-core", specifier = ">=1.3.2" },
+    { name = "hydra-core", specifier = "==1.3.2" },
     { name = "jax", marker = "sys_platform != 'linux'", specifier = ">=0.8.0" },
     { name = "jax", extras = ["tpu"], marker = "sys_platform == 'linux'", specifier = ">=0.6.2" },
     { name = "jaxtyping", specifier = ">=0.3.4" },
     { name = "openbench", marker = "extra == 'eval'", specifier = ">=0.5.3" },
     { name = "pre-commit", specifier = ">=4.5.1" },
     { name = "ruff", specifier = ">=0.14.10" },
-    { name = "stax", git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FfixWriterLogger" },
+    { name = "stax", git = "https://github.com/adityamakkar000/stax.git" },
     { name = "torch", specifier = ">=2.9.0" },
     { name = "transformers", specifier = ">=4.57.3" },
     { name = "vllm-tpu", marker = "extra == 'eval'", specifier = ">=0.12.0" },
@@ -2404,7 +2404,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/c7/78/0e144f12703c95d44
 
 [[package]]
 name = "orbax-checkpoint"
-version = "0.11.31"
+version = "0.11.32"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
@@ -2422,9 +2422,9 @@ dependencies = [
     { name = "tensorstore" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4b/1e/c65e35ab5ef9d380f4a4ce7f983a0dd360d229eec22204aacb80d2b91aca/orbax_checkpoint-0.11.31.tar.gz", hash = "sha256:f021193a619782655798bc4a285f40612f6fe647ddeb303d1f49cdbc5645e319", size = 406137, upload-time = "2025-12-11T18:09:17.181Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6c/5f/1733e1143696319f311bc4de48da2e306a1f62f0925f9fe9d797b8ba8abe/orbax_checkpoint-0.11.32.tar.gz", hash = "sha256:523dcf61e93c7187c6b80fd50f3177114c0b957ea62cbb5c869c0b3e3d1a7dfc", size = 431601, upload-time = "2026-01-20T16:46:06.307Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/da/3a/abbc3c5cac2e082e88cfec2161bf837f18fef786caaa3f007594c839fc8c/orbax_checkpoint-0.11.31-py3-none-any.whl", hash = "sha256:b00e39cd61cbd6c7c78b091ccac0ed1bbf3cf7788e761618e7070761195bfcc0", size = 602358, upload-time = "2025-12-11T18:09:15.667Z" },
+    { url = "https://files.pythonhosted.org/packages/24/17/aae3144258f30920741ec91dbff0ff54665e572da50e6445ef437e08ec32/orbax_checkpoint-0.11.32-py3-none-any.whl", hash = "sha256:f0bfe9f9b1ce2c32c8f5dfab63393e51de525d41352abc17c7e21f9cc731d7a9", size = 634424, upload-time = "2026-01-20T16:46:04.382Z" },
 ]
 
 [[package]]
@@ -3607,7 +3607,7 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FfixWriterLogger#21b2f853c684648f68f51f351283c11d812eca7c" }
+source = { git = "https://github.com/adityamakkar000/stax.git#17bbc4f7f88595fd57bd9f97ae98126ba86c0d1f" }
 dependencies = [
     { name = "flax" },
     { name = "jax" },
