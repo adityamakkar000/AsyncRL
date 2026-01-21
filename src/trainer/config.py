@@ -38,7 +38,6 @@ class TrainerConfig:
     data_config: DataConfig = MISSING  # The configuration for the data module
     model_config: ModelConfig = MISSING  # The configuration for the model
     
-    grad_accumulation: int = 1  # The number of gradient accumulation steps
     sharding_config: ShardingConfig = field(default_factory=ShardingConfig)  # The configuration for sharding
 
     # training config
@@ -47,7 +46,9 @@ class TrainerConfig:
     # figure out if we want epochs or steps
     # pros of epochs: more interpretable, cons: lr scheduling, etc
     num_steps: int = 1000  # The number of training epochs
+    grad_steps: int = 1  # The number of gradient accumulation steps
     eval_interval: int = 100  # The interval (in steps) at which to evaluate the model
+    eval_steps: int = 10  # The number of evaluation steps to run
 
     optimizer: str = "adamw"  # "adamw", "adam", "sgd"
     weight_decay: Optional[float] = None  # The weight decay coefficient
@@ -61,9 +62,7 @@ class TrainerConfig:
     decay_steps: float = 0.9  # The fraction of total steps to use for learning rate decay
 
     wandb_config: Optional[WandBConfig] = None  # The configuration for Weights & Biases logging
-
-    # checkpointing config
-    # TODO: change to gs bucket
+    metrics_to_log: List[str] = field(default_factory=lambda: ["train/loss", "eval/loss"])  # Metrics to log 
 
     spot_training: bool = False  # Whether to enable spot training
     # if true, will load from latest checkpoint if checkpoint dir with same

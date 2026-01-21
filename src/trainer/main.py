@@ -1,6 +1,7 @@
 import os
 from functools import partial
 
+import jax
 import optax
 import stax
 from omegaconf import DictConfig, OmegaConf
@@ -18,7 +19,7 @@ class Trainer:
     A Trainer class to handle the training process of a machine learning model using JAX on TPUs.
     """
 
-    def __init__(self, config: DictConfig | TrainerConfig):
+    def __init__(self, config: TrainerConfig | DictConfig):
         """
         Initialize the training module.
 
@@ -43,6 +44,7 @@ class Trainer:
         self._setup_functions()
         self._setup_train_state() 
         self._setup_writer()
+
 
         logger.info("Trainer initialization complete.")
 
@@ -86,32 +88,34 @@ class Trainer:
         self.checkpointer = None
         self.best_checkpointer = None 
 
-        self.wandb_id = None
-        self.logger = None
+
+        self.writer_id = None  
+        self.writer = None
         self.key = Key(self.config.seed)
         self.global_step = 0
 
     @partial(setup, component="metric logger")
     def _setup_writer(self):
-        config = self.config.wandb_config
-        if config is None:
-            self.logger = stax.BaseLogger()
-            return 
-        
-        logger_kwargs =  dict() 
-        if self.wandb_id is not None:
-            logger.info(f"Given existing run with id: {self.wandb_id}")
-            logger_kwargs['run_id'] = self.wandb_id
-        else: 
-            logger.info("Starting new wandb run")
-            logger_kwargs['config'] = OmegaConf.to_yaml(self.config)
 
-        self.logger = stax.WandBLogger(
-            entity=os.environ.get("entity", ""),
-            project=config.project,
-            **logger_kwargs
-        )
-        self.wandb_id = self.logger.id
+        if writer_config := self.config.wandb_config:
+            writer_kwargs =  dict() 
+            if self.writer_id is not None:
+                logger.info(f"Given existing wandb with id: {self.writer_id}")
+                writer_kwargs['run_id'] = self.writer_id
+            else: 
+                logger.info("Starting new wandb run")
+                writer_kwargs['config'] = OmegaConf.to_yaml(self.config)
+
+            writer  = stax.WandBWriter(
+                entity=os.environ.get("WANDB_ENTITY", ""),
+                project=writer_config.project,
+                **writer_kwargs
+            )
+        else:
+            writer = stax.TextWriter()
+
+        self.writer_id = writer.id
+        self.writer = writer
 
     @partial(setup, component="JAX")
     def _setup_jax(self):
@@ -123,10 +127,16 @@ class Trainer:
     @partial(setup, component="train/eval functions")
     def _setup_functions(self):
         """Setup training and evaluation functions."""
-        if self.tx is None:
-            raise ValueError("Cannot setup functions without optimizer")
+        assert self.tx is not None, "self.tx is None"
+        assert self.model is not None, "self.model is None"
 
-        step_fn = ... 
+        params_shape, opt_state_shape= self.model.init_state(
+            jax.random.PRNGKey(0), 
+            tx=self.tx, 
+            abstract=True
+        )
+
+        step_fn = sft_step
         self.train_fn, self.val_fn, self.shardings = stax.fn.get_steps_fn(
             step_fn, 
             self.model,
@@ -135,10 +145,16 @@ class Trainer:
             grad_steps=self.config.grad_steps,
             eval_steps=self.config.eval_steps,
             sharding=stax.ShardingConfig(
-                self.config
+                params_shape=params_shape, 
+                opt_state_shape=opt_state_shape,
+                sharding_type=stax.ShardingType(self.config.sharding_config.sharding_type),
+                opt_state_offload=self.config.sharding_config.opt_state_offload, 
+                min_bytes_for_fsdp=self.config.sharding_config.min_bytes_for_fsdp,  
+                data_shard_dim=self.config.sharding_config.data_shard_dim,
+                weight_shard_dim=self.config.sharding_config.weight_shard_dim,
             )
         )
-        pass
+
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
@@ -152,12 +168,9 @@ class Trainer:
 
     @partial(setup, component="init train state")
     def _setup_train_state(self):
-        if self.model is None:
-            raise ValueError("Model must be set up before train state init.")
-        if self.tx is None:
-            raise ValueError("Optimizer must be set up before train state init.")
-        if self.params_sharding is None or self.opt_state_sharding is None:
-            raise ValueError("Sharding must be set up before train state init.")
+        assert self.model is not None, "Model must be set up before train state init."
+        assert self.tx is not None, "Optimizer must be set up before train state init."
+        assert self.params_sharding is not None and self.opt_state_sharding is not None, "Sharding must be set up before train state init."
 
         sharding = (self.params_sharding, self.opt_state_sharding)
         out_state = self.model.init_state(rng=self.key(), tx=self.tx, sharding=sharding, abstract=False)
@@ -211,7 +224,8 @@ class Trainer:
             max_to_keep=self.config.max_checkpoints_to_keep,
         )
 
-        if self.config.best_metric is not None:
+        if self.has_best_ckpt:
+            assert self.config.best_metric
             best_path = f"{path}/best/"
             self.best_checkpointer = stax.Checkpointer(
                 output_dir=best_path,
@@ -230,7 +244,7 @@ class Trainer:
         if self.train_fn is None or self.eval_fn is None:
             raise ValueError("Functions not initalized yet")
 
-        for step in range(self.global_step, self.config.num_steps):
+        for step in range(self.global_step, self.total_steps):
 
             # might have to do something here for RL 
             batch = self.train_dataset()
@@ -244,3 +258,11 @@ class Trainer:
             # val generations
 
             # checkpoint step 
+
+    @property
+    def has_best_ckpt(self):
+        return self.config.best_metric is not None
+    
+    @property
+    def total_steps(self):
+        return self.config.num_steps

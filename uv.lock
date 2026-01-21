@@ -170,7 +170,7 @@ requires-dist = [
     { name = "openbench", marker = "extra == 'eval'", specifier = ">=0.5.3" },
     { name = "pre-commit", specifier = ">=4.5.1" },
     { name = "ruff", specifier = ">=0.14.10" },
-    { name = "stax", git = "https://github.com/adityamakkar000/stax.git" },
+    { name = "stax", git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FEnum" },
     { name = "torch", specifier = ">=2.9.0" },
     { name = "transformers", specifier = ">=4.57.3" },
     { name = "vllm-tpu", marker = "extra == 'eval'", specifier = ">=0.12.0" },
@@ -3607,7 +3607,7 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git#17bbc4f7f88595fd57bd9f97ae98126ba86c0d1f" }
+source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FEnum#824ce9dd0aa228f47050a2c795de18e9520f0f3d" }
 dependencies = [
     { name = "flax" },
     { name = "jax" },
