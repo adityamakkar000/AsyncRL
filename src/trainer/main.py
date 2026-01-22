@@ -48,7 +48,11 @@ class Trainer:
             self._setup_train_state()
             self._setup_writer()
 
-        logger.info(f"Trainer initialization complete in {tracker.data['time']}")
+        assert self.checkpointer is not None, "Checkpointer not set up."
+        self.save_checkpoint(step=self.global_step)
+        self.checkpointer.wait_until_finished()  # let first finish to make sure we don't error by partial write
+
+        logger.info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds")
 
     def validate_config(self):
         """Method to validate the TrainerConfig parameters."""
@@ -178,16 +182,13 @@ class Trainer:
         if self.config.spot_training and self.checkpointer.latest_step is not None:
             logger.info("Spot training enabled and checkpoint found, skipping parameter initialization.")
             self.restore_save_tree()
-            return 
+            return
 
         logger.info("Initializing new run ...")
         sharding = {"params": self.params_sharding, "opt_state": self.opt_state_sharding}
         out_state = self.model.init_state(rng=self.key(), tx=self.tx, sharding=sharding, abstract=False)
         self.params = out_state["params"]
         self.opt_state = out_state["opt_state"]
-
-        self.save_checkpoint(step=self.global_step)
-        self.checkpointer.wait_until_finished() # let first finish to make sure we don't error by partial write
 
         logger.info(f"Params intialized with total size: {self.model.count_params(self.params):_} parameters.")
 
@@ -236,8 +237,8 @@ class Trainer:
         self.checkpointer = stax.Checkpointer(
             output_dir=path,
             max_to_keep=self.config.max_checkpoints_to_keep,
-            best_key=self.config.best_metric.name if self.has_best_ckpt else None, # type: ignore
-            best_mode="max" if self.has_best_ckpt and self.config.best_metric.maximize else "min", # type: ignore
+            best_key=self.config.best_metric.name if self.has_best_ckpt else None,  # type: ignore
+            best_mode="max" if self.has_best_ckpt and self.config.best_metric.maximize else "min",  # type: ignore
         )
 
     def make_save_tree(
@@ -248,15 +249,14 @@ class Trainer:
         opt_state: Optional[PyTree] = None,
         metadata_metrics: Optional[dict[str, float]] = None,
     ):
-
         # TODO: (chinmay) save dataset state
         # dataset_state = {"train": self.train_dataset.save_checkpoint(), "val": self.val_dataset.save_checkpoint()}
 
         state = {
-            "params": params if params else self.params ,
+            "params": params if params else self.params,
             "opt_state": opt_state if opt_state else self.opt_state,
             "global_step": self.global_step,
-            "dataset": None, #TODO: (chinmay) add dataset state here
+            "dataset": None,  # TODO: (chinmay) add dataset state here
             "key": jax.device_get(self.key.key),
         }
         metadata = {
@@ -290,22 +290,19 @@ class Trainer:
         logger.info(f"Restoring checkpoint from step {self.global_step} ...")
 
         shardings = {
-            'params': self.params_sharding,
-            'opt_state': self.opt_state_sharding,
-        } 
+            "params": self.params_sharding,
+            "opt_state": self.opt_state_sharding,
+        }
         out = self.model.init_state(rng=jax.random.PRNGKey(0), tx=self.tx, sharding=shardings, abstract=True)
 
         # don't need metadata
         save_tree, _ = self.make_save_tree(
-            step=-1, 
+            step=-1,
             params=out["params"],
             opt_state=out["opt_state"],
         )
 
-        restored_ckpt = self.checkpointer.restore(
-            state=save_tree, 
-            use_best=use_best
-        )
+        restored_ckpt = self.checkpointer.restore(state=save_tree, use_best=use_best)
 
         state, metadata = restored_ckpt["state"], restored_ckpt["metadata"]
 
@@ -315,9 +312,9 @@ class Trainer:
 
         self.writer_id = metadata.get("writer_id", None)
 
-        #TODO: (chinmay) restore dataset state
-        # self.train_dataset.load_from_state(state["dataset"]["train"]) 
-        # self.val_dataset.load_from_state(state["dataset"]["val"]) 
+        # TODO: (chinmay) restore dataset state
+        # self.train_dataset.load_from_state(state["dataset"]["train"])
+        # self.val_dataset.load_from_state(state["dataset"]["val"])
 
         logger.info("Checkpoint restoration complete.")
 
