@@ -5,10 +5,10 @@ defaults:
   - sharding_config: fsdp
   - _self_
 
-grad_accumulation: 1
+grad_steps: 1
 seed: 0
 num_steps: 1000
-eval_interval: 100
+val_interval: 100
 
 optimizer: "adamw"
 weight_decay: 0.01
@@ -20,7 +20,7 @@ learning_rate_end: 1e-5
 warmup_steps: 0.1
 decay_steps: 0.9
 
-spot_training: false
+spot_training: true 
 checkpoint_interval: 1000
 best_metric: null
 max_checkpoints_to_keep: 5
@@ -33,3 +33,7 @@ wandb_config:
   project: "AnnealedRL"
   notes: null
   tags: null
+
+metrics_to_log:
+  - "train/loss"
+  - "val/loss"

@@ -8,6 +8,7 @@ from src.trainer import Trainer, TrainerConfig
 cs = ConfigStore.instance()
 cs.store(name="base", node=TrainerConfig)
 
+
 @hydra.main(version_base=None, config_path="./configs/train")
 def main(cfg: DictConfig) -> None:
     logger.info("Training Configuration:")

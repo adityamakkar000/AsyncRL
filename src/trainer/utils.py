@@ -30,14 +30,28 @@ def setup(setup_fn: Callable[[Any], None], component: str):
 
 
 class Key:
+    """
+    Helper class to manage JAX random keys.
+    """
+
     def __init__(self, seed: int):
         self.key = jax.random.PRNGKey(seed)
 
     def __call__(self, num_keys: int = 1, split_by_process: bool = False):
+        """
+        Generate one or more JAX random keys.
+        Args:
+            num_keys: Number of keys to generate.
+            split_by_process: Whether to fold in the process index for distributed setups.
+        Returns:
+            A single JAX random key if num_keys is 1, else a list of keys.
+        """
+
         self.key, subkey = jax.random.split(self.key)
         if split_by_process:
             subkey = jax.random.fold_in(subkey, jax.process_index())
-        return jax.random.split(subkey, (num_keys, 2))
+        keys = jax.random.split(subkey, (num_keys,))
+        return keys if num_keys > 1 else keys[0]
 
 
 def set_jax_cache(path: str):
@@ -46,4 +60,3 @@ def set_jax_cache(path: str):
     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
-
