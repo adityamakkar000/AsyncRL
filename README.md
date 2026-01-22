@@ -6,7 +6,7 @@
 2. Run `pre-commit install`
 3. Install `https://github.com/adityamakkar000/Mesh` 
 4. Use the bash scripts in `src/scripts/tpu/main.sh` to allocate and list the external IPs of a TPU cluster
-5. Create a `~/.config/mesh/cluster.yaml` file following the format in ![MESH readme]()
+5. Create a `~/.config/mesh/cluster.yaml` file following the format in ![MESH readme](https://github.com/adityamakkar000/Mesh/blob/main/README.md)
 6. Make a copy of the  `.env` and file in all the keys
     - For a STAX token make a read-only PAT in github to allow Mesh to sync when running uv sync in the cluster
 
