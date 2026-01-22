@@ -5,6 +5,8 @@ from typing import Optional
 import jax
 import optax
 import stax
+from dotenv import load_dotenv
+from jaxtyping import PyTree
 from omegaconf import DictConfig, OmegaConf
 from stax import staxLogger as logger
 
@@ -13,7 +15,8 @@ from src.model import Model
 from .config import TrainerConfig
 from .steps import sft_step, standard_rl_step
 from .utils import Key, set_jax_cache, setup
-from jaxtyping import PyTree
+
+load_dotenv()
 
 
 class Trainer:
@@ -35,20 +38,17 @@ class Trainer:
 
         logger.info(f"Starting training for {self.config.experiment_name}")
 
-        # setup methods
-        self._init_state()
-        self._setup_model()
-        self._setup_optimizer()
-        self._setup_checkpointer()
-        self._setup_functions()
-        self._setup_dataset()
-        self._setup_train_state()
-        import sys
+        with stax.Tracker(timer=True) as tracker:
+            self._init_state()
+            self._setup_model()
+            self._setup_optimizer()
+            self._setup_checkpointer()
+            self._setup_functions()
+            self._setup_dataset()
+            self._setup_train_state()
+            self._setup_writer()
 
-        sys.exit(0)
-        self._setup_writer()
-
-        logger.info("Trainer initialization complete.")
+        logger.info(f"Trainer initialization complete in {tracker.data['time']}")
 
     def validate_config(self):
         """Method to validate the TrainerConfig parameters."""
@@ -104,8 +104,9 @@ class Trainer:
                 writer_kwargs["run_id"] = self.writer_id
             else:
                 logger.info("Starting new wandb run")
-                writer_kwargs["config"] = OmegaConf.to_yaml(self.config)
+                writer_kwargs["config"] = OmegaConf.to_object(self.config)
 
+            logger.info("ENTITY:", os.environ.get("WANDB_ENTITY", ""))
             writer = stax.WandBWriter(
                 entity=os.environ.get("WANDB_ENTITY", ""), project=writer_config.project, **writer_kwargs
             )
@@ -185,6 +186,9 @@ class Trainer:
         self.params = out_state["params"]
         self.opt_state = out_state["opt_state"]
 
+        self.save_checkpoint(step=self.global_step)
+        self.checkpointer.wait_until_finished() # let first finish to make sure we don't error by partial write
+
         logger.info(f"Params intialized with total size: {self.model.count_params(self.params):_} parameters.")
 
     @partial(setup, component="optimizer")
@@ -228,7 +232,7 @@ class Trainer:
     def _setup_checkpointer(self):
         """Setup checkpointing mechanism."""
 
-        path = f"{self.config.gs_bucket}/{self.config.checkpoint_gs_bucket}/"
+        path = f"{self.config.gs_bucket}/{self.config.checkpoint_gs_bucket}/{self.config.experiment_name}/"
         self.checkpointer = stax.Checkpointer(
             output_dir=path,
             max_to_keep=self.config.max_checkpoints_to_keep,
@@ -244,16 +248,19 @@ class Trainer:
         opt_state: Optional[PyTree] = None,
         metadata_metrics: Optional[dict[str, float]] = None,
     ):
-        dataset_state = {"train": ..., "val": ...}
+
+        # TODO: (chinmay) save dataset state
+        # dataset_state = {"train": self.train_dataset.save_checkpoint(), "val": self.val_dataset.save_checkpoint()}
+
         state = {
             "params": params if params else self.params ,
             "opt_state": opt_state if opt_state else self.opt_state,
             "global_step": self.global_step,
-            "dataset": dataset_state,
+            "dataset": None, #TODO: (chinmay) add dataset state here
             "key": jax.device_get(self.key.key),
         }
         metadata = {
-            "wandb_id": self.writer_id,
+            "writer_id": self.writer_id,
         }
         if metadata_metrics is not None:
             metadata |= metadata_metrics
@@ -276,7 +283,7 @@ class Trainer:
                 "Best checkpoint requested but best_metric not set in config. Loading latest checkpoint instead."
             )
 
-        if not self.checkpointer.latest_step:
+        if self.checkpointer.latest_step is None:
             raise ValueError("No checkpoint found to restore from.")
 
         self.global_step = self.checkpointer.latest_step
@@ -306,17 +313,17 @@ class Trainer:
         self.opt_state = state["opt_state"]
         self.key.key = state["key"]
 
-        self.wandb_id = metadata.get("wandb_id", None)
+        self.writer_id = metadata.get("writer_id", None)
 
         #TODO: (chinmay) restore dataset state
-        self.train_dataset.load_from_state(state["dataset"]["train"]) # type: ignore 
-        self.val_dataset.load_from_state(state["dataset"]["val"]) # type: ignore 
+        # self.train_dataset.load_from_state(state["dataset"]["train"]) 
+        # self.val_dataset.load_from_state(state["dataset"]["val"]) 
 
         logger.info("Checkpoint restoration complete.")
 
     def train(self):
         if self.train_fn is None or self.val_fn is None:
-            raise ValueError("Functions not initalized yet")
+            raise ValueError("Functions not initialized yet")
 
         for step in range(self.global_step, self.total_steps):
             # might have to do something here for RL
@@ -331,6 +338,12 @@ class Trainer:
             # val generations
 
             # checkpoint step
+
+    def finish(self):
+        """Finalize training and clean up resources."""
+        if self.writer is not None:
+            self.writer.finish()
+        logger.info("Training complete. Resources cleaned up.")
 
     @property
     def has_best_ckpt(self):

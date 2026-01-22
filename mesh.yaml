@@ -14,3 +14,4 @@ prerun:
   - source .env
   - git config --global url."https://${STAX_TOKEN}@github.com/".insteadOf "https://github.com/"
   - uv sync --extra eval
+  - wandb login ${WANDB_API_KEY} --relogin

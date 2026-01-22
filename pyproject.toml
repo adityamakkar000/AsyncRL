@@ -12,6 +12,7 @@ dependencies = [
     "jax[tpu]>=0.6.2; platform_system == 'Linux'",
     "jaxtyping>=0.3.4",
     "pre-commit>=4.5.1",
+    "python-dotenv>=1.2.1",
     "ruff>=0.14.10",
     "stax",
     "torch>=2.9.0",
