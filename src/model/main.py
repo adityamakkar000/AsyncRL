@@ -6,7 +6,7 @@ from jax.sharding import Sharding, SingleDeviceSharding
 from jaxtyping import Array, PyTree
 from omegaconf import DictConfig
 from optax import GradientTransformation
-from stax.model_module import HFModelBase, modelBase
+from stax.model_module import HFModelBase
 
 from src.model.qwen3 import KVCache, Qwen3
 
@@ -18,7 +18,7 @@ model_names = [f"Qwen/Qwen3-{size}B" for size in sizes]
 shardingType = Optional[PyTree[Sharding]]
 
 
-class Model(modelBase):
+class Model(HFModelBase):
     def __init__(self, config: DictConfig[ModelConfig]):
         self.config = config
         self.validate_config()
@@ -46,7 +46,7 @@ class Model(modelBase):
             return jax.eval_shape(init_state, rng, x_init, seq_lens)
 
         out_state = init_state(rng, x_init, seq_lens)
-        out_state["params"] = get_qwen_3_weights(out_state["params"], name=self.config.hf_model_name)
+        out_state["params"] = self.load_from_hf(out_state["params"], self.config.hf_model_name)
 
         if sharding is None:
             single_sharding = SingleDeviceSharding(jax.devices()[0])
@@ -58,9 +58,8 @@ class Model(modelBase):
 
         return out_state
 
-    def save_to_hf():
-        # TODO: implement method to load model weights to huggingface
-        return
+    def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
+        return get_qwen_3_weights(params, name=model_name)
 
     def init_kv_cache(self, x: Array) -> list[KVCache]:
         B = x.shape[0]
@@ -82,9 +81,9 @@ class Model(modelBase):
             initial_cache.append(_cache)
 
         return initial_cache
-    
-    def load_from_ckpt(self, checkpointer, state, use_best = True):
-        pass 
+
+    def load_from_ckpt(self, checkpointer, state, use_best=True):
+        pass
 
     def __call__(
         self,

@@ -139,6 +139,7 @@ def download_hf_weights(name: str):
         snapshot_download(
             repo_id=name,
             local_dir=name,
+            token=os.environ.get("HF_TOKEN", None),
         )
 
 
