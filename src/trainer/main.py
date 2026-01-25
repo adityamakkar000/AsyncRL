@@ -10,15 +10,16 @@ import stax
 from dotenv import load_dotenv
 from jax.experimental.multihost_utils import sync_global_devices
 from jaxtyping import PyTree
+from mpmath.tests.test_hp import a
 from omegaconf import DictConfig, OmegaConf
 from stax import staxLogger as logger
 
-from src.constants import CHECKPOINTS, GS_BUCKET, CACHE
+from src.constants import CACHE, CHECKPOINTS, GS_BUCKET
 from src.model import Model
 
 from .config import TrainerConfig
 from .steps import sft_step, standard_rl_step
-from .utils import Key, set_jax_cache, setup
+from .utils import Key, set_jax_cache, setup, write_to_gcs
 
 load_dotenv()
 
@@ -56,15 +57,9 @@ class Trainer:
             if self.checkpointer.latest_step is None:
                 logger.info("Saving intial checkpoint ...")
                 self.save_checkpoint(step=self.global_step)
-
-                if stax.get_rank() == 0:
-                    dict_config = OmegaConf.to_container(self.config)
-                    config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
-                    fs = gcsfs.GCSFileSystem()
-                    with fs.open(config_path.replace("gs://", ""), "w") as f:
-                        f.write(json.dumps(dict_config))
-
-                sync_global_devices("config_save")  
+                dict_config = json.dumps(OmegaConf.to_container(self.config))
+                config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
+                write_to_gcs(config_path, dict_config)
                 self.checkpointer.wait_until_finished()  
 
             sync_global_devices("Trainer initialization")
