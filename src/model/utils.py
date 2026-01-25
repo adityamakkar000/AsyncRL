@@ -5,7 +5,7 @@ import re
 import jax
 import jax.numpy as jnp
 from huggingface_hub import snapshot_download
-from jaxtyping import PyTree
+from jaxtyping import Array, PyTree
 from safetensors import safe_open
 
 
@@ -160,6 +160,7 @@ def get_qwen_3_weights(params: PyTree, name: str) -> PyTree:
     torch_hf_params = {}
 
     files = list(glob.glob(name + "/*safetensors"))
+    breakpoint()
     for file in files:
         with safe_open(file, framework="torch") as f:
             for hf_param_key in f.keys():
@@ -184,3 +185,25 @@ def get_qwen_3_weights(params: PyTree, name: str) -> PyTree:
                 jax_param[param_ending] = new_param
 
     return params
+
+
+def convert_param(param: Array) -> Array:
+    """
+    Converts a parameter from the Qwen paramter state to HuggingFace format.
+
+    Args:
+        param (Array): The JAX parameter array to be converted.
+    """
+    pass
+
+
+def process_param(param: PyTree):
+    pass
+
+
+def save_weights_locally(params: PyTree, path: str):
+    pass
+
+
+if __name__ == "__main__":
+    get_qwen_3_weights({}, "Qwen/Qwen-3-7B-Chat")
