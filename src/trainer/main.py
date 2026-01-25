@@ -263,6 +263,7 @@ class Trainer:
         }
         metadata = {
             "writer_id": self.writer_id,
+            "config": OmegaConf.to_object(self.config)
         }
         if metadata_metrics is not None:
             metadata |= metadata_metrics
