@@ -25,10 +25,6 @@ checkpoint_interval: 1000
 best_metric: null
 max_checkpoints_to_keep: 5
 
-gs_bucket: "gs://arl-experiments/"
-checkpoint_gs_bucket: "checkpoints"
-cache: "cache"
-
 wandb_config: 
   project: "AnnealedRL"
   notes: null
