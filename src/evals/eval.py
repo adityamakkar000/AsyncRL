@@ -51,6 +51,7 @@ class EvalRunner:
         if self.config.vllm_config.dtype not in dtypes:
             raise ValueError(f"dtype must be one of {dtypes}, but got {self.config.vllm_config.dtype}.")
 
+
     def load_model(self):
         """
         #TODO:
