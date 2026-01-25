@@ -6,6 +6,7 @@ import jax
 import optax
 import stax
 from dotenv import load_dotenv
+from jax.experimental.multihost_utils import sync_global_devices
 from jaxtyping import PyTree
 from omegaconf import DictConfig, OmegaConf
 from stax import staxLogger as logger
@@ -48,9 +49,13 @@ class Trainer:
             self._setup_train_state()
             self._setup_writer()
 
-        assert self.checkpointer is not None, "Checkpointer not set up."
-        self.save_checkpoint(step=self.global_step)
-        self.checkpointer.wait_until_finished()  # let first finish to make sure we don't error by partial write
+            assert self.checkpointer is not None, "Checkpointer not set up."
+            if self.checkpointer.latest_step is None:
+                logger.info("Saving intial checkpoint ...")
+                self.save_checkpoint(step=self.global_step)
+                self.checkpointer.wait_until_finished()  # let first finish to make sure we don't error by partial write
+
+            sync_global_devices("Trainer initialization")
 
         logger.info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds")
 
@@ -104,15 +109,12 @@ class Trainer:
         if writer_config := self.config.wandb_config:
             writer_kwargs = dict()
             if self.writer_id is not None:
-                logger.info(f"Given existing wandb with id: {self.writer_id}")
                 writer_kwargs["run_id"] = self.writer_id
             else:
-                logger.info("Starting new wandb run")
                 writer_kwargs["config"] = OmegaConf.to_object(self.config)
 
-            logger.info("ENTITY:", os.environ.get("WANDB_ENTITY", ""))
             writer = stax.WandBWriter(
-                entity=os.environ.get("WANDB_ENTITY", ""), project=writer_config.project, **writer_kwargs
+                entity=os.getenv("WANDB_ENTITY", ""), project=writer_config.project, **writer_kwargs
             )
         else:
             writer = stax.TextWriter()
@@ -287,7 +289,6 @@ class Trainer:
             raise ValueError("No checkpoint found to restore from.")
 
         self.global_step = self.checkpointer.latest_step
-        logger.info(f"Restoring checkpoint from step {self.global_step} ...")
 
         shardings = {
             "params": self.params_sharding,
@@ -315,8 +316,6 @@ class Trainer:
         # TODO: (chinmay) restore dataset state
         # self.train_dataset.load_from_state(state["dataset"]["train"])
         # self.val_dataset.load_from_state(state["dataset"]["val"])
-
-        logger.info("Checkpoint restoration complete.")
 
     def train(self):
         if self.train_fn is None or self.val_fn is None:

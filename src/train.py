@@ -11,11 +11,10 @@ cs.store(name="base", node=TrainerConfig)
 
 @hydra.main(version_base=None, config_path="./configs/train")
 def main(cfg: DictConfig) -> None:
-    logger.info("Training Configuration:")
-    logger.info("\n" + OmegaConf.to_yaml(cfg))
+    logger.info("Training Configuration:\n" + OmegaConf.to_yaml(cfg))
+    trainer = Trainer(config=cfg)
 
     try:
-        trainer = Trainer(config=cfg)
         trainer.train()
     finally:
         trainer.finish()
