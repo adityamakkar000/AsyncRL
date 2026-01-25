@@ -1,3 +1,4 @@
+from stax import Checkpointer
 import os
 import subprocess
 import time
@@ -5,24 +6,29 @@ import time
 from loguru import logger
 from omegaconf import DictConfig
 
-from src.evals.utils import (
+from src.constants import (
+    CHECKPOINTS,
+    DISPLAY,
+    EVAL_LOG_DIR,
+    GPU_MEMORY_UTILIZATION,
+    GS_BUCKET,
+    IP,
+    MAX_TASKS,
+    PORT,
+    SERVED_MODEL_NAME,
+)
+
+from .config import evalConfig
+from .utils import (
     format_command,
     hash_dictConfig,
     ping_server,
     terminate_process,
 )
 
-SERVED_MODEL_NAME = "eval_model"
-IP = "localhost"
-PORT = "8000"
-GPU_MEMORY_UTILIZATION = "0.98"
-EVAL_LOG_DIR = "logs/eval_logs"
-DISPLAY = "plain"
-MAX_TASKS = "5"
-
 
 class EvalRunner:
-    def __init__(self, config: DictConfig):
+    def __init__(self, config: DictConfig | evalConfig):
         self.config = config
         self.vllm_config = config.vllm_config
         self.model_config = config.model_config
@@ -52,6 +58,19 @@ class EvalRunner:
         setup wandb
 
         """
+
+        path = f"{GS_BUCKET}/{CHECKPOINTS}/{self.model_config.model_name}/"
+        if self.model_config.use_best_ckpt:
+            path += "best/"
+        
+        checkpointer = Checkpointer(
+            path
+        )
+
+        assert checkpointer.latest_step is not None, f"No checkpoints found in {path}"
+
+        tree 
+
 
         raise NotImplementedError()
 

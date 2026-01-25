@@ -75,7 +75,4 @@ class TrainerConfig:
     best_metric: Optional[BestMetric] = None  # if set, save best checkpoint as well
     max_checkpoints_to_keep: int = 5  # The maximum number of checkpoints to keep
 
-    # gs configs
-    gs_bucket: str = "gs://arl-experiments"  # main gs bucket
-    checkpoint_gs_bucket: str = "checkpoints"  # The GCS bucket to store checkpoints
-    cache: str = "cache"  # The GCS bucket to store jax cache
+    

@@ -1,7 +1,9 @@
+import json
 import os
 from functools import partial
 from typing import Optional
 
+import gcsfs
 import jax
 import optax
 import stax
@@ -11,6 +13,7 @@ from jaxtyping import PyTree
 from omegaconf import DictConfig, OmegaConf
 from stax import staxLogger as logger
 
+from src.constants import CHECKPOINTS, GS_BUCKET, CACHE
 from src.model import Model
 
 from .config import TrainerConfig
@@ -53,7 +56,16 @@ class Trainer:
             if self.checkpointer.latest_step is None:
                 logger.info("Saving intial checkpoint ...")
                 self.save_checkpoint(step=self.global_step)
-                self.checkpointer.wait_until_finished()  # let first finish to make sure we don't error by partial write
+
+                if stax.get_rank() == 0:
+                    dict_config = OmegaConf.to_object(self.config)
+                    config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
+                    fs = gcsfs.GCSFileSystem()
+                    with fs.open(config_path.replace("gs://", ""), "w") as f:
+                        f.write(json.dumps(dict_config))
+
+                sync_global_devices("config_save")  
+                self.checkpointer.wait_until_finished()  
 
             sync_global_devices("Trainer initialization")
 
@@ -126,7 +138,7 @@ class Trainer:
     def _setup_jax(self):
         """Setup JAX for distributed training on TPUs."""
         stax.init_distributed_jax()
-        cache_path = self.config.gs_bucket + self.config.cache
+        cache_path = f"{GS_BUCKET}/{CACHE}"
         set_jax_cache(cache_path)
 
     @partial(setup, component="train and val functions")
@@ -235,7 +247,7 @@ class Trainer:
     def _setup_checkpointer(self):
         """Setup checkpointing mechanism."""
 
-        path = f"{self.config.gs_bucket}/{self.config.checkpoint_gs_bucket}/{self.config.experiment_name}/"
+        path = f"{GS_BUCKET}/{self.config.experiment_name}/{CHECKPOINTS}/"
         self.checkpointer = stax.Checkpointer(
             output_dir=path,
             max_to_keep=self.config.max_checkpoints_to_keep,
@@ -263,7 +275,6 @@ class Trainer:
         }
         metadata = {
             "writer_id": self.writer_id,
-            "config": OmegaConf.to_object(self.config)
         }
         if metadata_metrics is not None:
             metadata |= metadata_metrics
