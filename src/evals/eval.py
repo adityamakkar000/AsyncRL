@@ -1,10 +1,10 @@
-from stax import Checkpointer
 import os
 import subprocess
 import time
 
 from loguru import logger
 from omegaconf import DictConfig
+from stax import Checkpointer
 
 from src.constants import (
     CHECKPOINTS,
@@ -59,7 +59,8 @@ class EvalRunner:
 
         """
 
-        path = f"{GS_BUCKET}/{CHECKPOINTS}/{self.model_config.model_name}/"
+        path = f"{GS_BUCKET}/{self.model_config.model_name}/"
+        config = 
         if self.model_config.use_best_ckpt:
             path += "best/"
         
