@@ -110,6 +110,10 @@ class Model(HFModelBase):
 
         return restored.state["params"]
 
+    def save_ckpt(self, path: str, params: PyTree) -> None:
+        """Saves the model parameters in a local safetensors file. Inverse of load_from_hf."""
+        pass
+
     def __call__(
         self,
         params: PyTree,
