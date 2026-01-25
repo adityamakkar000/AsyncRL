@@ -58,7 +58,7 @@ class Trainer:
                 self.save_checkpoint(step=self.global_step)
 
                 if stax.get_rank() == 0:
-                    dict_config = OmegaConf.to_object(self.config)
+                    dict_config = OmegaConf.to_container(self.config)
                     config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
                     fs = gcsfs.GCSFileSystem()
                     with fs.open(config_path.replace("gs://", ""), "w") as f:
