@@ -18,7 +18,7 @@ cs.store(name="base", node=evalConfig)
 def main(cfg: DictConfig) -> None:
     logger.info(f"Evaluation Configuration: \n{OmegaConf.to_yaml(cfg)}")
     logger.info(f"Devices: {jax.devices()}")
-    
+
     eval_runner = EvalRunner(config=cfg)
     eval_runner.run_evaluation()
 

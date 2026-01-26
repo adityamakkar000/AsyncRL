@@ -84,31 +84,21 @@ class Model(HFModelBase):
 
         return initial_cache
 
-    def load_from_ckpt(self, path : str, step_number: Optional[int] = None, use_best = False):
-
+    def load_from_ckpt(self, path: str, step_number: Optional[int] = None, use_best=False):
         assert (step_number is not None) ^ use_best, "Either step_number or use_best must be set."
         path = f"{path}/checkpoints/"
         if use_best:
             path += "best/"
 
-        checkpointer = ocp.CheckpointManager(
-            directory=path, options=ocp.CheckpointManagerOptions()
-        )
+        checkpointer = ocp.CheckpointManager(directory=path, options=ocp.CheckpointManagerOptions())
 
         if step_number == -1:
             step_number = None
 
-        save_tree = self.init_state(
-            jax.random.PRNGKey(0), 
-            tx=None, 
-            abstract=True
-        )
-        restore_args = jax.tree.map(
-            lambda _: ocp.RestoreArgs(restore_type=np.ndarray),
-            save_tree
-        )
+        save_tree = self.init_state(jax.random.PRNGKey(0), tx=None, abstract=True)
+        restore_args = jax.tree.map(lambda _: ocp.RestoreArgs(restore_type=np.ndarray), save_tree)
         restored = checkpointer.restore(
-            step=step_number, 
+            step=step_number,
             args=ocp.args.Composite(
                 state=ocp.args.PyTreeRestore(save_tree, restore_args=restore_args, partial_restore=True),
                 metadata=ocp.args.JsonRestore(),
@@ -117,7 +107,7 @@ class Model(HFModelBase):
         assert hasattr(restored, "state"), "Restored object has no attribute 'state'"
         assert restored.state, "Restored state has no 'params' key"
 
-        return restored.state['params']
+        return restored.state["params"]
 
     def __call__(
         self,

@@ -74,5 +74,3 @@ class TrainerConfig:
     checkpoint_interval: int = 1000  # The interval (in steps) at which to save checkpoints
     best_metric: Optional[BestMetric] = None  # if set, save best checkpoint as well
     max_checkpoints_to_keep: int = 5  # The maximum number of checkpoints to keep
-
-    
