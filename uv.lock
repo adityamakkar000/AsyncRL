@@ -3604,7 +3604,7 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FfixSync#0e39bd6d7e6cea51ca632a220dcdf61d0b3c29c5" }
+source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FfixSync#3391a0ea8894065334f812991062246627fde80d" }
 dependencies = [
     { name = "flax" },
     { name = "jax" },

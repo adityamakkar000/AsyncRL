@@ -1,10 +1,11 @@
+import json
 import os
 import subprocess
 import time
 
+import gcsfs
 from loguru import logger
-from omegaconf import DictConfig
-from stax import Checkpointer
+from omegaconf import DictConfig, OmegaConf
 
 from src.constants import (
     CHECKPOINTS,
@@ -17,6 +18,7 @@ from src.constants import (
     PORT,
     SERVED_MODEL_NAME,
 )
+from src.model import Model
 
 from .config import evalConfig
 from .utils import (
@@ -29,6 +31,7 @@ from .utils import (
 
 class EvalRunner:
     def __init__(self, config: DictConfig | evalConfig):
+        
         self.config = config
         self.vllm_config = config.vllm_config
         self.model_config = config.model_config
@@ -52,7 +55,7 @@ class EvalRunner:
             raise ValueError(f"dtype must be one of {dtypes}, but got {self.config.vllm_config.dtype}.")
 
 
-    def load_model(self):
+    def setup_model(self):
         """
         #TODO:
         load the model from checkpoint
@@ -60,30 +63,19 @@ class EvalRunner:
 
         """
 
-        path = f"{GS_BUCKET}/{self.model_config.model_name}/"
-        config = 
-        if self.model_config.use_best_ckpt:
-            path += "best/"
-        
-        checkpointer = Checkpointer(
-            path
-        )
+        path = f"{GS_BUCKET}/{self.model_config.model_name}"
+        config = f"{path}/config.json"
 
-        assert checkpointer.latest_step is not None, f"No checkpoints found in {path}"
+        fs = gcsfs.GCSFileSystem()
+        with fs.open(config.replace("gs://", ""), "r") as f:
+            model_config = json.loads(f.read())
+        model_config = OmegaConf.create(model_config).model_config
+        logger.info(f"Model config from {config} loaded: \n{OmegaConf.to_yaml(model_config)}")
 
-        tree 
-
-
-        raise NotImplementedError()
-
-    def save_model_to_hf(self):
-        """
-        save the local model to safetensors local directory
-        so that vllm can load it
-
-        """
-
-        raise NotImplementedError()
+        model = Model(model_config)
+        params = model.load_from_ckpt_2(path, step_number=self.model_config.step_number, use_best=self.model_config.use_best_ckpt)
+        import sys; sys.exit(0)
+        model.save_to_hf()
 
     def launch_vllm(self):
         # TODO:
@@ -198,13 +190,11 @@ class EvalRunner:
 
     def cleanup(self):
         logger.info("Cleaning up...")
-        self.vllm_proess = terminate_process(self.vllm_process, "vLLM")
+        self.vllm_process = terminate_process(self.vllm_process, "vLLM")
 
     def run_evaluation(self):
         try:
-            # TODO:
-            # self.load_model()
-            # self.save_model_to_hf()
+            self.setup_model()
             self.launch_vllm()
             self.launch_eval()
         finally:

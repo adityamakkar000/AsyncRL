@@ -19,6 +19,5 @@ def main(cfg: DictConfig) -> None:
     finally:
         trainer.finish()
 
-
 if __name__ == "__main__":
     main()
