@@ -10,8 +10,6 @@ class vLLMConfig:
     max_batched_tokens: int | str = 2048
     tensor_parallel_size: int = 1
     data_parallel_size: int = 8
-    dtype: str = "float16"
-
 
 @dataclass
 class modelConfig:
