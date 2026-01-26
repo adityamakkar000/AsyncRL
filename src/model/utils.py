@@ -4,9 +4,11 @@ import re
 
 import jax
 import jax.numpy as jnp
+import torch
 from huggingface_hub import snapshot_download
 from jaxtyping import Array, PyTree
 from safetensors import safe_open
+from safetensors.torch import save_file
 
 
 def convert_dtype(dtype_str: str) -> jnp.dtype:
@@ -133,6 +135,8 @@ HF_MAPPING = {  # embedding
     r"lm_head\.weight": "Dense_0.kernel",
 }
 
+REVERSE_HF_MAPPING = {v: k for k, v in HF_MAPPING.items()}
+
 
 def download_hf_weights(name: str):
     if not os.path.isdir(name):
@@ -160,7 +164,6 @@ def get_qwen_3_weights(params: PyTree, name: str) -> PyTree:
     torch_hf_params = {}
 
     files = list(glob.glob(name + "/*safetensors"))
-    breakpoint()
     for file in files:
         with safe_open(file, framework="torch") as f:
             for hf_param_key in f.keys():
@@ -187,23 +190,56 @@ def get_qwen_3_weights(params: PyTree, name: str) -> PyTree:
     return params
 
 
-def convert_param(param: Array) -> Array:
+def convert_weights(name: str, param: Array) -> torch.Tensor:
     """
-    Converts a parameter from the Qwen paramter state to HuggingFace format.
+    Converts a parameter from the Qwen paramter state to a torch.tensor.
 
     Args:
         param (Array): The JAX parameter array to be converted.
     """
-    pass
+    if "kernel" in name:
+        return torch.Tensor(param.T)
+
+    return torch.Tensor(param)
 
 
-def process_param(param: PyTree):
-    pass
+def convert_to_hf_key(keys) -> str:
+    key_path = ""
+    for k in keys[1:-1]:
+        key_path += k.key + "/"
+
+    key_path = key_path[:-1]
+    key_path += f".{keys[-1].key}"
+
+    return key_path
 
 
-def save_weights_locally(params: PyTree, path: str):
-    pass
+def convert_key(name) -> str:
+    matching_keys = []
+    for jax_key, hf_p in REVERSE_HF_MAPPING.items():
+        if re.match(jax_key, name):
+            matching_keys.append(re.sub(jax_key, hf_p, name))
+
+    if len(matching_keys) == 1:
+        return matching_keys[0]
+
+    raise TypeError(f"couldnt find key: {name}")
 
 
-if __name__ == "__main__":
-    get_qwen_3_weights({}, "Qwen/Qwen-3-7B-Chat")
+def convert_pytree(params: PyTree) -> dict[str, torch.Tensor]:
+    loaded_tensors = {}
+
+    def convert_param(key: str, param: Array):
+        new_weights = convert_key(param)
+        hf_key = convert_to_hf_key(key)
+        torch_key = convert_key(hf_key)
+        loaded_tensors[torch_key] = new_weights
+
+    jax.tree.map_with_path(convert_param, params)
+
+    return loaded_tensors
+
+
+def save_to_hf(dir_path: str, params: PyTree):
+    new_tensors = convert_pytree(params)
+    save_file(new_tensors, f"{dir_path}/model.safetensors")

@@ -13,7 +13,7 @@ from stax.model_module import HFModelBase
 from src.model.qwen3 import KVCache, Qwen3
 
 from .config import ModelConfig
-from .utils import get_qwen_3_weights
+from .utils import get_qwen_3_weights, save_to_hf
 
 sizes = [0.6, 1.7, 4, 8]
 model_names = [f"Qwen/Qwen3-{size}B" for size in sizes]
@@ -110,9 +110,9 @@ class Model(HFModelBase):
 
         return restored.state["params"]
 
-    def save_ckpt(self, path: str, params: PyTree) -> None:
+    def save_hf(self, path: str, params: PyTree) -> None:
         """Saves the model parameters in a local safetensors file. Inverse of load_from_hf."""
-        pass
+        save_to_hf(path, params)
 
     def __call__(
         self,
