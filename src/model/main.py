@@ -96,6 +96,7 @@ class Model(HFModelBase):
             step_number = None
 
         save_tree = self.init_state(jax.random.PRNGKey(0), tx=None, abstract=True)
+        # use np.ndarray to load on CPU from sharded arrays (https://github.com/google/orbax/issues/648) 
         restore_args = jax.tree.map(lambda _: ocp.RestoreArgs(restore_type=np.ndarray), save_tree)
         restored = checkpointer.restore(
             step=step_number,
