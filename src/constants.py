@@ -12,3 +12,5 @@ EVAL_LOG_DIR = "logs/eval_logs"
 DISPLAY = "plain"
 MAX_TASKS = "5"
 VLLM_SERVER_TIMEOUT = 120 
+
+HF_CHECKPOINT_PATH = "hf_params/"

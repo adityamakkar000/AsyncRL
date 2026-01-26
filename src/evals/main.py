@@ -12,6 +12,7 @@ from src.constants import (
     EVAL_LOG_DIR,
     GPU_MEMORY_UTILIZATION,
     GS_BUCKET,
+    HF_CHECKPOINT_PATH,
     IP,
     MAX_TASKS,
     PORT,
@@ -71,8 +72,7 @@ class EvalRunner:
         logger.info("Checkpoint loaded successfully.")
         logger.info("Saving model to HF weights...")
 
-        #TODO: (Divya) solve this 
-        # model.save_to_hf(params)
+        model.save_hf(HF_CHECKPOINT_PATH, params)
         logger.info("Model saved to HF weights.")
 
     def launch_vllm(self):
