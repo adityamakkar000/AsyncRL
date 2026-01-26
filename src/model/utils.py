@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import torch
 from huggingface_hub import snapshot_download
+from jax.tree_util import DictKey
 from jaxtyping import Array, PyTree
 from safetensors import safe_open
 from safetensors.torch import save_file
@@ -135,7 +136,28 @@ HF_MAPPING = {  # embedding
     r"lm_head\.weight": "Dense_0.kernel",
 }
 
-REVERSE_HF_MAPPING = {v: k for k, v in HF_MAPPING.items()}
+REVERSE_HF_MAPPING = {
+    # embedding
+    r"token_emb\.embedding": r"model.embed_tokens.weight",
+    # block norms
+    r"Block_([0-9]+)/RMSNorm_0\.gamma": r"model.layers.\1.input_layernorm.weight",
+    r"Block_([0-9]+)/RMSNorm_1\.gamma": r"model.layers.\1.post_attention_layernorm.weight",
+    # gqa projections
+    r"Block_([0-9]+)/GroupedQueryAttention_0/Dense_0\.kernel": r"model.layers.\1.self_attn.q_proj.weight",
+    r"Block_([0-9]+)/GroupedQueryAttention_0/Dense_1\.kernel": r"model.layers.\1.self_attn.k_proj.weight",
+    r"Block_([0-9]+)/GroupedQueryAttention_0/Dense_2\.kernel": r"model.layers.\1.self_attn.v_proj.weight",
+    r"Block_([0-9]+)/GroupedQueryAttention_0/Dense_3\.kernel": r"model.layers.\1.self_attn.o_proj.weight",
+    # gqa norms
+    r"Block_([0-9]+)/GroupedQueryAttention_0/RMSNorm_0\.gamma": r"model.layers.\1.self_attn.q_norm.weight",
+    r"Block_([0-9]+)/GroupedQueryAttention_0/RMSNorm_1\.gamma": r"model.layers.\1.self_attn.k_norm.weight",
+    # mlp
+    r"Block_([0-9]+)/FeedForward_0/Dense_0\.kernel": r"model.layers.\1.mlp.gate_proj.weight",
+    r"Block_([0-9]+)/FeedForward_0/Dense_1\.kernel": r"model.layers.\1.mlp.up_proj.weight",
+    r"Block_([0-9]+)/FeedForward_0/Dense_2\.kernel": r"model.layers.\1.mlp.down_proj.weight",
+    # final rms + lm head
+    r"RMSNorm_0\.gamma": r"model.norm.weight",
+    r"Dense_0\.kernel": r"lm_head.weight",
+}
 
 
 def download_hf_weights(name: str):
@@ -191,30 +213,26 @@ def get_qwen_3_weights(params: PyTree, name: str) -> PyTree:
 
 
 def convert_weights(name: str, param: Array) -> torch.Tensor:
+    return torch.Tensor(param.T if "kernel" in name else param).contiguous()
+
+
+def convert_to_jax_key(keys: tuple[DictKey]) -> str:
     """
-    Converts a parameter from the Qwen paramter state to a torch.tensor.
+    Convert key path from jax.tree.map_with_path to string format that matches the reverse HF mapping keys.
 
     Args:
-        param (Array): The JAX parameter array to be converted.
+        keys: A tuple of DictKeys representing the jax param path in the PyTree.
+        Eg. (DictKey(key='Block_0'), DictKey(key='FeedForward_0'), DictKey(key='Dense_0'), DictKey(key='kernel'))
+    Returns:
+        A string representing the full key path.
+        Eg. 'Block_0/FeedForward_0/Dense_0.kernel'
     """
-    if "kernel" in name:
-        return torch.Tensor(param.T)
-
-    return torch.Tensor(param)
-
-
-def convert_to_hf_key(keys) -> str:
-    key_path = ""
-    for k in keys[1:-1]:
-        key_path += k.key + "/"
-
-    key_path = key_path[:-1]
-    key_path += f".{keys[-1].key}"
-
+    key_path = "/".join([k.key for k in keys[:-1]]) + f".{keys[-1].key}"
     return key_path
 
 
-def convert_key(name) -> str:
+def convert_key(name: str) -> str:
+    """Convert JAX parameter key to Hugging Face parameter key using the reverse mapping."""
     matching_keys = []
     for jax_key, hf_p in REVERSE_HF_MAPPING.items():
         if re.match(jax_key, name):
@@ -227,19 +245,20 @@ def convert_key(name) -> str:
 
 
 def convert_pytree(params: PyTree) -> dict[str, torch.Tensor]:
+    """Convert a JAX PyTree of parameters to a dictionary of Hugging Face compatible tensors."""
     loaded_tensors = {}
 
-    def convert_param(key: str, param: Array):
-        new_weights = convert_key(param)
-        hf_key = convert_to_hf_key(key)
-        torch_key = convert_key(hf_key)
-        loaded_tensors[torch_key] = new_weights
+    def convert_param(key: tuple[DictKey], param: Array):
+        jax_key = convert_to_jax_key(key)
+        torch_key = convert_key(jax_key)
+        loaded_tensors[torch_key] = convert_weights(jax_key, param)
 
     jax.tree.map_with_path(convert_param, params)
-
     return loaded_tensors
 
 
-def save_to_hf(dir_path: str, params: PyTree):
+def save_to_hf(dir_path: str, params: PyTree) -> None:
     new_tensors = convert_pytree(params)
+    if not os.path.exists(dir_path):
+        os.mkdir(dir_path)
     save_file(new_tensors, f"{dir_path}/model.safetensors")
