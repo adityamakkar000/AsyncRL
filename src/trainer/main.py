@@ -58,7 +58,7 @@ class Trainer:
                 dict_config = json.dumps(OmegaConf.to_container(self.config))
                 config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
                 write_to_gcs(config_path, dict_config)
-                self.checkpointer.wait_until_finished()  
+                self.checkpointer.wait_until_finished()
 
             sync_global_devices("Trainer initialization")
 

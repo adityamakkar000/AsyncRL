@@ -31,7 +31,6 @@ from .utils import (
 
 class EvalRunner:
     def __init__(self, config: DictConfig | evalConfig):
-        
         self.config = config
         self.vllm_config = config.vllm_config
         self.model_config = config.model_config
@@ -54,28 +53,28 @@ class EvalRunner:
         if self.config.vllm_config.dtype not in dtypes:
             raise ValueError(f"dtype must be one of {dtypes}, but got {self.config.vllm_config.dtype}.")
 
-
     def setup_model(self):
-        """
-        #TODO:
-        load the model from checkpoint
-        setup wandb
-
-        """
-
         path = f"{GS_BUCKET}/{self.model_config.model_name}"
         config = f"{path}/config.json"
 
+        logger.info(f"Loading model config from {config}...")
         fs = gcsfs.GCSFileSystem()
         with fs.open(config.replace("gs://", ""), "r") as f:
             model_config = json.loads(f.read())
         model_config = OmegaConf.create(model_config).model_config
-        logger.info(f"Model config from {config} loaded: \n{OmegaConf.to_yaml(model_config)}")
+        logger.info(f"Model config loaded: \n{OmegaConf.to_yaml(model_config)}")
 
+        logger.info("Initializing model...")
         model = Model(model_config)
-        params = model.load_from_ckpt_2(path, step_number=self.model_config.step_number, use_best=self.model_config.use_best_ckpt)
-        import sys; sys.exit(0)
-        model.save_to_hf()
+        logger.info(f"Loading checkpoint from {path}...")
+        params = model.load_from_ckpt(
+            path, step_number=self.model_config.step_number, use_best=self.model_config.use_best_ckpt
+        )
+        logger.info("Checkpoint loaded successfully.")
+        logger.info("Saving model to HF weights...")
+        #TODO: (Divya) solve this 
+        model.save_to_hf(params)
+        logger.info("Model saved to HF weights.")
 
     def launch_vllm(self):
         # TODO:

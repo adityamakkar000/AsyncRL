@@ -64,11 +64,11 @@ def set_jax_cache(path: str):
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 
+
 def write_to_gcs(path: str, data: str):
     """Writes data to a file in Google Cloud Storage."""
     if stax.get_rank() == 0:
         fs = gcsfs.GCSFileSystem()
         with fs.open(path.replace("gs://", ""), "w") as f:
             f.write(data)
-    sync_global_devices("gcs_writer") 
-
+    sync_global_devices("gcs_writer")
