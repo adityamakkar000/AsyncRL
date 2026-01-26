@@ -24,3 +24,4 @@ wandb/
 *.txt
 .virtual_documents/
 *_rsa*
+*.safetensors
