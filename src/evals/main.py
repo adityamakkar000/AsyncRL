@@ -18,8 +18,8 @@ from src.constants import (
     PORT,
     SERVED_MODEL_NAME,
 )
-from src.model import Model
 
+# from src.model import Model
 from .config import evalConfig
 from .utils import (
     format_command,
@@ -72,7 +72,7 @@ class EvalRunner:
         logger.info("Saving model to HF weights...")
 
         #TODO: (Divya) solve this 
-        model.save_to_hf(params)
+        # model.save_to_hf(params)
         logger.info("Model saved to HF weights.")
 
     def launch_vllm(self):
@@ -192,7 +192,7 @@ class EvalRunner:
 
     def run_evaluation(self):
         try:
-            self.setup_model()
+            # self.setup_model()
             self.launch_vllm()
             self.launch_eval()
         finally:
