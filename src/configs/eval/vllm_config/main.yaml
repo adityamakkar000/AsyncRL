@@ -2,4 +2,3 @@ max_sequences: 128
 max_batched_tokens: 2048
 tensor_parallel_size: 2
 data_parallel_size: 4
-dtype: "float16"

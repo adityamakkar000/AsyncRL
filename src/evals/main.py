@@ -8,7 +8,6 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
 from src.constants import (
-    CHECKPOINTS,
     DISPLAY,
     EVAL_LOG_DIR,
     GPU_MEMORY_UTILIZATION,
@@ -17,6 +16,7 @@ from src.constants import (
     MAX_TASKS,
     PORT,
     SERVED_MODEL_NAME,
+    VLLM_SERVER_TIMEOUT,
 )
 
 # from src.model import Model
@@ -94,8 +94,6 @@ class EvalRunner:
             str(self.vllm_config.max_sequences),
             "--max-num-batched-tokens",
             str(self.vllm_config.max_batched_tokens),
-            "--dtype",
-            self.vllm_config.dtype,
             # fixed args
             "--gpu-memory-utilization",
             GPU_MEMORY_UTILIZATION,
@@ -109,14 +107,20 @@ class EvalRunner:
 
         logger.info(f"Launching vLLM with command: \n{format_command(command)}")
 
+        vllm_env = os.environ.copy()
+        vllm_env.pop("JAX_PLATFORMS", None)
         self.vllm_process = subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL if not self.config.debug else None,
+            stderr=subprocess.DEVNULL if not self.config.debug else None,
+            env=vllm_env,
         )
         start = time.perf_counter()
         while not ping_server(IP, PORT):
             logger.info("Waiting for vLLM server to be ready...")
             time.sleep(5)
+            if time.perf_counter() - start > VLLM_SERVER_TIMEOUT:
+                raise TimeoutError("vLLM server did not start within 10 minutes.")
         end = time.perf_counter()
         logger.info(f"vLLM server is ready in {end - start:.2f} seconds.")
 
@@ -191,9 +195,7 @@ class EvalRunner:
         self.vllm_process = terminate_process(self.vllm_process, "vLLM")
 
     def run_evaluation(self):
-        try:
-            # self.setup_model()
-            self.launch_vllm()
-            self.launch_eval()
-        finally:
-            self.cleanup()
+        # self.setup_model()
+        self.launch_vllm()
+        self.launch_eval()
+            
