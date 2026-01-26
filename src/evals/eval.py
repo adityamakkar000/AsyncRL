@@ -62,12 +62,15 @@ class EvalRunner:
         with fs.open(config.replace("gs://", ""), "r") as f:
             model_config = json.loads(f.read())
         model_config = OmegaConf.create(model_config).model_config
-        logger.info(f"Model config loaded: \n{OmegaConf.to_yaml(model_config)}\nLoading model from {path}...")
+        logger.info(f"Model config loaded: \n{OmegaConf.to_yaml(model_config)}")
+        logger.info(f"Loading model from {path}...")
         model = Model(model_config)
         params = model.load_from_ckpt(
             path, step_number=self.model_config.step_number, use_best=self.model_config.use_best_ckpt
         )
-        logger.info("Checkpoint loaded successfully.\nSaving model to HF weights...")
+        logger.info("Checkpoint loaded successfully.")
+        logger.info("Saving model to HF weights...")
+
         #TODO: (Divya) solve this 
         model.save_to_hf(params)
         logger.info("Model saved to HF weights.")
