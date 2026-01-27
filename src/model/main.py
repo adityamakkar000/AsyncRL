@@ -101,9 +101,9 @@ class Model(HFModelBase):
             step_number = None
 
         if step_number is None:
-            step_number = checkpointer.latest_step()        
+            step_number = checkpointer.latest_step()
             if step_number is None:
-                raise ValueError("No checkpoints found.") 
+                raise ValueError("No checkpoints found.")
 
         save_tree = self.init_state(jax.random.PRNGKey(0), tx=None, abstract=True)
         # use np.ndarray to load on CPU from sharded arrays (https://github.com/google/orbax/issues/648)
