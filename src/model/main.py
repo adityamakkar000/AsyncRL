@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -89,7 +89,7 @@ class Model(HFModelBase):
 
         return initial_cache
 
-    def load_from_ckpt(self, path: str, step_number: Optional[int] = None, use_best=False):
+    def load_from_ckpt(self, path: str, step_number: Optional[int] = None, use_best=False) -> Tuple[int, PyTree]:
         assert (step_number is not None) ^ use_best, "Either step_number or use_best must be set."
         path = f"{path}/checkpoints/"
         if use_best:
@@ -99,6 +99,11 @@ class Model(HFModelBase):
 
         if step_number == -1:
             step_number = None
+
+        if step_number is None:
+            step_number = checkpointer.latest_step()        
+            if step_number is None:
+                raise ValueError("No checkpoints found.") 
 
         save_tree = self.init_state(jax.random.PRNGKey(0), tx=None, abstract=True)
         # use np.ndarray to load on CPU from sharded arrays (https://github.com/google/orbax/issues/648)
@@ -113,7 +118,7 @@ class Model(HFModelBase):
         assert hasattr(restored, "state"), "Restored object has no attribute 'state'"
         assert restored.state, "Restored state has no 'params' key"
 
-        return restored.state["params"]
+        return step_number, restored.state["params"]
 
     def save_hf(self, path: str, params: PyTree) -> None:
         """Saves the model parameters in a local safetensors file. Inverse of load_from_hf."""
