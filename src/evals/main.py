@@ -62,8 +62,8 @@ class EvalRunner:
         fs = gcsfs.GCSFileSystem()
         with fs.open(config.replace("gs://", ""), "r") as f:
             model_config = json.loads(f.read())
-        
-        self.train_config =  OmegaConf.create(model_config)
+
+        self.train_config = OmegaConf.create(model_config)
         model_config = self.train_config.model_config
         logger.info(f"Model config loaded: \n{OmegaConf.to_yaml(model_config)}")
         logger.info(f"Loading model from {self.gs_path}...")
@@ -164,8 +164,8 @@ class EvalRunner:
                     "--display",
                     DISPLAY,
                     "--log-samples",
-                    "--log-format", 
-                    "json"
+                    "--log-format",
+                    "json",
                 ]
             )
             if self.config.debug:
@@ -198,7 +198,6 @@ class EvalRunner:
         subprocess.run(command)
 
     def parse_metrics(self):
-
         eval_path = f"{self.gs_path}/evals"
         fs = gcsfs.GCSFileSystem()
         tasks = [t.replace("_", "-") for t in self.config.tasks]
@@ -221,8 +220,7 @@ class EvalRunner:
                     with open(f"{self.log_path}/{f}", "r") as local_f:
                         gcs_f.write(local_f.read())
 
-        #TODO: maybe wandb but not needed for now        
-
+        # TODO: maybe wandb but not needed for now
 
     def cleanup(self):
         logger.info("Cleaning up...")
