@@ -24,7 +24,7 @@ dependencies = [
 [project.optional-dependencies]
 eval = [        
     "openbench>=0.5.3",
-    "vllm-tpu>=0.12.0",
+    "vllm-tpu==0.12.0",
 ]
 
 [tool.uv.sources]

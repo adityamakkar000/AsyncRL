@@ -1,8 +1,8 @@
 import os
 
+# set JAX to use CPU only so VLLM server can use TPU 
 os.environ["JAX_PLATFORMS"] = "cpu"
 import hydra
-import jax
 from hydra.core.config_store import ConfigStore
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
@@ -20,7 +20,7 @@ def main(cfg: DictConfig) -> None:
     eval_runner = EvalRunner(config=cfg)
     try:
         eval_runner.run_evaluation()
-    finally: 
+    finally:
         eval_runner.cleanup()
 
 

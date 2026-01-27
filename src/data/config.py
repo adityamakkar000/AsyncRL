@@ -2,7 +2,6 @@ from dataclasses import dataclass
 
 import jax
 from flax import struct
-from jaxtyping import Array
 
 
 # TODO: get a real dataclass
@@ -11,14 +10,14 @@ class DataConfig:
     name: str
 
 
-
-@struct.dataclass   
+@struct.dataclass
 class SFTBatch:
-    tokens: jax.Array # [batch_size, max_seq_len]
+    tokens: jax.Array  # [batch_size, max_seq_len]
     token_mask: jax.Array  # [batch_size, max_seq_len], which tokens are LLM
+
 
 @struct.dataclass
 class RLBatch:
-    tokens: jax.Array # [batch_size, max_seq_len]
+    tokens: jax.Array  # [batch_size, max_seq_len]
     token_mask: jax.Array  # [batch_size, max_seq_len], which tokens are LLM
     rewards: jax.Array  # [batch_size, ], reward at each token

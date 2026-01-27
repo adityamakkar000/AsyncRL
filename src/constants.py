@@ -1,3 +1,5 @@
+import os
+
 GS_BUCKET = "gs://arl-experiments"  # main gs bucket
 CHECKPOINTS = "checkpoints"  # checkpoints bucket
 CACHE = "cache"  # cache bucket
@@ -11,6 +13,7 @@ GPU_MEMORY_UTILIZATION = "0.98"
 EVAL_LOG_DIR = "logs/eval_logs"
 DISPLAY = "plain"
 MAX_TASKS = "5"
-VLLM_SERVER_TIMEOUT = 120 
+VLLM_SERVER_TIMEOUT = 180
 
-HF_CHECKPOINT_PATH = "hf_params/"
+# use absolute path since VLLM requires a full abspath
+HF_CHECKPOINT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hf_params")

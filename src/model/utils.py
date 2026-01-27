@@ -1,6 +1,7 @@
 import glob
 import os
 import re
+import shutil
 
 import jax
 import jax.numpy as jnp
@@ -257,8 +258,16 @@ def convert_pytree(params: PyTree) -> dict[str, torch.Tensor]:
     return loaded_tensors
 
 
-def save_to_hf(dir_path: str, params: PyTree) -> None:
-    new_tensors = convert_pytree(params)
+def save_to_hf(dir_path: str, params: PyTree, hf_model_name: str) -> None:
+    download_hf_weights(hf_model_name)
+
     if not os.path.exists(dir_path):
-        os.mkdir(dir_path)
+        os.makedirs(dir_path)
+
+    for file in os.listdir(hf_model_name):
+        src_path = os.path.join(hf_model_name, file)
+        if os.path.isfile(src_path) and not file.endswith(".safetensors"):
+            shutil.copy(src_path, dir_path)
+
+    new_tensors = convert_pytree(params)
     save_file(new_tensors, f"{dir_path}/model.safetensors")

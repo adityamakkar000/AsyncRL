@@ -6,6 +6,8 @@ import requests
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
+from .config import evalConfig
+
 
 def ping_server(host: str, port: int | str) -> bool:
     """
@@ -70,7 +72,7 @@ def format_command(cmd: list[str]) -> str:
     return "\n".join(out)
 
 
-def hash_dictConfig(d: DictConfig) -> str:
+def hash_dictConfig(d: DictConfig | evalConfig) -> str:
     """
     Hash a DictConfig object.
     Args:

@@ -1,4 +1,3 @@
-from jax.experimental.multihost_utils import sync_global_devices
 import time
 from functools import wraps
 from typing import Any, Callable
@@ -6,6 +5,7 @@ from typing import Any, Callable
 import gcsfs
 import jax
 import stax
+from jax.experimental.multihost_utils import sync_global_devices
 from stax import staxLogger as logger
 
 
