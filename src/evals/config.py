@@ -8,8 +8,9 @@ from omegaconf import MISSING
 class vLLMConfig:
     max_sequences: int = 128
     max_batched_tokens: int | str = 2048
-    tensor_parallel_size: int = 1
-    data_parallel_size: int = 8
+    tensor_parallel_size: int = 2
+    data_parallel_size: int = 4
+
 
 @dataclass
 class modelConfig:

@@ -6,7 +6,6 @@ defaults:
 
 
 tasks:
-  - "gsm8k"
   - "aime_2025"
 max_connections: 100 
 temperature: 1.0

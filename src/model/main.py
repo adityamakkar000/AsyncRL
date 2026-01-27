@@ -96,7 +96,7 @@ class Model(HFModelBase):
             step_number = None
 
         save_tree = self.init_state(jax.random.PRNGKey(0), tx=None, abstract=True)
-        # use np.ndarray to load on CPU from sharded arrays (https://github.com/google/orbax/issues/648) 
+        # use np.ndarray to load on CPU from sharded arrays (https://github.com/google/orbax/issues/648)
         restore_args = jax.tree.map(lambda _: ocp.RestoreArgs(restore_type=np.ndarray), save_tree)
         restored = checkpointer.restore(
             step=step_number,
@@ -112,7 +112,7 @@ class Model(HFModelBase):
 
     def save_hf(self, path: str, params: PyTree) -> None:
         """Saves the model parameters in a local safetensors file. Inverse of load_from_hf."""
-        save_to_hf(path, params)
+        save_to_hf(path, params, self.config.hf_model_name)
 
     def __call__(
         self,

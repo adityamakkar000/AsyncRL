@@ -4,6 +4,7 @@ import subprocess
 import time
 
 import gcsfs
+from dotenv import load_dotenv
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
@@ -19,8 +20,8 @@ from src.constants import (
     SERVED_MODEL_NAME,
     VLLM_SERVER_TIMEOUT,
 )
+from src.model import Model
 
-# from src.model import Model
 from .config import evalConfig
 from .utils import (
     format_command,
@@ -28,6 +29,8 @@ from .utils import (
     ping_server,
     terminate_process,
 )
+
+load_dotenv()
 
 
 class EvalRunner:
@@ -50,9 +53,6 @@ class EvalRunner:
         if isinstance(self.config.vllm_config.max_batched_tokens, str):
             if self.config.vllm_config.max_batched_tokens != "auto":
                 raise ValueError("If max_batched_tokens is a string, it must be 'auto'.")
-        dtypes = ["auto", "bfloat16", "float16", "float32"]
-        if self.config.vllm_config.dtype not in dtypes:
-            raise ValueError(f"dtype must be one of {dtypes}, but got {self.config.vllm_config.dtype}.")
 
     def setup_model(self):
         path = f"{GS_BUCKET}/{self.model_config.model_name}"
@@ -85,6 +85,7 @@ class EvalRunner:
         command = [
             "vllm",
             "serve",
+            HF_CHECKPOINT_PATH,
             # variable args
             "--data-parallel-size",
             str(self.vllm_config.data_parallel_size),
@@ -107,12 +108,12 @@ class EvalRunner:
 
         logger.info(f"Launching vLLM with command: \n{format_command(command)}")
 
+        # pop off 'cpu' device so VLLM can you tpu
         vllm_env = os.environ.copy()
         vllm_env.pop("JAX_PLATFORMS", None)
         self.vllm_process = subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL if not self.config.debug else None,
-            stderr=subprocess.DEVNULL if not self.config.debug else None,
             env=vllm_env,
         )
         start = time.perf_counter()
@@ -120,7 +121,9 @@ class EvalRunner:
             logger.info("Waiting for vLLM server to be ready...")
             time.sleep(5)
             if time.perf_counter() - start > VLLM_SERVER_TIMEOUT:
-                raise TimeoutError("vLLM server did not start within 10 minutes.")
+                raise TimeoutError(f"vLLM server did not start within {VLLM_SERVER_TIMEOUT} seconds.")
+            if self.vllm_process.poll() is not None:
+                raise RuntimeError("vLLM server process has exited unexpectedly.")
         end = time.perf_counter()
         logger.info(f"vLLM server is ready in {end - start:.2f} seconds.")
 
@@ -195,7 +198,6 @@ class EvalRunner:
         self.vllm_process = terminate_process(self.vllm_process, "vLLM")
 
     def run_evaluation(self):
-        # self.setup_model()
+        self.setup_model()
         self.launch_vllm()
         self.launch_eval()
-            
