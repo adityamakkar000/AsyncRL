@@ -204,7 +204,7 @@ class Qwen3(nn.Module):
     model_dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, x: Array, seq_lens: jax.Array, kv_cache: Optional[list[KVCache]] = None):
+    def __call__(self, x: Array, sequence_lens: jax.Array, kv_cache: Optional[list[KVCache]] = None):
         embed_layer = nn.Embed(
             num_embeddings=self.vocab_size,
             features=self.model_dim,
@@ -225,7 +225,7 @@ class Qwen3(nn.Module):
                 n_groups=self.n_groups,
                 head_dim=self.head_dim,
                 model_dtype=self.model_dtype,
-            )(x, seq_lens, in_layer_cache)
+            )(x, sequence_lens, in_layer_cache)
 
             out_cache.append(out_layer_cache)
 
