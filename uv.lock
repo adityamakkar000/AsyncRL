@@ -178,10 +178,10 @@ requires-dist = [
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "ruff", specifier = ">=0.14.10" },
-    { name = "stax", git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FfixSync" },
+    { name = "stax", git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FexposeTypeSignature" },
     { name = "torch", specifier = ">=2.9.0" },
     { name = "transformers", specifier = ">=4.57.3" },
-    { name = "vllm-tpu", marker = "extra == 'eval'", specifier = ">=0.12.0" },
+    { name = "vllm-tpu", marker = "extra == 'eval'", specifier = "==0.12.0" },
 ]
 provides-extras = ["eval"]
 
@@ -3606,7 +3606,7 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FfixSync#3391a0ea8894065334f812991062246627fde80d" }
+source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FexposeTypeSignature#843adb662f3454163930821d13dde524b9891740" }
 dependencies = [
     { name = "flax" },
     { name = "jax" },
@@ -3815,10 +3815,11 @@ wheels = [
 
 [[package]]
 name = "torchax"
-version = "0.0.10"
+version = "0.0.7"
 source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/f9/b97c792e5ec68d4ccff8b4f78b982774f6ff22309984c865cc70c96edcfd/torchax-0.0.7.tar.gz", hash = "sha256:1f43c0a83bafcbef5dffd4ff54c1149b0115c81db3ef6c4cb71789c3015b5c81", size = 304657, upload-time = "2025-09-04T03:13:44.262Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/81/b68911349949596722f0328f98d00800f4bec7045130cb1b66681029de8b/torchax-0.0.10-py3-none-any.whl", hash = "sha256:8b1feecbf4b63be3d76b9c76ba8db2ce7c8a7ef421d9696e82473b7dcacd4ea0", size = 115462, upload-time = "2025-12-05T17:56:07.411Z" },
+    { url = "https://files.pythonhosted.org/packages/48/12/5134bf1c05e6e3a24e7d311651bc5bfdb4b97f358bb0214a739f6043c3b1/torchax-0.0.7-py3-none-any.whl", hash = "sha256:b4d615e02a5773c63ea4d76ac61e6edf6bd369b379abcfb183c15e575dade643", size = 101686, upload-time = "2025-09-04T03:13:42.907Z" },
 ]
 
 [[package]]
@@ -3839,7 +3840,7 @@ wheels = [
 
 [[package]]
 name = "tpu-inference"
-version = "0.13.2.post6"
+version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
@@ -3861,23 +3862,22 @@ dependencies = [
     { name = "tpu-info" },
     { name = "yapf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a1/e9/4fa3ac3de70a5b2da34fa3bceb98063233c882702e26772eb836951417fb/tpu_inference-0.13.2.post6.tar.gz", hash = "sha256:99786b93dc8b5d5dc88b130ee54958009c8e5e6b0f734cc03fcdf7b1f9d5cfff", size = 510365, upload-time = "2025-12-30T06:58:18.237Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/65/63dbf997bd8643a7b08c5c45ff030ab7fc298405f99dca76b08364020231/tpu_inference-0.12.0.tar.gz", hash = "sha256:b1d3dcbb6ae269d689f3254c37229584b16f291ceb1dc31ea82426a859bc1fc6", size = 363468, upload-time = "2025-12-06T06:47:43.702Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6b/22/47e0f9ad8e9f9e7a9f205cbf7486798bfdf07c53494fd6fc816aa8e2fa62/tpu_inference-0.13.2.post6-py3-none-any.whl", hash = "sha256:ac18e8c3e4b997e9c145fd376a63e443fab8dfde0dedf2313aa805f67af5ce01", size = 690316, upload-time = "2025-12-30T06:58:17.163Z" },
+    { url = "https://files.pythonhosted.org/packages/df/1b/5db5e512d4d9d53545d26ec7da2ea6a2c86142e890296998b2a76f76a926/tpu_inference-0.12.0-py3-none-any.whl", hash = "sha256:dd617bfc931d904d4d97593527df0cfd3328f942b6957bd1dc42b75acbb1ee7f", size = 432130, upload-time = "2025-12-06T06:47:42.228Z" },
 ]
 
 [[package]]
 name = "tpu-info"
-version = "0.7.1"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
-    { name = "packaging" },
     { name = "protobuf" },
     { name = "rich" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cc/84/34c52915b9a64fd87733e138cc50d7d3598194dddf9a97be44af2ed36993/tpu_info-0.7.1-py3-none-any.whl", hash = "sha256:672478c36b7bce4e17b66d5f1b3aa517379903f6d6f4df6338be3287f7c70742", size = 35556, upload-time = "2025-11-20T22:32:42.915Z" },
+    { url = "https://files.pythonhosted.org/packages/56/ab/044237945d2436d2284239a3e3d0cf9332c6e4330d4253f1626283f1fad6/tpu_info-0.4.0-py3-none-any.whl", hash = "sha256:793107a2f1af695bc2a02a51a3a7cac52d3ff1ab8b401a7c37c5e6574a56cec8", size = 19773, upload-time = "2025-07-09T17:41:44.763Z" },
 ]
 
 [[package]]
@@ -4050,7 +4050,7 @@ wheels = [
 
 [[package]]
 name = "vllm-tpu"
-version = "0.13.2.post6"
+version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -4067,12 +4067,10 @@ dependencies = [
     { name = "fastapi", extra = ["standard"] },
     { name = "filelock" },
     { name = "gguf" },
-    { name = "ijson" },
     { name = "jinja2" },
     { name = "lark" },
     { name = "llguidance", marker = "platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'ppc64le' or platform_machine == 's390x' or platform_machine == 'x86_64'" },
     { name = "lm-format-enforcer" },
-    { name = "mcp" },
     { name = "mistral-common", extra = ["image"] },
     { name = "model-hosting-container-standards" },
     { name = "msgspec" },
@@ -4107,6 +4105,7 @@ dependencies = [
     { name = "tiktoken" },
     { name = "tokenizers" },
     { name = "tpu-inference" },
+    { name = "tpu-info" },
     { name = "tqdm" },
     { name = "transformers" },
     { name = "typing-extensions" },
@@ -4114,9 +4113,9 @@ dependencies = [
     { name = "wheel" },
     { name = "xgrammar", marker = "platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'ppc64le' or platform_machine == 's390x' or platform_machine == 'x86_64'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1f/21/ec059868290e5771510b9501a322866b74cef1ae1b17f65e709536407193/vllm_tpu-0.13.2.post6.tar.gz", hash = "sha256:974af737e503385da95d4ceee82a619cfb99636bd6774c6451be2169b8eeecf3", size = 17839039, upload-time = "2025-12-30T07:18:53.642Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fe/4b/ccd258632683d6d4bdd890839d55008b94abf6883058375a2c5013ce50d8/vllm_tpu-0.12.0.tar.gz", hash = "sha256:15bead97b487affe25d0ed34377117c5561264b86ddc894f421f3b16f1620f99", size = 17620656, upload-time = "2025-12-06T06:53:15.965Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/81/3eb8c9268504b6d948442c95fdaedac086f91f5465a6f6595f9dddcc6fbc/vllm_tpu-0.13.2.post6-py3-none-any.whl", hash = "sha256:6bc10c01a193d94059da6101ef6690cae080764257b92045feb46d222f801b72", size = 4358400, upload-time = "2025-12-30T07:18:51.646Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/3b/8fe568c7b25027607cc0ca151008f19512f1fd04aeb83fb79431ead2a67c/vllm_tpu-0.12.0-py3-none-any.whl", hash = "sha256:1702bddff1747a0ef4c73e7c57077f40c27d3c54e38a507a64d5499bcd879c6d", size = 4260516, upload-time = "2025-12-06T06:53:13.567Z" },
 ]
 
 [[package]]

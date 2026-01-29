@@ -10,9 +10,8 @@ from omegaconf import DictConfig
 from optax import GradientTransformation
 from stax.model_module import HFModelBase
 
-from src.model.qwen3 import KVCache, Qwen3
-
 from .config import ModelConfig
+from .qwen3 import KVCache, Qwen3
 from .utils import get_qwen_3_weights, save_to_hf
 
 sizes = [0.6, 1.7, 4, 8]
@@ -121,8 +120,9 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
+        train: bool = True,
     ) -> PyTree:
-        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache)
+        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, train=train)
 
         return logits, cache
 
@@ -133,5 +133,6 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
+        train: bool = True,
     ) -> PyTree:
-        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache)
+        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, train=train)
