@@ -27,7 +27,12 @@ def grpo_loss(
         beta: Weight for the KL penalty when ref_log_probs is provided.
         group_size: Optional group size for relative advantage normalization.
         epsilon: Small value to avoid division by zero.
+
+    Returns:
+        Scalar GRPO loss as a JAX array.
     """
+    if epsilon <= 0:
+        raise ValueError(f"epsilon must be positive, got {epsilon}")
     if tokens.shape != logits.shape[:-1]:
         raise ValueError(f"tokens shape {tokens.shape} must match logits shape {logits.shape[:-1]}")
     if token_mask.shape != tokens.shape:
@@ -36,6 +41,8 @@ def grpo_loss(
         raise ValueError(f"rewards must be 1D, got shape {rewards.shape}")
     if rewards.shape[0] != tokens.shape[0]:
         raise ValueError(f"rewards batch size {rewards.shape[0]} must match tokens batch size {tokens.shape[0]}")
+    if ref_log_probs is None and beta > 0:
+        raise ValueError("ref_log_probs must be provided when beta > 0")
     if ref_log_probs is not None and beta < 0:
         raise ValueError(f"beta must be non-negative when ref_log_probs is provided, got {beta}")
 
@@ -66,11 +73,11 @@ def grpo_loss(
     loss = -jnp.mean(advantages * sequence_log_probs)
 
     if ref_log_probs is not None:
-        ref_log_probs = jnp.asarray(ref_log_probs, dtype=logits.dtype)
         if ref_log_probs.shape != token_log_probs.shape:
             raise ValueError(
-                f"ref_log_probs shape {ref_log_probs.shape} must match token log probs shape {token_log_probs.shape}"
+                f"ref_log_probs shape {ref_log_probs.shape} must match tokens shape {tokens.shape}"
             )
+        ref_log_probs = jnp.asarray(ref_log_probs, dtype=logits.dtype)
         ref_log_probs = jax.lax.stop_gradient(ref_log_probs)
         token_kl = (token_log_probs - ref_log_probs) * token_mask
         sequence_kl = jnp.sum(token_kl, axis=-1) / token_counts
