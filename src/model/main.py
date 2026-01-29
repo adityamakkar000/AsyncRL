@@ -11,10 +11,9 @@ from omegaconf import DictConfig
 from optax import GradientTransformation
 from stax import HFModelBase
 
-from src.model.qwen3 import KVCache, Qwen3
-
 from .config import ModelConfig
-from .utils import convert_dtype, get_qwen_3_weights, save_to_hf
+from .qwen3 import KVCache, Qwen3
+from .utils import get_qwen_3_weights, save_to_hf
 
 sizes = [0.6, 1.7, 4, 8]
 model_names = [f"Qwen/Qwen3-{size}B" for size in sizes]
@@ -127,20 +126,9 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
-        attention_len: Optional[int] = None,
-    ) -> tuple[Array, list[KVCache]]:
-        """
-        Forward pass of the model. This is a wrapper around the model's __call__ that allows for additional processing if needed.
-        Args:
-            params: Model parameters.
-            x: Input tokens of shape (B, T).
-            sequence_lens: Sequence lengths of shape (B,).
-            kv_cache: Optional list of KVCache for each layer.
-        Returns:
-            logits: Output logits of shape (B, T, vocab_size).
-            out_cache: Optional list of KVCache for each layer if kv_cache was provided.
-        """
-        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, attention_len)
+        train: bool = True,
+    ) -> PyTree:
+        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, train=train)
 
         return logits, cache
 
@@ -151,14 +139,6 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
-        attention_len: Optional[int] = None,
-    ) -> tuple[Array, list[KVCache]]:
-        """
-        Applies the model to the input data. This is a wrapper around __call__ that allows for additional processing if needed.
-        """
-        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, attention_len=attention_len)
-
-    @property
-    def sequence_len(self) -> int:
-        """Max sequence length supported by the model"""
-        return self.config.qwen_config.sequence_len
+        train: bool = True,
+    ) -> PyTree:
+        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, train=train)

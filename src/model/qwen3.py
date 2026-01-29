@@ -87,15 +87,7 @@ class GroupedQueryAttention(nn.Module):
         self.d_out = self.n_heads * self.head_dim
 
     @nn.compact
-    def __call__(
-        self,
-        x: Array,
-        sequence_lens: jax.Array,
-        mask: Array,
-        rope_matrix: tuple[Array, Array],
-        kv_cache: Optional[KVCache] = None,
-        attention_len: Optional[int] = None,
-    ):
+    def __call__(self, x: Array, seq_lens: jax.Array, kv_cache: Optional[KVCache] = None, train=True):
         B, T, C = x.shape
         t_start = kv_cache.length if kv_cache else 0
 

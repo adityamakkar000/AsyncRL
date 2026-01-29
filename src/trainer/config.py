@@ -34,12 +34,31 @@ class BestMetric:
     name: str = MISSING  # Name of the metric to monitor
     maximize: bool = False  # Whether to maximize or minimize the metric
 
+@dataclass 
+class InferenceConfig:
+    #TODO: (Divya) actual inference config 
+    max_new_tokens: int = 512
+    temperature: float = 1.0
+    top_p: float = 1.0
+
+@dataclass 
+class RLConfig:
+    epsilon_high: float = 1.0
+    epsilon_low: float = 0.1
+    grad_steps: int = 1
+
+@dataclass
+class LossConfig:
+    rl_config: RLConfig = field(default_factory=RLConfig)
+    inference_config: InferenceConfig = field(default_factory=InferenceConfig)
+    annealing_config: Optional[AnnealedLoss] = None #TODO: Annealed RL config will go here 
 
 @dataclass
 class TrainerConfig:
     experiment_name: str = MISSING  # The name of the experiment
     data_config: DataConfig = MISSING  # The configuration for the data module
     model_config: ModelConfig = MISSING  # The configuration for the model
+    loss_config: LossConfig = MISSING # The configuration for the loss function
 
     sharding_config: ShardingConfig = field(default_factory=ShardingConfig)  # The configuration for sharding
 
