@@ -6,7 +6,10 @@ from typing import Optional
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, PyTree
+<<<<<<< HEAD
 from transformers import AutoTokenizer
+=======
+>>>>>>> 10334d0 (working base inference)
 
 # from src.inference_engine import InferenceConfig
 from src.model import KVCache, Model
