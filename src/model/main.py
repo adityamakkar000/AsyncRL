@@ -37,8 +37,8 @@ class Model(HFModelBase):
         seq_lens = jnp.array([1])
 
         @jax.jit
-        def init_state(rng, x_init, seq_lens):
-            params = self.model.init(rngs=rng, x=x_init, seq_lens=seq_lens, kv_cache=None)["params"]
+        def init_state(rng, x_init, sequence_lens):
+            params = self.model.init(rngs=rng, x=x_init, sequence_lens=sequence_lens, kv_cache=None)["params"]
             out_state = {"params": params}
             if tx:
                 out_state["opt_state"] = tx.init(params)
