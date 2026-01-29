@@ -195,8 +195,12 @@ requires-dist = [
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "ruff", specifier = ">=0.14.10" },
+<<<<<<< HEAD
     { name = "stax", git = "https://github.com/adityamakkar000/stax.git" },
     { name = "tfds-nightly", marker = "extra == 'data'", specifier = ">=4.9.9.dev202510250044" },
+=======
+    { name = "stax", git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FexposeTypeSignature" },
+>>>>>>> 0a4674f (raw scafolding for RL')
     { name = "torch", specifier = ">=2.9.0" },
     { name = "transformers", specifier = ">=4.57.3" },
     { name = "vllm-tpu", marker = "extra == 'eval'", specifier = "==0.12.0" },
@@ -4458,7 +4462,11 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
+<<<<<<< HEAD
 source = { git = "https://github.com/adityamakkar000/stax.git#12ac56afe0d717e2e8f08dbe7c410289d62ae432" }
+=======
+source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FexposeTypeSignature#843adb662f3454163930821d13dde524b9891740" }
+>>>>>>> 0a4674f (raw scafolding for RL')
 dependencies = [
     { name = "flax" },
     { name = "jax" },
