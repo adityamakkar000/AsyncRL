@@ -1,13 +1,11 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 import random
 from typing import Any, Optional
+from src.data.config import DataConfig
 
 
 @dataclass()
 class OmniMath:
-   
 
     id: int
     problem: str
@@ -29,6 +27,66 @@ class OmniMath:
         }
 
 
+@dataclass
+class PromptBatch:
+    prompts: list[str]
+    examples: list[OmniMath]
+
+
+class OmniMathPromptDataset:
+    """Callable dataset that returns a list of prompts.
+
+    RL-only stage-1: prompts are just the raw problem statement. We keep the
+    sampled `examples` aligned with prompts in `last_batch` so reward code can
+    use `answer`, etc. later.
+    """
+
+    def __init__(
+        self,
+        *,
+        examples: Optional[list[OmniMath]] = None,
+        data_config: Optional[DataConfig] = None,
+        seed: int = 0,
+    ) -> None:
+        self.data_config = data_config
+
+        if examples is None:
+            examples = load_omni_math(subset_fraction=1.0, subset_seed=int(seed))
+
+        self.examples = examples
+        if not self.examples:
+            raise ValueError(
+                "No examples found. dataset is probably empty after filtering."
+            )
+
+        self._rng = random.Random(int(seed))
+        self.last_batch: Optional[PromptBatch] = None
+
+    @property
+    def last_examples(self) -> list[OmniMath]:
+        if self.last_batch is None:
+            return []
+        return self.last_batch.examples
+
+    def format_prompt(self, ex: OmniMath) -> str:
+        return ex.problem.strip()
+
+    def sample(self, batch_size: int) -> PromptBatch:
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive.")
+
+        batch_examples = [
+            self.examples[self._rng.randrange(len(self.examples))]
+            for _ in range(batch_size)
+        ]
+        prompts = [self.format_prompt(ex) for ex in batch_examples]
+        return PromptBatch(prompts=prompts, examples=batch_examples)
+
+    def __call__(self, batch_size: int) -> list[str]:
+        self.last_batch = self.sample(batch_size)
+        return self.last_batch.prompts
+
+
 def _require_datasets() -> Any:
     try:
         from datasets import load_dataset  # type: ignore[import-not-found]
@@ -48,7 +106,9 @@ def _as_list_str(value: Any) -> list[str]:
     return [str(value)]
 
 
-def _apply_random_subset(examples: list[OmniMath], *, fraction: float, seed: int) -> list[OmniMath]:
+def _apply_random_subset(
+    examples: list[OmniMath], *, fraction: float, seed: int
+) -> list[OmniMath]:
     """Deterministically shuffle + truncate to a subset of examples."""
     if fraction >= 1.0:
         return examples
@@ -77,7 +137,7 @@ def load_omni_math(
     domain_contains: Optional[str] = None,
     source_contains: Optional[str] = None,
 ) -> list[OmniMath]:
- 
+
     load_dataset = _require_datasets()
     ds = load_dataset(name, split=split, cache_dir=cache_dir)
 
@@ -108,9 +168,17 @@ def load_omni_math(
             source=source,
         )
 
-        if min_difficulty is not None and ex.difficulty is not None and ex.difficulty < min_difficulty:
+        if (
+            min_difficulty is not None
+            and ex.difficulty is not None
+            and ex.difficulty < min_difficulty
+        ):
             continue
-        if max_difficulty is not None and ex.difficulty is not None and ex.difficulty > max_difficulty:
+        if (
+            max_difficulty is not None
+            and ex.difficulty is not None
+            and ex.difficulty > max_difficulty
+        ):
             continue
         if domain_contains is not None:
             dom = " | ".join(ex.domain).lower()
@@ -125,7 +193,9 @@ def load_omni_math(
 
         examples.append(ex)
 
-    examples = _apply_random_subset(examples, fraction=subset_fraction, seed=subset_seed)
+    examples = _apply_random_subset(
+        examples, fraction=subset_fraction, seed=subset_seed
+    )
 
     if not examples:
         raise ValueError("Omni-MATH load produced 0 examples after filtering.")
