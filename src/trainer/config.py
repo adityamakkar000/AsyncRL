@@ -68,12 +68,14 @@ class RLConfig:
     epsilon_low: float = 0.1
     group_size: int = 16
 
+
 @dataclass
 class LossConfig:
     rl_config: RLConfig = field(default_factory=RLConfig)
     grad_steps: int = 1  # how many off-policy ppo steps to take
     inference_config: InferenceConfig = field(default_factory=InferenceConfig)
     annealing_config: Optional[AnnealedLoss] = None  # TODO: Annealed RL config will go here
+
 
 @dataclass
 class TrainerConfig:

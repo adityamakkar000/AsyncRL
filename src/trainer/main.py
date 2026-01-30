@@ -87,8 +87,9 @@ class Trainer:
             raise ValueError("warmup_steps and decay_steps must sum to at most 1.0")
         if cfg.sharding_config.sharding_type not in ["single", "dp", "fsdp"]:
             raise ValueError("sharding_type must be one of 'single', 'dp', or 'fsdp'")
+        if cfg.loss_config.rl_config.algorithm not in ["grpo", "dr_grpo", "dapo"]:
+            raise ValueError(f"Unsupported RL algorithm: {cfg.loss_config.rl_config.algorithm}")
 
-        #TODO: check for if rl loss in in supported RL types 
         # TODO: check if group size divices batch size
 
     @partial(setup, component="initialized state")
@@ -383,6 +384,8 @@ class Trainer:
             self.writer(self.global_step, out["aux_metrics"])
 
             if self.global_step % self.config.val_interval == 0:
+                #TODO: val step here
+                ...
 
             self.global_step += 1
         
