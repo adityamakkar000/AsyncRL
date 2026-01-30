@@ -49,12 +49,14 @@ class InferenceEngine:
         self.batch_size = config.batch_size
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_module.config.hf_model_name, use_fast=False)
 
-    def tokenize(self, text: list[str]) -> Array:
+    def tokenize(self, text: list[str]) -> tuple[Array, Array]:
         self.tokenizer.padding_side = "left"
         self.tokenizer.pad_token = self.tokenizer.pad_token
         encodings = self.tokenizer(text, return_tensors="jax", padding=True)
-        return encodings["input_ids"]
-        # TODO: return the sequence lens
+        tokens = encodings["input_ids"]
+        seq_lens = jnp.sum(encodings["attention_mask"], axis=1)
+
+        return tokens, seq_lens
 
     def detokenizer(self, tokens: Array) -> list[str]:
         return self.tokenizer.batch_decode(tokens, skip_special_tokens=True)
@@ -126,12 +128,14 @@ if __name__ == "__main__":
 
     # inp = jnp.array([[0, 0, 1, 2, 3], [0, 0, 0, 2, 5], [3, 4, 5, 6, 9]], dtype=jnp.int32)
     # seq_lens = jnp.array([3, 2, 5], dtype=jnp.int32)
-    # key = jax.random.PRNGKey(0)
-    # params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
-    # output_tokens = engine.rollout(inp, seq_lens, key, params)
 
     tokenizer_inp = ["Hello, how are you?", "Whar", "Tell me"]
-    inp_tokens = engine.tokenize(tokenizer_inp)
-    output = engine.detokenizer(inp_tokens)
+    inp_tokens, sequence_lens = engine.tokenize(tokenizer_inp)
+
+    key = jax.random.PRNGKey(0)
+    params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
+    output_tokens = engine.rollout(inp_tokens, sequence_lens, key, params)
+
+    output = engine.detokenizer(output_tokens)
 
     breakpoint()
