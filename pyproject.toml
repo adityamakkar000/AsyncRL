@@ -20,6 +20,7 @@ dependencies = [
     "torch>=2.9.0",
     "transformers>=4.57.3",
     "grain>=0.2.15",
+    "ipykernel>=7.1.0",
 ]
 
 [project.optional-dependencies]
@@ -27,7 +28,9 @@ eval = [
     "openbench>=0.5.3",
     "vllm-tpu==0.12.0",
 ]
-dataset = [
+data = [
+    "datasets>=4.4.2",
+    "gcsfs>=2025.3.0",
     "matplotlib>=3.10.8",
     "opencv-python>=4.12.0.88",
     "orbax-checkpoint>=0.11.31",
