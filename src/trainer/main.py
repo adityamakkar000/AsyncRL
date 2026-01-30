@@ -4,7 +4,6 @@ from functools import partial
 from typing import Dict, Optional
 
 import jax
-import jax.numpy as jnp
 import optax
 import stax
 from dotenv import load_dotenv
@@ -19,7 +18,7 @@ from src.data import RLBatch
 from src.model import Model
 
 from .config import TrainerConfig
-from .loss import get_rl_step_fn
+from .loss import compute_aux_metrics, get_rl_step_fn
 from .utils import Key, set_jax_cache, setup, write_to_gcs
 
 load_dotenv()
@@ -156,7 +155,7 @@ class Trainer:
 
         step_fn = get_rl_step_fn(self.config.loss_config.rl_config)
 
-        # val fn not needed since we just care about val reward
+        # val fn not needed since we just care about val reward, not loss
         train_fn, _val_fn, shardings = stax.fn.get_steps_fn(
             step_fn,
             self.model,
@@ -178,7 +177,6 @@ class Trainer:
         self.params_sharding, self.opt_state_sharding = shardings.param_sharding, shardings.opt_state_sharding
 
         def train_step(param: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
-
             aux_metrics = {}
             for step in range(self.config.loss_config.grad_steps):
                 out = train_fn(
@@ -190,19 +188,10 @@ class Trainer:
                 self.opt_state = out["opt_state"]
                 aux_metrics |= {f"{k}_step_{step}": v for k,v in out["aux_metrics"].items()}
 
-            aux_metrics |= {
-                "mean_reward": jnp.mean(batch.rewards),
-                "std_reward": jnp.std(batch.rewards),
-                "max_reward": jnp.max(batch.rewards),
-                "min_reward": jnp.min(batch.rewards),
-                "mean_length": jnp.mean(batch.token_mask.sum(axis=1)),
-                "median_length": jnp.median(batch.token_mask.sum(axis=1)),
-            }
-
             return {
                 "params": self.params,
                 "opt_state": self.opt_state,
-                "aux_metrics": aux_metrics,
+                "aux_metrics": aux_metrics | compute_aux_metrics(batch),
             }
 
         self.train_step : TrainFn = train_step
