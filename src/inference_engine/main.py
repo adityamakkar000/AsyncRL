@@ -6,6 +6,7 @@ from typing import Optional
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, PyTree
+from transformers import AutoTokenizer
 
 # from src.inference_engine import InferenceConfig
 from src.model import KVCache, Model
@@ -46,6 +47,13 @@ class InferenceEngine:
         self.config = config
         self.max_seq_len = config.max_seq_len
         self.batch_size = config.batch_size
+
+    def tokenize(self, text: list[str]) -> Array:
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_module.config.hf_model_name, use_fast=False)
+        self.tokenizer.padding_side = "left"
+        self.tokenizer.pad_token = self.tokenizer.pad_token
+        encodings = self.tokenizer(text, return_tensors="jax", padding=True)
+        return encodings["input_ids"]
 
     def update_seq_lens(self, t: int, seq_lens: jax.Array):
         return t + seq_lens
@@ -112,10 +120,13 @@ if __name__ == "__main__":
     config = InferenceConfig()
     engine = InferenceEngine(model, config)
 
-    inp = jnp.array([[0, 0, 1, 2, 3], [0, 0, 0, 2, 5], [3, 4, 5, 6, 9]], dtype=jnp.int32)
-    seq_lens = jnp.array([3, 2, 5], dtype=jnp.int32)
-    key = jax.random.PRNGKey(0)
-    params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
-    output_tokens = engine.rollout(inp, seq_lens, key, params)
+    # inp = jnp.array([[0, 0, 1, 2, 3], [0, 0, 0, 2, 5], [3, 4, 5, 6, 9]], dtype=jnp.int32)
+    # seq_lens = jnp.array([3, 2, 5], dtype=jnp.int32)
+    # key = jax.random.PRNGKey(0)
+    # params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
+    # output_tokens = engine.rollout(inp, seq_lens, key, params)
+
+    tokenizer_inp = ["Hello, how are you?", "Whar", "Tell me"]
+    inp_tokens = engine.tokenize(tokenizer_inp)
 
     breakpoint()
