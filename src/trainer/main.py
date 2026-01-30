@@ -4,6 +4,7 @@ from functools import partial
 from typing import Dict, Optional
 
 import jax
+import jax.numpy as jnp
 import optax
 import stax
 from dotenv import load_dotenv
@@ -174,8 +175,7 @@ class Trainer:
 
         def train_step(param: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
 
-            #TODO: (aditya) figuire out how to reduce the aux_metrics
-            aux_metrics = []
+            aux_metrics = {}
             for step in range(self.config.loss_config.grad_steps):
                 out = train_fn(
                     self.params,
@@ -184,7 +184,16 @@ class Trainer:
                 )
                 self.params = out["params"]
                 self.opt_state = out["opt_state"]
-                aux_metrics.append(out["aux_metrics"])
+                aux_metrics |= {f"{k}_step_{step}": v for k,v in out["aux_metrics"].items()}
+
+            aux_metrics |= {
+                "mean_reward": jnp.mean(batch.rewards),
+                "std_reward": jnp.std(batch.rewards),
+                "max_reward": jnp.max(batch.rewards),
+                "min_reward": jnp.min(batch.rewards),
+                "mean_length": jnp.mean(batch.token_mask.sum(axis=1)),
+                "median_length": jnp.median(batch.token_mask.sum(axis=1)),
+            }
 
             return {
                 "params": self.params,
