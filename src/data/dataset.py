@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 import random
 from typing import Any, Optional
-from src.data.config import DataConfig
+
+# from src.data.config import DataConfig -- remove when not testing
+from config import DataConfig
 
 
 @dataclass()
@@ -45,7 +47,7 @@ class OmniMathPromptDataset:
         self,
         *,
         examples: Optional[list[OmniMath]] = None,
-        data_config: Optional[DataConfig] = None,
+        data_config: DataConfig | None = None,
         seed: int = 0,
     ) -> None:
         self.data_config = data_config
