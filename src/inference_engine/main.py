@@ -47,13 +47,17 @@ class InferenceEngine:
         self.config = config
         self.max_seq_len = config.max_seq_len
         self.batch_size = config.batch_size
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_module.config.hf_model_name, use_fast=False)
 
     def tokenize(self, text: list[str]) -> Array:
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_module.config.hf_model_name, use_fast=False)
         self.tokenizer.padding_side = "left"
         self.tokenizer.pad_token = self.tokenizer.pad_token
         encodings = self.tokenizer(text, return_tensors="jax", padding=True)
         return encodings["input_ids"]
+        # TODO: return the sequence lens
+
+    def detokenizer(self, tokens: Array) -> list[str]:
+        return self.tokenizer.batch_decode(tokens, skip_special_tokens=True)
 
     def update_seq_lens(self, t: int, seq_lens: jax.Array):
         return t + seq_lens
@@ -128,5 +132,6 @@ if __name__ == "__main__":
 
     tokenizer_inp = ["Hello, how are you?", "Whar", "Tell me"]
     inp_tokens = engine.tokenize(tokenizer_inp)
+    output = engine.detokenizer(inp_tokens)
 
     breakpoint()
