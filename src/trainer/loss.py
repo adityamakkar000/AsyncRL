@@ -33,12 +33,13 @@ def grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tup
     weight_ratio = jnp.minimum(ratio, clipped_ratio)
     masked_loss = weight_ratio * advantages[:, None] * batch.token_mask
 
-    #TODO: maybe create a mask from lens instead of reqiuring the whole thing
+    # TODO: maybe create a mask from lens instead of reqiuring the whole thing
     loss = jnp.sum(masked_loss, axis=1) / jnp.sum(batch.token_mask, axis=1)
     loss = jnp.mean(loss)
 
     aux_metrics = {}
     return loss, aux_metrics
+
 
 def dr_grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tuple[Array, PyTree]:
     """
@@ -59,17 +60,15 @@ def dr_grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> 
     clipped_ratio = jnp.clip(ratio, 1.0 - config.epsilon_low, 1.0 + config.epsilon_low)
 
     weight_ratio = jnp.minimum(ratio, clipped_ratio)
-    #TODO: maybe create a mask from lens instead of reqiuring the whole thing
+    # TODO: maybe create a mask from lens instead of reqiuring the whole thing
     masked_loss = weight_ratio * advantages[:, None] * batch.token_mask
-    
+
     loss = jnp.sum(masked_loss, axis=1).mean()
 
     aux_metrics = {}
     return loss, aux_metrics
 
 
-
-# TODO: implement
 def dapo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tuple[Array, PyTree]:
     """
     From https://arxiv.org/pdf/2503.14476
@@ -89,13 +88,14 @@ def dapo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tup
     clipped_ratio = jnp.clip(ratio, 1.0 - config.epsilon_low, 1.0 + config.epsilon_high)
 
     weight_ratio = jnp.minimum(ratio, clipped_ratio)
-    #TODO: maybe create a mask from lens instead of reqiuring the whole thing
+    # TODO: maybe create a mask from lens instead of reqiuring the whole thing
     masked_loss = weight_ratio * advantages[:, None] * batch.token_mask
-    
+
     loss = jnp.sum(masked_loss, axis=1).mean() / T
 
     aux_metrics = {}
     return loss, aux_metrics
+
 
 def get_loss_fn(RLConfig) -> LossFunction:
     match RLConfig.loss_type:
@@ -124,7 +124,10 @@ def get_rl_step_fn(config: RLConfig) -> StepFn:
     def step_fn(model: Model, params: PyTree, batch: RLBatch, train: bool = True) -> tuple[Array, PyTree]:
         x_logprobs = model.apply(params, x=batch.tokens, sequence_lens=batch.seq_lens, kv_cache=None, train=train)
         loss, aux_metrics = loss_fn(x_logprobs, batch)
-        loss *= -1.0  # maximize == minimize negative
+
+        # since we are gradient descenting we want to minimize the loss 
+        # hence negate the loss you want to maximize
+        loss *= -1.0  
         aux_metrics |= {
             # other metrics here
         }
