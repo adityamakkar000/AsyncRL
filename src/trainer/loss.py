@@ -1,5 +1,6 @@
 from functools import partial
 
+import jax
 import jax.numpy as jnp
 from jaxtyping import Array, PyTree
 from stax import StepFn
@@ -142,3 +143,15 @@ def get_rl_step_fn(config: RLConfig) -> StepFn:
 
     # TODO: (anyone) figure out why this is erroring
     return step_fn  # type: ignore
+
+@jax.jit
+def compute_aux_metrics(batch: RLBatch) -> Dict[str, jnp.ndarray]:
+    return {
+        "mean_reward": jnp.mean(batch.rewards),
+        "std_reward": jnp.std(batch.rewards),
+        "max_reward": jnp.max(batch.rewards),
+        "min_reward": jnp.min(batch.rewards),
+        "mean_length": jnp.mean(batch.token_mask.sum(axis=1)),
+        "median_length": jnp.median(batch.token_mask.sum(axis=1)),
+    }
+
