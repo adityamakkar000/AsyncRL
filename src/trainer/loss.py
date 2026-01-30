@@ -37,7 +37,10 @@ def grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tup
     loss = jnp.sum(masked_loss, axis=1) / jnp.sum(batch.token_mask, axis=1)
     loss = jnp.mean(loss)
 
-    aux_metrics = {}
+    aux_metrics = {
+        "loss": loss,
+        "pi_theta_over_pi_old": jnp.mean(ratio),
+    }
     return loss, aux_metrics
 
 
@@ -65,7 +68,10 @@ def dr_grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> 
 
     loss = jnp.sum(masked_loss, axis=1).mean()
 
-    aux_metrics = {}
+    aux_metrics = {
+        "loss": loss,
+        "pi_theta_over_pi_old": jnp.mean(ratio),
+    }
     return loss, aux_metrics
 
 
@@ -93,7 +99,10 @@ def dapo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tup
 
     loss = jnp.sum(masked_loss, axis=1).mean() / T
 
-    aux_metrics = {}
+    aux_metrics = {
+        "loss": loss,
+        "pi_theta_over_pi_old": jnp.mean(ratio),
+    }
     return loss, aux_metrics
 
 
@@ -128,9 +137,6 @@ def get_rl_step_fn(config: RLConfig) -> StepFn:
         # since we are gradient descenting we want to minimize the loss 
         # hence negate the loss you want to maximize
         loss *= -1.0  
-        aux_metrics |= {
-            # other metrics here
-        }
 
         return loss, aux_metrics
 
