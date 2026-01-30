@@ -25,3 +25,4 @@ wandb/
 .virtual_documents/
 *_rsa*
 *.safetensors
+src/data/README.md

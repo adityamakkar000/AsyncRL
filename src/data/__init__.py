@@ -1,3 +1,5 @@
-from src.data.config import DataConfig
+from .dataset import OmniMath, load_omni_math
+from .dataclass import OmniMathPromptDataset
 
-__all__ = ["DataConfig"]
+__all__ = ["OmniMath", "load_omni_math", "OmniMathPromptDataset"]
+
