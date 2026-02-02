@@ -22,10 +22,8 @@ class QwenConfig:
     n_groups: int = MISSING
     head_dim: int = MISSING
     n_layers: int = MISSING
-    # TODO: find a way to clarify this
-    # mdoel_dtype is acutally the training type
-    # not the dtype of the weights
-    model_dtype: str = "float32"
+    rope_base: int = MISSING
+    activation_dtype: str = "float32"
 
 
 @dataclass
