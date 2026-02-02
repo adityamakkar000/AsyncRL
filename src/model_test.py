@@ -25,13 +25,13 @@ def main(cfg: DictConfig) -> None:
     params = out_state["params"]
 
     x = jax.random.randint(jax.random.key(32), (4, 5), minval=0, maxval=10000, dtype=jnp.int32)
-    seq_lens = jnp.array([2,3,4,5])
+    seq_lens = jnp.array([2, 3, 4, 5])
     kv_cache = model.init_kv_cache(x)
-
 
     logits, cache = model.apply({"params": params}, x=x, sequence_lens=seq_lens)
 
     breakpoint()
+
 
 if __name__ == "__main__":
     main()

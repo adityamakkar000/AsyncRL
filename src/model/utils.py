@@ -23,6 +23,7 @@ def convert_dtype(dtype_str: str) -> jnp.dtype:
     else:
         raise ValueError(f"Unsupported dtype string: {dtype_str}")
 
+
 def make_prompt_mask(padding_len: int, seq_lens: jax.Array) -> jax.Array:
     """
     Create a prompt mask to handle left-padding in sequences.
@@ -42,6 +43,7 @@ def make_prompt_mask(padding_len: int, seq_lens: jax.Array) -> jax.Array:
     """
 
     return jnp.arange(padding_len)[None, :] >= (padding_len - seq_lens[:, None])
+
 
 def make_tril_mask(t: int, T: int) -> jax.Array:
     """
