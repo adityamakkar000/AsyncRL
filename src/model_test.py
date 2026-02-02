@@ -5,7 +5,7 @@ from hydra.core.config_store import ConfigStore
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-from src.model import Model, ModelConfig, Qwen3Model
+from src.model import Model, ModelConfig
 
 jax.config.update("jax_default_matmul_precision", "highest")
 jax.numpy.set_printoptions(precision=9)
@@ -26,10 +26,9 @@ def main(cfg: DictConfig) -> None:
 
     x = jax.random.randint(jax.random.key(32), (4, 5), minval=0, maxval=10000, dtype=jnp.int32)
     seq_lens = jnp.array([2, 3, 4, 5])
-    kv_cache = model.init_kv_cache(x)
+    model.init_kv_cache(x)
 
-    logits, cache = model.apply({"params": params}, x=x, sequence_lens=seq_lens)
-
+    model.apply({"params": params}, x=x, sequence_lens=seq_lens)
     breakpoint()
 
 
