@@ -1,6 +1,6 @@
 import os
 
-# set JAX to use CPU only so VLLM server can use TPU 
+# set JAX to use CPU only so VLLM server can use TPU
 os.environ["JAX_PLATFORMS"] = "cpu"
 import hydra
 from hydra.core.config_store import ConfigStore
