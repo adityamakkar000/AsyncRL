@@ -9,6 +9,7 @@ from jaxtyping import Array
 from .config import KVCache, QwenConfig
 from .utils import convert_dtype, make_attention_mask, make_prompt_mask
 
+
 class FeedForward(nn.Module):
     d_ff: int
     model_dim: int
@@ -29,9 +30,9 @@ class RMSNorm(nn.Module):
 
     @nn.compact
     def __call__(self, x: Array):
-        rms= jnp.sqrt(jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True) + 1e-6)
+        rms = jnp.sqrt(jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True) + 1e-6)
         gamma = self.param("gamma", nn.initializers.ones, (x.shape[-1]), self.activation_dtype)
-        x = (x * gamma)/rms
+        x = (x * gamma) / rms
         return x
 
 
@@ -45,7 +46,7 @@ class RoPE(nn.Module):
 
         m = jnp.arange(0, self.sequence_len, dtype=jnp.float32)
         pos = jnp.arange(0, self.model_dim, 2, dtype=jnp.float32) / self.model_dim
-        theta = 1.0 / (self.rope_base **pos)
+        theta = 1.0 / (self.rope_base**pos)
 
         inp = jnp.einsum("t,k->tk", m, theta, precision=jax.lax.Precision.HIGHEST)
 
@@ -64,10 +65,7 @@ class RoPE(nn.Module):
             cos = jax.lax.dynamic_slice(self.cos, (input, 0), (1, C // 2))
             return sin, cos
 
-        sin, cos = jax.tree.map(
-            lambda x: x.reshape(B, T, C//2)[:, None, ...],
-            get_single_sin_cos_row(index_map)
-        )
+        sin, cos = jax.tree.map(lambda x: x.reshape(B, T, C // 2)[:, None, ...], get_single_sin_cos_row(index_map))
 
         x1, x2 = x[..., : C // 2], x[..., C // 2 :]
 
@@ -82,8 +80,8 @@ class GroupedQueryAttention(nn.Module):
     n_heads: int
     n_groups: int
     max_sequence_len: int
-    head_dim: int 
-    rope_base: int 
+    head_dim: int
+    rope_base: int
     activation_dtype: jnp.dtype = jnp.float32
 
     def setup(self):
@@ -99,16 +97,8 @@ class GroupedQueryAttention(nn.Module):
         t_start = kv_cache.length if kv_cache else 0
 
         q = nn.Dense(features=self.d_out, use_bias=False, dtype=jnp.float32)(x)
-        k = nn.Dense(
-            features=self.n_groups * self.head_dim,
-            use_bias=False,
-            dtype=jnp.float32
-        )(x)
-        v = nn.Dense(
-            features=self.n_groups * self.head_dim,
-            use_bias=False,
-            dtype=jnp.float32
-        )(x)
+        k = nn.Dense(features=self.n_groups * self.head_dim, use_bias=False, dtype=jnp.float32)(x)
+        v = nn.Dense(features=self.n_groups * self.head_dim, use_bias=False, dtype=jnp.float32)(x)
 
         q = einops.rearrange(q, "... t (h d) -> ... t h d", d=self.head_dim)
         k = einops.rearrange(k, "... t (g d) -> ... t g d", d=self.head_dim)
@@ -117,14 +107,13 @@ class GroupedQueryAttention(nn.Module):
         q = RMSNorm(self.activation_dtype)(q)
         k = RMSNorm(self.activation_dtype)(k)
 
-
         prompt_mask = make_prompt_mask(T, seq_lens)
         index_map = jnp.cumsum(prompt_mask, axis=-1)
         # account for kv_cache length
         index_map_with_offset = jnp.where(index_map > 0, index_map + t_start - 1, 0)
 
         q = RoPE(self.max_sequence_len, self.head_dim, self.rope_base)(q, index_map_with_offset)
-        k = RoPE(self.max_sequence_len, self.head_dim, self.rope_base) (k, index_map_with_offset)
+        k = RoPE(self.max_sequence_len, self.head_dim, self.rope_base)(k, index_map_with_offset)
 
         if kv_cache:
             k_cache, v_cache = kv_cache.k, kv_cache.v
@@ -138,9 +127,7 @@ class GroupedQueryAttention(nn.Module):
 
         q = einops.rearrange(q, pattern="b t (g r) d -> b t g r d", g=k.shape[-2])
 
-        wei = jnp.einsum(
-            "btgrd, bTgd -> btTgr", q, k
-        ) * (self.head_dim ** -0.5)
+        wei = jnp.einsum("btgrd, bTgd -> btTgr", q, k) * (self.head_dim**-0.5)
 
         wei = einops.rearrange(wei, pattern="b t T g r -> b (g r) t T ")
 
@@ -168,7 +155,7 @@ class Block(nn.Module):
     n_heads: int
     n_groups: int
     head_dim: int
-    rope_base: int 
+    rope_base: int
     activation_dtype: jnp.dtype = jnp.float32
 
     @nn.compact
@@ -181,7 +168,7 @@ class Block(nn.Module):
             n_groups=self.n_groups,
             max_sequence_len=self.sequence_len,
             head_dim=self.head_dim,
-            rope_base=self.rope_base, 
+            rope_base=self.rope_base,
             activation_dtype=self.activation_dtype,
         )(x, seq_lens, layer_cache)
 
@@ -228,7 +215,7 @@ class Qwen3(nn.Module):
                 n_heads=self.n_heads,
                 n_groups=self.n_groups,
                 head_dim=self.head_dim,
-                rope_base=self.rope_base, 
+                rope_base=self.rope_base,
                 activation_dtype=self.activation_dtype,
             )(x, sequence_lens, in_layer_cache)
 
