@@ -47,14 +47,28 @@ class InferenceEngine:
         self.config = config
         self.max_seq_len = config.max_seq_len
         self.batch_size = config.batch_size
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_module.config.hf_model_name, use_fast=False)
 
-    def tokenize(self, text: list[str]) -> tuple[Array, Array]:
-        self.tokenizer.padding_side = "left"
-        self.tokenizer.pad_token = self.tokenizer.pad_token
-        encodings = self.tokenizer(text, return_tensors="jax", padding=True)
-        tokens = encodings["input_ids"]
-        seq_lens = jnp.sum(encodings["attention_mask"], axis=1)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_module.config.hf_model_name)
+
+    def calculate_max_padding_length(self, seq_lens: list[list[int]]) -> int:
+        max_token_len = 0
+        for example in seq_lens:
+            max_token_len = max(max_token_len, len(example))
+
+        bit_length = max_token_len.bit_length()
+        padded_length = 1 << bit_length
+        return min(padded_length, self.max_seq_len)
+
+    def tokenize(self, texts: list[str]) -> tuple[Array, Array]:
+        inputs = [
+            self.tokenizer.apply_chat_template([{"role": "user", "content": text}], add_generation_prompt=True)
+            for text in texts
+        ]
+        padding_length = self.calculate_max_padding_length(inputs)
+        inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
+        tokens = jnp.array(inputs)
+        mask = tokens == self.tokenizer.pad_token_id
+        seq_lens = jnp.sum(mask, axis=1)
 
         return tokens, seq_lens
 
@@ -129,7 +143,7 @@ if __name__ == "__main__":
     # inp = jnp.array([[0, 0, 1, 2, 3], [0, 0, 0, 2, 5], [3, 4, 5, 6, 9]], dtype=jnp.int32)
     # seq_lens = jnp.array([3, 2, 5], dtype=jnp.int32)
 
-    tokenizer_inp = ["Hello, how are you?", "Whar", "Tell me"]
+    tokenizer_inp = ["Hello, how are you?"]
     inp_tokens, sequence_lens = engine.tokenize(tokenizer_inp)
 
     key = jax.random.PRNGKey(0)
