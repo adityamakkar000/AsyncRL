@@ -50,6 +50,20 @@ class InferenceEngine:
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_module.config.hf_model_name)
 
+    def precompile(self) -> None:
+        self.precompile_dict = {}
+        curr_size = 2
+        while curr_size <= self.max_seq_len:
+            x_init = jnp.ones((1, curr_size), dtype=jnp.int32)
+            seq_lens = jnp.array([curr_size])
+            key = jax.random.PRNGKey(0)
+            params = self.model_module.init_state(jax.random.PRNGKey(0), None, None)
+            kv_cache = self.model_module.init_kv_cache(x_init)
+
+            jit_func = jax.jit(self.prefill, static_argnums=(0,))
+            self.precompile_dict[curr_size] = jit_func(params, x_init, seq_lens, key, kv_cache=kv_cache)
+            curr_size *= 2
+
     def calculate_max_padding_length(self, seq_lens: list[list[int]]) -> int:
         max_token_len = 0
         for example in seq_lens:
@@ -61,7 +75,9 @@ class InferenceEngine:
 
     def tokenize(self, texts: list[str]) -> tuple[Array, Array]:
         inputs = [
-            self.tokenizer.apply_chat_template([{"role": "user", "content": text}], add_generation_prompt=True)
+            self.tokenizer.apply_chat_template(
+                [{"role": "user", "content": text}], add_generation_prompt=True, enable_thinking=True
+            )
             for text in texts
         ]
         padding_length = self.calculate_max_padding_length(inputs)
@@ -82,6 +98,8 @@ class InferenceEngine:
         self, params: PyTree, x: Array, seq_lens: Array, key: Array, kv_cache: Optional[list[KVCache]] = None
     ) -> tuple[Array, list[KVCache], Array]:
         B, _ = x.shape
+
+        # TODO: sub int
 
         out, cache = self.model.apply(params, x=x, sequence_lens=seq_lens, kv_cache=kv_cache)
 
