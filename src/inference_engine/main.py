@@ -12,26 +12,7 @@ from transformers import AutoTokenizer
 >>>>>>> 10334d0 (working base inference)
 
 # from src.inference_engine import InferenceConfig
-from src.model import KVCache, Model
-
-
-@dataclasses.dataclass
-class qwen_config:
-    vocab_size: int = 151936
-    d_ff: int = 3072
-    sequence_len: int = 20
-    model_dim: int = 1024
-    n_heads: int = 16
-    n_groups: int = 8
-    n_layers: int = 28
-    head_dim: int = 128
-    model_dtype: str = "float32"
-
-
-@dataclasses.dataclass
-class ModelConfig:
-    hf_model_name: str
-    qwen_config: qwen_config
+from src.model import KVCache, Model, ModelConfig, QwenConfig
 
 
 @dataclasses.dataclass
@@ -155,8 +136,29 @@ class InferenceEngine:
 
 
 if __name__ == "__main__":
-    q_config = qwen_config()
-    model_config = ModelConfig("Qwen/Qwen3-0.6B", qwen_config=q_config)
+    vocab_size: int = 151936
+    d_ff: int = 3072
+    sequence_len: int = 20
+    model_dim: int = 1024
+    n_heads: int = 16
+    n_groups: int = 8
+    n_layers: int = 28
+    head_dim: int = 128
+    model_dtype: str = "float32"
+
+    qwen_config = QwenConfig(
+        vocab_size=vocab_size,
+        d_ff=d_ff,
+        sequence_len=sequence_len,
+        model_dim=model_dim,
+        n_heads=n_heads,
+        n_groups=n_groups,
+        head_dim=head_dim,
+        n_layers=n_layers,
+        rope_base=10_000,
+        activation_dtype=model_dtype,
+    )
+    model_config = ModelConfig("Qwen/Qwen3-0.6B", qwen_config=qwen_config)
     model = Model(model_config)
     config = InferenceConfig()
     engine = InferenceEngine(model, config)
