@@ -1,6 +1,5 @@
 import math
 import time
-from dataclasses import dataclass
 from functools import partial
 from typing import Optional
 
@@ -9,20 +8,9 @@ import jax.numpy as jnp
 from jaxtyping import Array, PyTree
 from transformers import AutoTokenizer
 
-# from src.inference_engine import InferenceConfig
 from src.model import KVCache, Model, ModelConfig, QwenConfig
 
-
-@dataclass
-class InferenceConfig:
-    temperature: float = 0.6
-    top_p: float = 0.95
-    top_k: int = 50
-    max_seq_len: int = 300
-    batch_size: int = 128
-    group_size: int = 1
-    kv_cache_dtype: str = "bfloat16"
-
+from .config import InferenceConfig
 
 """
 #TODO: Inference 
@@ -31,10 +19,13 @@ class InferenceConfig:
 - integrate dataclass for return outputs from prefill 
 - precompile along batch and T for prefill
 - precombpile decode along batch 
+- max sequence length + stop token breaking
 - roll kv cache 
 - donate kv cache memory optimization 
 - setup inference  loop
 - integrate tokenizer into single call function
+- return back prob tokens
+- precompile attention length so no need to do full 16k for every turn
 """
 
 
@@ -196,7 +187,9 @@ if __name__ == "__main__":
         ),
     )
     model = Model(model_config)
-    config = InferenceConfig()
+    config = InferenceConfig(
+        temperature=0.6, top_p=0.95, top_k=50, max_seq_len=300, batch_size=128, group_size=1, kv_cache_dtype="bfloat16"
+    )
     engine = InferenceEngine(model, config)
 
     # inp = jnp.array([[0, 0, 1, 2, 3], [0, 0, 0, 2, 5], [3, 4, 5, 6, 9]], dtype=jnp.int32)
@@ -205,7 +198,7 @@ if __name__ == "__main__":
     tokenizer_inp = [
         "Create a generating series for the composition where each part is in 1 to 100. Put your answer in /boxed{}",
         "Explain the theory of relativity with manifolds and reimannian geometry.",
-    ] * 1
+    ] * 8
 
     inp_tokens, sequence_lens = engine.tokenize(tokenizer_inp)
 
