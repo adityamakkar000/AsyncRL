@@ -1,24 +1,22 @@
-import dataclasses
 import math
+from dataclasses import dataclass
 from functools import partial
 from typing import Optional
 
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, PyTree
-<<<<<<< HEAD
 from transformers import AutoTokenizer
-=======
->>>>>>> 10334d0 (working base inference)
 
 # from src.inference_engine import InferenceConfig
 from src.model import KVCache, Model, ModelConfig, QwenConfig
 
 
-@dataclasses.dataclass
+@dataclass
 class InferenceConfig:
-    temperature: float = 1.0
-    top_p: float = 0.9
+    temperature: float = 0.6
+    top_p: float = 0.95
+    top_k: int = 50
     max_seq_len: int = 50
     batch_size: int = 4
     group_size: int = 1
@@ -65,15 +63,17 @@ class InferenceEngine:
             for text in texts
         ]
         padding_length = self.calculate_max_padding_length(inputs)
-        inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
+        # inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
+        breakpoint()
         tokens = jnp.array(inputs)
-        mask = tokens == self.tokenizer.pad_token_id
-        seq_lens = jnp.sum(mask, axis=1)
+        mask = tokens != self.tokenizer.pad_token_id
+        seq_lens = jnp.sum(mask, axis=-1)
+        breakpoint()
 
         return tokens, seq_lens
 
     def detokenizer(self, tokens: Array) -> list[str]:
-        return self.tokenizer.batch_decode(tokens, skip_special_tokens=True)
+        return self.tokenizer.batch_decode(tokens, skip_special_tokens=False)
 
     def update_seq_lens(self, t: int, seq_lens: jax.Array):
         return t + seq_lens
@@ -104,16 +104,40 @@ class InferenceEngine:
 
     def batch_decode(self, x: Array, seq_lens: Array, key: Array, params: PyTree) -> Array:
         B, T = x.shape
-        initial_cache = self.model_module.init_kv_cache(x)
-        next_tokens, kv_cache, seq_lens = self.prefill(params, x, seq_lens, key, kv_cache=initial_cache)
+        debug = True
 
-        tokens_ouput = jnp.concatenate((x, next_tokens), axis=-1)
+        if debug:
+            tokens_output = x
+            for _ in range(self.max_seq_len - T):
+                print(f"Generated token {_}")
+                logits, _ = self.model.apply(params, x=tokens_output, sequence_lens=seq_lens, kv_cache=None)
 
-        for t in range(T, self.max_seq_len):
-            next_tokens, key, kv_cache, seq_lens, params = self.decode((next_tokens, key, kv_cache, seq_lens, params))
-            tokens_ouput = jnp.concatenate((tokens_ouput, next_tokens), axis=-1)
+                logits = logits[:, -1, :] / self.config.temperature
 
-        return tokens_ouput
+                key, subkey = jax.random.split(key)
+
+                top_k = self.config.top_k
+                top_k_logits, top_k_indices = jax.lax.top_k(logits, top_k)
+                next_token_idx = jax.random.categorical(subkey, top_k_logits, axis=-1)
+                next_tokens = jnp.take_along_axis(top_k_indices, next_token_idx[:, None], axis=-1)
+
+                tokens_output = jnp.concatenate((tokens_output, next_tokens), axis=-1)
+                seq_lens = self.update_seq_lens(t=1, seq_lens=seq_lens)
+
+            return tokens_output
+        else:
+            initial_cache = self.model_module.init_kv_cache(x)
+            next_tokens, kv_cache, seq_lens = self.prefill(params, x, seq_lens, key, kv_cache=initial_cache)
+
+            tokens_output = jnp.concatenate((x, next_tokens), axis=-1)
+
+            for _ in range(T, self.max_seq_len):
+                next_tokens, key, kv_cache, seq_lens, params = self.decode(
+                    (next_tokens, key, kv_cache, seq_lens, params)
+                )
+                tokens_output = jnp.concatenate((tokens_output, next_tokens), axis=-1)
+
+            return tokens_output
 
     def multi_batch_decode(self, batch_tokens: Array, seq_lens: Array, key: Array, params: PyTree) -> Array:
         B, _ = batch_tokens.shape
@@ -136,29 +160,21 @@ class InferenceEngine:
 
 
 if __name__ == "__main__":
-    vocab_size: int = 151936
-    d_ff: int = 3072
-    sequence_len: int = 20
-    model_dim: int = 1024
-    n_heads: int = 16
-    n_groups: int = 8
-    n_layers: int = 28
-    head_dim: int = 128
-    model_dtype: str = "float32"
-
-    qwen_config = QwenConfig(
-        vocab_size=vocab_size,
-        d_ff=d_ff,
-        sequence_len=sequence_len,
-        model_dim=model_dim,
-        n_heads=n_heads,
-        n_groups=n_groups,
-        head_dim=head_dim,
-        n_layers=n_layers,
-        rope_base=10_000,
-        activation_dtype=model_dtype,
+    model_config = ModelConfig(
+        "Qwen/Qwen3-0.6B",
+        qwen_config=QwenConfig(
+            vocab_size=151936,
+            d_ff=3072,
+            sequence_len=20,
+            model_dim=1024,
+            n_heads=16,
+            n_groups=8,
+            head_dim=128,
+            n_layers=28,
+            rope_base=10_000,
+            activation_dtype="bfloat16",
+        ),
     )
-    model_config = ModelConfig("Qwen/Qwen3-0.6B", qwen_config=qwen_config)
     model = Model(model_config)
     config = InferenceConfig()
     engine = InferenceEngine(model, config)
@@ -166,7 +182,7 @@ if __name__ == "__main__":
     # inp = jnp.array([[0, 0, 1, 2, 3], [0, 0, 0, 2, 5], [3, 4, 5, 6, 9]], dtype=jnp.int32)
     # seq_lens = jnp.array([3, 2, 5], dtype=jnp.int32)
 
-    tokenizer_inp = ["Hello, how are you?"]
+    tokenizer_inp = ["What 2 + 2?"]
     inp_tokens, sequence_lens = engine.tokenize(tokenizer_inp)
 
     key = jax.random.PRNGKey(0)
@@ -174,5 +190,4 @@ if __name__ == "__main__":
     output_tokens = engine.rollout(inp_tokens, sequence_lens, key, params)
 
     output = engine.detokenizer(output_tokens)
-
     breakpoint()
