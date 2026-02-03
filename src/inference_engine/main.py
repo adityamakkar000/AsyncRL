@@ -19,8 +19,22 @@ class InferenceConfig:
     top_p: float = 0.95
     top_k: int = 50
     max_seq_len: int = 300
-    batch_size: int = 4
+    batch_size: int = 128
     group_size: int = 1
+
+
+"""
+#TODO: Inference 
+- multihost 
+- fix up static batching
+- integrate dataclass for return outputs from prefill 
+- precompile along batch and T for prefill
+- precombpile decode along batch 
+- roll kv cache 
+- donate kv cache memory optimization 
+- setup inference  loop
+- integrate tokenizer into single call function
+"""
 
 
 class InferenceEngine:
@@ -63,9 +77,9 @@ class InferenceEngine:
             )
             for text in texts
         ]
-        # padding_length = self.calculate_max_padding_length(inputs)
+        padding_length = self.calculate_max_padding_length(inputs)
         seq_lens = jnp.array([len(x) for x in inputs], dtype=jnp.int32)
-        # inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
+        inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
         tokens = jnp.array(inputs)
 
         return tokens, seq_lens
@@ -79,14 +93,15 @@ class InferenceEngine:
     def sample_logits(self, logits: Array, key: Array) -> Array:
         B, T, V = logits.shape
         logits = logits[:, -1, :] / self.config.temperature
+
         if self.config.top_k > 0:
             top_k = min(self.config.top_k, V)
             logits, base_indices = jax.lax.top_k(logits, top_k)
         else:
             base_indices = jnp.tile(jnp.arange(V), (B, 1))
 
+        probs = jax.nn.softmax(logits, axis=-1)
         if self.config.top_p < 1.0:
-            probs = jax.nn.softmax(logits, axis=-1)
             sort_idx = jnp.argsort(-probs, axis=-1)
             sorted_probs = jnp.take_along_axis(probs, sort_idx, axis=-1)
             sorted_logits = jnp.take_along_axis(logits, sort_idx, axis=-1)
@@ -95,12 +110,14 @@ class InferenceEngine:
             mask = mask.at[:, 0].set(True)
 
             filtered_logits = jnp.where(mask, sorted_logits, -jnp.inf)
-            next_sorted_idx = jax.random.categorical(key, filtered_logits, axis=-1)[:, None]
-            chosen_sorted = jnp.take_along_axis(sort_idx, next_sorted_idx, axis=-1)
-            next_tokens = jnp.take_along_axis(base_indices, chosen_sorted, axis=-1)
-        else:
-            next_idx = jax.random.categorical(key, logits, axis=-1)[:, None]
-            next_tokens = jnp.take_along_axis(base_indices, next_idx, axis=-1)
+
+            logits = jnp.take_along_axis(filtered_logits, jnp.argsort(sort_idx, axis=-1), axis=-1)
+            probs = jax.nn.softmax(logits, axis=-1)
+
+        next_idx = jax.random.categorical(key, logits, axis=-1)[:, None]
+        next_tokens = jnp.take_along_axis(base_indices, next_idx, axis=-1)
+        # TODO: return next probs
+        _next_probs = jnp.take_along_axis(probs, next_idx, axis=-1)
 
         return next_tokens
 
@@ -129,13 +146,15 @@ class InferenceEngine:
 
         tokens_output = jnp.concatenate((x, next_tokens), axis=-1)
 
-        for _ in range(T, self.max_seq_len):
-            start_time = time.perf_counter()
+        start_time = time.perf_counter()
+        for _ in range(T + 1, self.max_seq_len):
             next_tokens, key, kv_cache, seq_lens, params = self.decode((next_tokens, key, kv_cache, seq_lens, params))
             tokens_output = jnp.concatenate((tokens_output, next_tokens), axis=-1)
-            time_end = time.perf_counter()
-            tps = 1 / (time_end - start_time)
-            print(f"Generated token {_} at {tps:.2f} tokens/second")
+            if _ % 10 == 0 and _ != 0:
+                time_end = time.perf_counter()
+                tps = B * 10 / (time_end - start_time)
+                print(f"Stats: {tps:.2f} tokens/second")
+                start_time = time.perf_counter()
 
         return tokens_output
 
@@ -165,14 +184,14 @@ if __name__ == "__main__":
         qwen_config=QwenConfig(
             vocab_size=151936,
             d_ff=3072,
-            sequence_len=1024,
+            sequence_len=16_384,
             model_dim=1024,
             n_heads=16,
             n_groups=8,
             head_dim=128,
             n_layers=28,
             rope_base=1000000,
-            activation_dtype="float32",
+            activation_dtype="bfloat16",
         ),
     )
     model = Model(model_config)
@@ -183,8 +202,10 @@ if __name__ == "__main__":
     # seq_lens = jnp.array([3, 2, 5], dtype=jnp.int32)
 
     tokenizer_inp = [
-        "Create a generating series for the composition where each part is in 1 to 100. Put your answer in /boxed{}"
-    ]
+        "Create a generating series for the composition where each part is in 1 to 100. Put your answer in /boxed{}",
+        "Explain the theory of relativity with manifolds and reimannian geometry.",
+    ] * 1
+
     inp_tokens, sequence_lens = engine.tokenize(tokenizer_inp)
 
     key = jax.random.PRNGKey(2303)
