@@ -1,4 +1,5 @@
 import math
+import time
 from dataclasses import dataclass
 from functools import partial
 from typing import Optional
@@ -17,7 +18,7 @@ class InferenceConfig:
     temperature: float = 0.6
     top_p: float = 0.95
     top_k: int = 50
-    max_seq_len: int = 50
+    max_seq_len: int = 300
     batch_size: int = 4
     group_size: int = 1
 
@@ -62,9 +63,9 @@ class InferenceEngine:
             )
             for text in texts
         ]
-        padding_length = self.calculate_max_padding_length(inputs)
+        # padding_length = self.calculate_max_padding_length(inputs)
         seq_lens = jnp.array([len(x) for x in inputs], dtype=jnp.int32)
-        inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
+        # inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
         tokens = jnp.array(inputs)
 
         return tokens, seq_lens
@@ -75,67 +76,68 @@ class InferenceEngine:
     def update_seq_lens(self, t: int, seq_lens: jax.Array):
         return t + seq_lens
 
+    def sample_logits(self, logits: Array, key: Array) -> Array:
+        B, T, V = logits.shape
+        logits = logits[:, -1, :] / self.config.temperature
+        if self.config.top_k > 0:
+            top_k = min(self.config.top_k, V)
+            logits, base_indices = jax.lax.top_k(logits, top_k)
+        else:
+            base_indices = jnp.tile(jnp.arange(V), (B, 1))
+
+        if self.config.top_p < 1.0:
+            probs = jax.nn.softmax(logits, axis=-1)
+            sort_idx = jnp.argsort(-probs, axis=-1)
+            sorted_probs = jnp.take_along_axis(probs, sort_idx, axis=-1)
+            sorted_logits = jnp.take_along_axis(logits, sort_idx, axis=-1)
+
+            mask = jnp.cumsum(sorted_probs, axis=-1) <= self.config.top_p
+            mask = mask.at[:, 0].set(True)
+
+            filtered_logits = jnp.where(mask, sorted_logits, -jnp.inf)
+            next_sorted_idx = jax.random.categorical(key, filtered_logits, axis=-1)[:, None]
+            chosen_sorted = jnp.take_along_axis(sort_idx, next_sorted_idx, axis=-1)
+            next_tokens = jnp.take_along_axis(base_indices, chosen_sorted, axis=-1)
+        else:
+            next_idx = jax.random.categorical(key, logits, axis=-1)[:, None]
+            next_tokens = jnp.take_along_axis(base_indices, next_idx, axis=-1)
+
+        return next_tokens
+
     def prefill(
         self, params: PyTree, x: Array, seq_lens: Array, key: Array, kv_cache: Optional[list[KVCache]] = None
     ) -> tuple[Array, list[KVCache], Array]:
-        B, _ = x.shape
-
-        # TODO: sub int
-
         out, cache = self.model.apply(params, x=x, sequence_lens=seq_lens, kv_cache=kv_cache)
-
-        final_tokens = jax.random.categorical(key, out[:, -1, :], axis=-1)
-
-        return final_tokens[:, None], cache, self.update_seq_lens(1, seq_lens)
+        return self.sample_logits(out, key), cache, self.update_seq_lens(1, seq_lens)
 
     @partial(jax.jit, static_argnums=(0,))
     def decode(self, state: tuple[Array, Array, Array, Array, Array]) -> tuple[Array, Array, Array, Array, Array]:
         x, key, kv_cache, seq_lens, params = state
 
+        key, sample_key = jax.random.split(key)
         logits, out_cache = self.model.apply(params, x=x, sequence_lens=seq_lens, kv_cache=kv_cache)
-
-        key, subkey = jax.random.split(key)
-        next_tokens = jax.random.categorical(subkey, logits[:, -1, :] / self.config.temperature, axis=-1)[:, None]
+        next_tokens = self.sample_logits(logits, sample_key)
         seq_lens = self.update_seq_lens(t=1, seq_lens=seq_lens)
         return (next_tokens, key, out_cache, seq_lens, params)
 
     def batch_decode(self, x: Array, seq_lens: Array, key: Array, params: PyTree) -> Array:
         B, T = x.shape
-        debug = False
 
-        if debug:
-            tokens_output = x
-            for _ in range(self.max_seq_len - T):
-                print(f"Generated token {_}")
-                logits, _ = self.model.apply(params, x=tokens_output, sequence_lens=seq_lens, kv_cache=None)
+        initial_cache = self.model_module.init_kv_cache(x)
+        key, prefill_key = jax.random.split(key)
+        next_tokens, kv_cache, seq_lens = self.prefill(params, x, seq_lens, prefill_key, kv_cache=initial_cache)
 
-                logits = logits[:, -1, :] / self.config.temperature
+        tokens_output = jnp.concatenate((x, next_tokens), axis=-1)
 
-                key, subkey = jax.random.split(key)
+        for _ in range(T, self.max_seq_len):
+            start_time = time.perf_counter()
+            next_tokens, key, kv_cache, seq_lens, params = self.decode((next_tokens, key, kv_cache, seq_lens, params))
+            tokens_output = jnp.concatenate((tokens_output, next_tokens), axis=-1)
+            time_end = time.perf_counter()
+            tps = 1 / (time_end - start_time)
+            print(f"Generated token {_} at {tps:.2f} tokens/second")
 
-                top_k = self.config.top_k
-                top_k_logits, top_k_indices = jax.lax.top_k(logits, top_k)
-                next_token_idx = jax.random.categorical(subkey, top_k_logits, axis=-1)
-                next_tokens = jnp.take_along_axis(top_k_indices, next_token_idx[:, None], axis=-1)
-
-                tokens_output = jnp.concatenate((tokens_output, next_tokens), axis=-1)
-                seq_lens = self.update_seq_lens(t=1, seq_lens=seq_lens)
-
-            return tokens_output
-        else:
-            initial_cache = self.model_module.init_kv_cache(x)
-            next_tokens, kv_cache, seq_lens = self.prefill(params, x, seq_lens, key, kv_cache=initial_cache)
-
-            tokens_output = jnp.concatenate((x, next_tokens), axis=-1)
-
-            for _ in range(T, self.max_seq_len):
-                print(f"Generated token {_}")
-                next_tokens, key, kv_cache, seq_lens, params = self.decode(
-                    (next_tokens, key, kv_cache, seq_lens, params)
-                )
-                tokens_output = jnp.concatenate((tokens_output, next_tokens), axis=-1)
-
-            return tokens_output
+        return tokens_output
 
     def multi_batch_decode(self, batch_tokens: Array, seq_lens: Array, key: Array, params: PyTree) -> Array:
         B, _ = batch_tokens.shape
@@ -163,14 +165,14 @@ if __name__ == "__main__":
         qwen_config=QwenConfig(
             vocab_size=151936,
             d_ff=3072,
-            sequence_len=128,
+            sequence_len=1024,
             model_dim=1024,
             n_heads=16,
             n_groups=8,
             head_dim=128,
             n_layers=28,
-            rope_base=10_000,
-            activation_dtype="bfloat16",
+            rope_base=1000000,
+            activation_dtype="float32",
         ),
     )
     model = Model(model_config)
@@ -180,12 +182,15 @@ if __name__ == "__main__":
     # inp = jnp.array([[0, 0, 1, 2, 3], [0, 0, 0, 2, 5], [3, 4, 5, 6, 9]], dtype=jnp.int32)
     # seq_lens = jnp.array([3, 2, 5], dtype=jnp.int32)
 
-    tokenizer_inp = ["What 2 + 2?"]
+    tokenizer_inp = [
+        "Create a generating series for the composition where each part is in 1 to 100. Put your answer in /boxed{}"
+    ]
     inp_tokens, sequence_lens = engine.tokenize(tokenizer_inp)
 
-    key = jax.random.PRNGKey(1230)
+    key = jax.random.PRNGKey(2303)
     params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
     output_tokens = engine.rollout(inp_tokens, sequence_lens, key, params)
 
     output = engine.detokenizer(output_tokens)
     print(output)
+    breakpoint()
