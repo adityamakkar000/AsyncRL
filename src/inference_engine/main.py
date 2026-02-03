@@ -21,6 +21,7 @@ class InferenceConfig:
     max_seq_len: int = 300
     batch_size: int = 128
     group_size: int = 1
+    kv_cache_dtype: str = "bfloat16"
 
 
 """
@@ -55,7 +56,7 @@ class InferenceEngine:
             seq_lens = jnp.array([curr_size])
             key = jax.random.PRNGKey(0)
             params = self.model_module.init_state(jax.random.PRNGKey(0), None, None)
-            kv_cache = self.model_module.init_kv_cache(x_init)
+            kv_cache = self.model_module.init_kv_cache(x_init, dtype=self.config.kv_cache_dtype)
 
             jit_func = jax.jit(self.prefill, static_argnums=(0,))
             self.precompile_dict[curr_size] = jit_func(params, x_init, seq_lens, key, kv_cache=kv_cache)
@@ -140,7 +141,7 @@ class InferenceEngine:
     def batch_decode(self, x: Array, seq_lens: Array, key: Array, params: PyTree) -> Array:
         B, T = x.shape
 
-        initial_cache = self.model_module.init_kv_cache(x)
+        initial_cache = self.model_module.init_kv_cache(x, dtype=self.config.kv_cache_dtype)
         key, prefill_key = jax.random.split(key)
         next_tokens, kv_cache, seq_lens = self.prefill(params, x, seq_lens, prefill_key, kv_cache=initial_cache)
 

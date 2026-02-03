@@ -98,9 +98,9 @@ class GroupedQueryAttention(nn.Module):
         B, T, C = x.shape
         t_start = kv_cache.length if kv_cache else 0
 
-        q = nn.Dense(features=self.d_out, use_bias=False, dtype=jnp.float32)(x)
-        k = nn.Dense(features=self.n_groups * self.head_dim, use_bias=False, dtype=jnp.float32)(x)
-        v = nn.Dense(features=self.n_groups * self.head_dim, use_bias=False, dtype=jnp.float32)(x)
+        q = nn.Dense(features=self.d_out, use_bias=False, dtype=self.activation_dtype)(x)
+        k = nn.Dense(features=self.n_groups * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
+        v = nn.Dense(features=self.n_groups * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
 
         q = einops.rearrange(q, "... t (h d) -> ... t h d", d=self.head_dim)
         k = einops.rearrange(k, "... t (g d) -> ... t g d", d=self.head_dim)
@@ -116,7 +116,7 @@ class GroupedQueryAttention(nn.Module):
             k, v = jax.tree.map(
                 lambda cache, val: jax.lax.dynamic_update_slice_in_dim(
                     cache, val.astype(cache.dtype), t_start, axis=1
-                ).astype(jnp.float32),
+                ).astype(self.activation_dtype),
                 (kv_cache.k, kv_cache.v),
                 (k, v),
             )
@@ -124,7 +124,7 @@ class GroupedQueryAttention(nn.Module):
 
         q = einops.rearrange(q, pattern="b t (g r) d -> b t g r d", g=k.shape[-2])
 
-        wei = jnp.einsum("btgrd, bTgd -> btTgr", q, k) * (self.head_dim**-0.5)
+        wei = jnp.einsum("btgrd, bTgd -> btTgr", q.astype(jnp.float32), k.astype(jnp.float32)) * (self.head_dim**-0.5)
 
         wei = einops.rearrange(wei, pattern="b t T g r -> b (g r) t T ")
 
@@ -135,10 +135,10 @@ class GroupedQueryAttention(nn.Module):
 
         wei = einops.rearrange(tensor=wei, pattern="b (g r ) t T -> b t T g r", g=k.shape[2])
 
-        out = jnp.einsum("btTgr, bTgd -> btgrd", wei, v)
+        out = jnp.einsum("btTgr, bTgd -> btgrd", wei, v.astype(jnp.float32))
         out = out.astype(x.dtype)
 
-        out = einops.rearrange(out, "b t g r d -> b t (g r d)")
+        out = einops.rearrange(out, "b t g r d -> b t (g r d)").astype(self.activation_dtype)
         out = nn.Dense(features=self.model_dim, use_bias=False, dtype=self.activation_dtype)(out)
 
         return out, kv_cache

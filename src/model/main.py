@@ -13,7 +13,7 @@ from stax.model_module import HFModelBase
 from src.model.qwen3 import KVCache, Qwen3
 
 from .config import ModelConfig
-from .utils import get_qwen_3_weights, save_to_hf
+from .utils import convert_dtype, get_qwen_3_weights, save_to_hf
 
 sizes = [0.6, 1.7, 4, 8]
 model_names = [f"Qwen/Qwen3-{size}B" for size in sizes]
@@ -63,18 +63,19 @@ class Model(HFModelBase):
     def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
         return get_qwen_3_weights(params, name=model_name)
 
-    def init_kv_cache(self, x: Array) -> list[KVCache]:
+    def init_kv_cache(self, x: Array, dtype: str = "bfloat16") -> list[KVCache]:
         B = x.shape[0]
         n_layers = self.config.qwen_config.n_layers
         n_groups = self.config.qwen_config.n_groups
         max_sequence_len = self.config.qwen_config.sequence_len
         head_dim = self.config.qwen_config.head_dim
+        cache_dtype = convert_dtype(dtype)
 
         initial_cache: list[KVCache] = []
         for _ in range(n_layers):
             length = 0
-            k = jnp.zeros((B, max_sequence_len, n_groups, head_dim), dtype=jnp.bfloat16)
-            v = jnp.zeros((B, max_sequence_len, n_groups, head_dim), dtype=jnp.bfloat16)
+            k = jnp.zeros((B, max_sequence_len, n_groups, head_dim), dtype=cache_dtype)
+            v = jnp.zeros((B, max_sequence_len, n_groups, head_dim), dtype=cache_dtype)
             _cache = KVCache(
                 k=k,
                 v=v,
