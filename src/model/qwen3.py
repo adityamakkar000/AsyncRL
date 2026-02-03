@@ -10,6 +10,45 @@ from .config import KVCache, QwenConfig
 from .utils import convert_dtype, make_attention_mask, make_prompt_mask
 
 
+class RoPEMatrixCache(nn.Module):
+    sequence_len: int
+    model_dim: int
+    rope_base: int
+
+    def setup(self):
+        pos = jnp.arange(0, self.model_dim, 2, dtype=jnp.float32) / self.model_dim
+        theta = 1.0 / (self.rope_base**pos)
+        inp = jnp.einsum("t,k->tk", jnp.arange(self.sequence_len), theta, precision=jax.lax.Precision.HIGHEST)
+
+        self.sin = jnp.sin(inp).astype(jnp.float32)
+        self.cos = jnp.cos(inp).astype(jnp.float32)
+
+    def get_rope_matrix(self, index_map) -> tuple[Array, Array]:
+        B, T = index_map.shape
+        index_map = index_map.reshape(B * T)
+
+        @jax.vmap
+        def get_single_sin_cos_row(input):
+            return jax.tree.map(
+                lambda x: jax.lax.dynamic_slice_in_dim(x, input, 1, axis=0),
+                (self.sin, self.cos),
+            )
+
+        return jax.tree.map(lambda x: x.reshape(B, 1, T, self.model_dim // 2), get_single_sin_cos_row(index_map))
+
+
+def apply_rope(x: jnp.ndarray, sin: jnp.ndarray, cos: jnp.ndarray) -> jnp.ndarray:
+    x = einops.rearrange(x, "b t g d -> b g t d")
+    *_, C = x.shape
+
+    x1, x2 = x[..., : C // 2], x[..., C // 2 :]
+
+    out = jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
+
+    out = einops.rearrange(out, pattern="b g t d -> b t g d")
+    return out
+
+
 class FeedForward(nn.Module):
     d_ff: int
     model_dim: int
@@ -36,50 +75,10 @@ class RMSNorm(nn.Module):
         return x
 
 
-class RoPE(nn.Module):
-    sequence_len: int
-    model_dim: int
-    rope_base: int
-
-    def setup(self):
-        assert self.model_dim % 2 == 0, "Hidden dimension must be even"
-
-        m = jnp.arange(0, self.sequence_len, dtype=jnp.float32)
-        pos = jnp.arange(0, self.model_dim, 2, dtype=jnp.float32) / self.model_dim
-        theta = 1.0 / (self.rope_base**pos)
-
-        inp = jnp.einsum("t,k->tk", m, theta, precision=jax.lax.Precision.HIGHEST)
-
-        self.sin = jnp.sin(inp).astype(jnp.float32)
-        self.cos = jnp.cos(inp).astype(jnp.float32)
-
-    def __call__(self, x: Array, index_map: Array):
-        x = einops.rearrange(x, "b t g d -> b g t d")
-        B, h, T, C = x.shape
-
-        index_map = index_map.reshape(-1)
-
-        @jax.vmap
-        def get_single_sin_cos_row(input):
-            sin = jax.lax.dynamic_slice(self.sin, (input, 0), (1, C // 2))
-            cos = jax.lax.dynamic_slice(self.cos, (input, 0), (1, C // 2))
-            return sin, cos
-
-        sin, cos = jax.tree.map(lambda x: x.reshape(B, T, C // 2)[:, None, ...], get_single_sin_cos_row(index_map))
-
-        x1, x2 = x[..., : C // 2], x[..., C // 2 :]
-
-        out = jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
-
-        out = einops.rearrange(out, pattern="b g t d -> b t g d")
-        return out
-
-
 class GroupedQueryAttention(nn.Module):
     model_dim: int
     n_heads: int
     n_groups: int
-    max_sequence_len: int
     head_dim: int
     rope_base: int
     activation_dtype: jnp.dtype = jnp.float32
@@ -92,7 +91,14 @@ class GroupedQueryAttention(nn.Module):
         self.d_out = self.n_heads * self.head_dim
 
     @nn.compact
-    def __call__(self, x: Array, seq_lens: jax.Array, kv_cache: Optional[KVCache] = None):
+    def __call__(
+        self,
+        x: Array,
+        sequence_lens: jax.Array,
+        mask: Array,
+        rope_matrix: tuple[Array, Array],
+        kv_cache: Optional[KVCache] = None,
+    ):
         B, T, C = x.shape
         t_start = kv_cache.length if kv_cache else 0
 
@@ -107,20 +113,15 @@ class GroupedQueryAttention(nn.Module):
         q = RMSNorm(self.activation_dtype)(q)
         k = RMSNorm(self.activation_dtype)(k)
 
-        prompt_mask = make_prompt_mask(T, seq_lens)
-        index_map = jnp.cumsum(prompt_mask, axis=-1)
-        # account for kv_cache length
-        index_map_with_offset = jnp.where(index_map > 0, index_map + t_start - 1, 0)
-
-        q = RoPE(self.max_sequence_len, self.head_dim, self.rope_base)(q, index_map_with_offset)
-        k = RoPE(self.max_sequence_len, self.head_dim, self.rope_base)(k, index_map_with_offset)
+        q = apply_rope(q, rope_matrix[0], rope_matrix[1])
+        k = apply_rope(k, rope_matrix[0], rope_matrix[1])
 
         if kv_cache:
-            k_cache, v_cache = kv_cache.k, kv_cache.v
-
             k, v = jax.tree.map(
-                lambda cache, val: jax.lax.dynamic_update_slice_in_dim(cache, val.astype(cache.dtype), t_start, axis=1),
-                (k_cache, v_cache),
+                lambda cache, val: jax.lax.dynamic_update_slice_in_dim(
+                    cache, val.astype(cache.dtype), t_start, axis=1
+                ).astype(jnp.float32),
+                (kv_cache.k, kv_cache.v),
                 (k, v),
             )
             kv_cache = KVCache(k=k, v=v, length=t_start + T)
@@ -131,8 +132,7 @@ class GroupedQueryAttention(nn.Module):
 
         wei = einops.rearrange(wei, pattern="b t T g r -> b (g r) t T ")
 
-        attention_mask = make_attention_mask(t=T, T=k.shape[1], seq_lens=seq_lens)
-        wei = jnp.where(attention_mask == 1, wei, -jnp.inf)
+        wei = jnp.where(mask == 1, wei, -jnp.inf)
         wei = jax.nn.softmax(wei, axis=-1)
         nan_mask = ~jnp.isnan(wei)
         wei = jnp.where(nan_mask == 1, wei, 0)
@@ -150,7 +150,6 @@ class GroupedQueryAttention(nn.Module):
 
 class Block(nn.Module):
     d_ff: int
-    sequence_len: int
     model_dim: int
     n_heads: int
     n_groups: int
@@ -159,18 +158,24 @@ class Block(nn.Module):
     activation_dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, x: Array, seq_lens: jax.Array, layer_cache: Optional[KVCache] = None):
+    def __call__(
+        self,
+        x: Array,
+        sequence_lens: jax.Array,
+        mask: Array,
+        rope_matrix: tuple[Array, Array],
+        layer_cache: Optional[KVCache] = None,
+    ):
         connection_1 = x
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)
         x, out_layer_cache = GroupedQueryAttention(
             model_dim=self.model_dim,
             n_heads=self.n_heads,
             n_groups=self.n_groups,
-            max_sequence_len=self.sequence_len,
             head_dim=self.head_dim,
             rope_base=self.rope_base,
             activation_dtype=self.activation_dtype,
-        )(x, seq_lens, layer_cache)
+        )(x, sequence_lens, mask, rope_matrix, layer_cache)
 
         x = x + connection_1
 
@@ -196,6 +201,7 @@ class Qwen3(nn.Module):
 
     @nn.compact
     def __call__(self, x: Array, sequence_lens: jax.Array, kv_cache: Optional[list[KVCache]] = None):
+        B, T = x.shape
         embed_layer = nn.Embed(
             num_embeddings=self.vocab_size,
             features=self.model_dim,
@@ -206,19 +212,36 @@ class Qwen3(nn.Module):
         x = embed_layer(x)
 
         out_cache = []
+
+        rope_cache = RoPEMatrixCache(sequence_len=self.sequence_len, model_dim=self.head_dim, rope_base=self.rope_base)
+
+        t_start = kv_cache[0].length if kv_cache else 0
+        prompt_mask = make_prompt_mask(self.sequence_len, cache_len=t_start + T, seq_lens=sequence_lens)
+        index_map = jnp.cumsum(prompt_mask, axis=-1)
+        # account for kv_cache length
+        index_map_with_offset = jnp.where(index_map > 0, index_map + t_start - 1, 0)
+        index_map_with_offset_sliced = jax.lax.dynamic_slice(index_map_with_offset, (0, t_start), (B, T))
+
+        sin, cos = rope_cache.get_rope_matrix(index_map_with_offset_sliced)
+
+        attention_mask = make_attention_mask(
+            query_shape=T,
+            key_shape=T if not kv_cache else self.sequence_len,
+            t_start=t_start,
+            seq_lens=sequence_lens,
+        )
+
         for i in range(self.n_layers):
             in_layer_cache = kv_cache[i] if kv_cache else None
             x, out_layer_cache = Block(
                 d_ff=self.d_ff,
-                sequence_len=self.sequence_len,
                 model_dim=self.model_dim,
                 n_heads=self.n_heads,
                 n_groups=self.n_groups,
                 head_dim=self.head_dim,
                 rope_base=self.rope_base,
                 activation_dtype=self.activation_dtype,
-            )(x, sequence_lens, in_layer_cache)
-
+            )(x, sequence_lens, attention_mask, (sin, cos), in_layer_cache)
             out_cache.append(out_layer_cache)
 
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)

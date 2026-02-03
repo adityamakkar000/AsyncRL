@@ -14,76 +14,50 @@ from safetensors.torch import save_file
 
 
 def convert_dtype(dtype_str: str) -> jnp.dtype:
-    if dtype_str == "float32":
-        return jnp.float32
-    elif dtype_str == "bfloat16":
-        return jnp.bfloat16
-    elif dtype_str == "float16":
-        return jnp.float16
-    else:
-        raise ValueError(f"Unsupported dtype string: {dtype_str}")
+    match dtype_str:
+        case "float32":
+            return jnp.float32
+        case "bfloat16":
+            return jnp.bfloat16
+        case "float16":
+            return jnp.float16
+        case _:
+            raise ValueError(f"Unsupported dtype string: {dtype_str}")
 
 
-def make_prompt_mask(padding_len: int, seq_lens: jax.Array) -> jax.Array:
+def make_prompt_mask(max_seq_len: int, cache_len, seq_lens: jax.Array) -> jax.Array:
     """
     Create a prompt mask to handle left-padding in sequences.
     Args:
-        padding_len (int): The total length of the sequences including padding.
-        seq_lens (jax.Array): Array of sequence lengths for each batch element.
-    Returns:
-        jax.Array: Prompt mask of shape (batch_size, padding_len).
-
+        max_seq_len (int): The maximum sequence length including padding.
+        cache_len (int): The length of the cached tokens.
+        seq_lens (jax.Array): Array of sequence lengths for each batch element. Each element should be less than cache_len.
     example:
         seq_lens = jnp.array([3, 5])
-        padding_len = 5
-        [[0 1 2 3 4]] >= [[2], [0]]
+        max_seq_len = 5
+        cache_len = 4
+        padding_mask = [[0 1 2 3 4]] >= [[2], [0]]
+        padding_mask = [[False True  True  True  True]
+                        [ True  True  True  True  True]]
+        cache_mask = [[0 1 2 3 4]] < 4
+        cache_mask = [[ True  True  True  True  False]]
         returns:
-        [[0 0 1 1 1]
-            [1 1 1 1 1]]
+        [[False False  True  True False]
+         [ True  True  True  True False]]
     """
-
-    return jnp.arange(padding_len)[None, :] >= (padding_len - seq_lens[:, None])
-
-
-def make_tril_mask(t: int, T: int) -> jax.Array:
-    """
-    Create a lower triangular mask for causal attention.
-    Args:
-        t (int): Current time step or query length.
-        T (int): Total sequence length or key length.
-    Returns:
-        jax.Array: Lower triangular mask of shape (t, T) [last row will always be True].
-
-    example:
-        t = 3
-        T = 5
-
-        T_arange = [[0 1 2 3 4]]
-        query_position = [[0 1 2 3 4],
-                            [0 1 2 3 4],
-                            [0 1 2 3 4]]
-        key_position  = [[ 0 0 0 0 0],
-                            [ 1 1 1 1 1],
-                            [ 2 2 2 2 2],
-                            [ 3 3 3 3 3],
-                            [ 4 4 4 4 4]]
-        key_position[-t:] = [[2 2 2 2 2],
-                                [3 3 3 3 3],
-                                [4 4 4 4 4]]
-        returns:
-        [[True True True False False],
-            [True True True True False],
-            [True True True True True]]
-
-    """
-
-    T_arange = jnp.arange(T)[None, :]
-    query_position = jnp.repeat(T_arange, t, axis=0)
-    key_position = jnp.transpose(jnp.repeat(T_arange, T, axis=0))
-    return query_position <= key_position[-t:, :]
+    raw_length = jnp.arange(max_seq_len)[None, :]
+    # left padding mask
+    padding_mask = raw_length >= (cache_len - seq_lens[:, None])
+    # cache mask
+    cache_mask = raw_length < cache_len
+    return padding_mask & cache_mask
 
 
-def make_attention_mask(t: int, T: int, seq_lens: jax.Array) -> jax.Array:
+def make_tril_mask(query_shape, key_shape, t_start) -> jax.Array:
+    return (jnp.arange(query_shape)[:, None] + t_start) >= (jnp.arange(key_shape)[None, :])
+
+
+def make_attention_mask(query_shape: int, key_shape: int, t_start: int, seq_lens: jax.Array) -> jax.Array:
     """
     Create an attention mask for sequences with padding and causal masking.
     Args:
@@ -112,8 +86,8 @@ def make_attention_mask(t: int, T: int, seq_lens: jax.Array) -> jax.Array:
           [1 1 1 1 1]]]
     """
 
-    prompt_mask = make_prompt_mask(padding_len=T, seq_lens=seq_lens)
-    tril = make_tril_mask(t, T)[None, None, :, :]  # 1,1, t, T
+    prompt_mask = make_prompt_mask(key_shape, t_start + query_shape, seq_lens)  # B, key_shape
+    tril = make_tril_mask(query_shape, key_shape, t_start)[None, None, :, :]  # 1,1, query_shape, key_shape
     return prompt_mask[:, None, None, :] * tril
 
 
