@@ -1,4 +1,4 @@
-from .config import KVCache, ModelConfig
+from .config import KVCache, ModelConfig, QwenConfig
 from .main import Model
 
-__all__ = ["Model", "ModelConfig", "KVCache"]
+__all__ = ["Model", "ModelConfig", "KVCache", "QwenConfig"]
