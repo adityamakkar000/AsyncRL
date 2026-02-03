@@ -14,6 +14,7 @@ from safetensors.torch import save_file
 
 
 def convert_dtype(dtype_str: str) -> jnp.dtype:
+    """Convert a string representation of a data type to a JAX data type."""
     match dtype_str:
         case "float32":
             return jnp.float32
@@ -25,25 +26,33 @@ def convert_dtype(dtype_str: str) -> jnp.dtype:
             raise ValueError(f"Unsupported dtype string: {dtype_str}")
 
 
-def make_prompt_mask(max_seq_len: int, cache_len, seq_lens: jax.Array) -> jax.Array:
+def make_prompt_mask(max_seq_len: int, cache_len, seq_lens: Array) -> Array:
     """
-    Create a prompt mask to handle left-padding in sequences.
-    Args:
-        max_seq_len (int): The maximum sequence length including padding.
-        cache_len (int): The length of the cached tokens.
-        seq_lens (jax.Array): Array of sequence lengths for each batch element. Each element should be less than cache_len.
-    example:
-        seq_lens = jnp.array([3, 5])
-        max_seq_len = 5
-        cache_len = 4
-        padding_mask = [[0 1 2 3 4]] >= [[2], [0]]
-        padding_mask = [[False True  True  True  True]
-                        [ True  True  True  True  True]]
-        cache_mask = [[0 1 2 3 4]] < 4
-        cache_mask = [[ True  True  True  True  False]]
-        returns:
-        [[False False  True  True False]
-         [ True  True  True  True False]]
+    This function generates a boolean mask that identifies valid (non-padded) tokens
+    within the cache region of each sequence. It handles left-padded sequences by
+    masking out padding tokens at the beginning of each sequence.
+
+        max_seq_len (int): The maximum sequence length including any tokens beyond the cache.
+        cache_len (int): The length of the cached tokens (KV cache size).
+        seq_lens (Array): Array of shape (batch_size,) containing the actual
+            sequence lengths for each batch element. Each element should be <= cache_len.
+
+    Returns:
+        Array: A boolean mask of shape (batch_size, max_seq_len) where True indicates
+            valid (non-padded) tokens within the cache region, and False indicates either
+            padding tokens or positions beyond the cache.
+
+    Example:
+        >>> seq_lens = jnp.array([3, 5])
+        >>> max_seq_len = 5
+        >>> cache_len = 4
+        >>> make_prompt_mask(max_seq_len, cache_len, seq_lens)
+        # Returns:
+        # [[False, False, True, True, False],
+        #  [True,  True,  True, True, False]]
+        #
+        # First sequence: 3 valid tokens, left-padded with 1 token, 1 position beyond cache
+        # Second sequence: 4 valid tokens (capped by cache_len), 1 position beyond cache
     """
     raw_length = jnp.arange(max_seq_len)[None, :]
     # left padding mask
@@ -53,24 +62,54 @@ def make_prompt_mask(max_seq_len: int, cache_len, seq_lens: jax.Array) -> jax.Ar
     return padding_mask & cache_mask
 
 
-def make_tril_mask(query_shape, key_shape, t_start) -> jax.Array:
+def make_tril_mask(query_shape: int, key_shape: int, t_start: int) -> Array:
+    """
+    Create a lower triangular mask for attention mechanisms.
+    This function generates a boolean mask where each query position can only
+    attend to key positions that are at or before its temporal position,
+    adjusted by a starting offset.
+    Args:
+        query_shape: The size of the query dimension (number of query positions).
+        key_shape: The size of the key dimension (number of key positions).
+        t_start: The temporal offset to apply to query positions.
+    Returns:
+        Array: A boolean array of shape (query_shape, key_shape) where
+            True indicates the query position can attend to the key position
+            (i.e., query_position + t_start >= key_position).
+    Example:
+        >>> t = 3
+        >>> T = 5
+        >>> tril_mask = make_tril_mask(t, T, t_start=0)
+        # Returns:
+        # [[ True, False, False, False, False],
+        #  [ True,  True, False, False, False],
+        #  [ True,  True,  True, False, False]]
+        # Each query position can attend to all key positions up to its own index.
+        >>> tril_mask = make_tril_mask(t, T, t_start=2)
+        # Returns:
+        # [[True, True, True, False, False],
+        #  [ True, True, True, True, False],
+        #  [ True,  True, True, True, True]]
+    """
+
     return (jnp.arange(query_shape)[:, None] + t_start) >= (jnp.arange(key_shape)[None, :])
 
 
-def make_attention_mask(query_shape: int, key_shape: int, t_start: int, seq_lens: jax.Array) -> jax.Array:
+def make_attention_mask(query_shape: int, key_shape: int, t_start: int, seq_lens: Array) -> Array:
     """
     Create an attention mask for sequences with padding and causal masking.
     Args:
-        t (int): Current time step or query length.
-        T (int): Total sequence length or key length.
-        seq_lens (jax.Array): Array of sequence lengths for each batch element.
+        query_shape (int): Current time step or query length.
+        key_shape (int): Total sequence length or key length.
+        t_start (int): The temporal offset to apply to query positions.
+        seq_lens (Array): Array of sequence lengths for each batch element.
     Returns:
-        jax.Array: Attention mask of shape (batch_size, 1, t, T).
+        Array: Attention mask of shape (batch_size, 1, query_shape, key_shape).
 
     example:
         seq_lens = jnp.array([3, 5])
-        t = 3
-        T = 5
+        query_shape = 3
+        key_shape = 5
         prompt_mask = [[0 0 1 1 1]
                        [1 1 1 1 1]]
         tril = [[[True True True False False],
@@ -138,6 +177,7 @@ REVERSE_HF_MAPPING = {
 
 
 def download_hf_weights(name: str):
+    """Download model weights from Hugging Face if not already present locally."""
     if not os.path.isdir(name):
         snapshot_download(
             repo_id=name,
@@ -147,6 +187,7 @@ def download_hf_weights(name: str):
 
 
 def get_jax_key(main_key: str) -> str | None:
+    """Convert Hugging Face parameter key to JAX parameter key using the mapping."""
     matching_keys = []
     for hf_key, jax_p in HF_MAPPING.items():
         if re.match(hf_key, main_key):
@@ -159,6 +200,7 @@ def get_jax_key(main_key: str) -> str | None:
 
 
 def get_qwen_3_weights(params: PyTree, name: str) -> PyTree:
+    """Load Hugging Face model weights into a JAX PyTree of parameters."""
     download_hf_weights(name)
     torch_hf_params = {}
 
@@ -190,6 +232,7 @@ def get_qwen_3_weights(params: PyTree, name: str) -> PyTree:
 
 
 def convert_weights(name: str, param: Array) -> torch.Tensor:
+    """Convert JAX parameter to Hugging Face compatible tensor format."""
     return torch.Tensor(param.T if "kernel" in name else param).contiguous()
 
 

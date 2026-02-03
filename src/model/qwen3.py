@@ -34,18 +34,14 @@ class RoPEMatrixCache(nn.Module):
                 (self.sin, self.cos),
             )
 
-        return jax.tree.map(lambda x: x.reshape(B, 1, T, self.model_dim // 2), get_single_sin_cos_row(index_map))
+        return jax.tree.map(lambda x: x.reshape(B, T, 1, self.model_dim // 2), get_single_sin_cos_row(index_map))
 
 
 def apply_rope(x: jnp.ndarray, sin: jnp.ndarray, cos: jnp.ndarray) -> jnp.ndarray:
-    x = einops.rearrange(x, "b t g d -> b g t d")
     *_, C = x.shape
-
     x1, x2 = x[..., : C // 2], x[..., C // 2 :]
-
     out = jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
 
-    out = einops.rearrange(out, pattern="b g t d -> b t g d")
     return out
 
 
