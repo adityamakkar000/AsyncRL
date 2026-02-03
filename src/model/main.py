@@ -116,7 +116,7 @@ class Model(HFModelBase):
             ),
         )
         assert hasattr(restored, "state"), "Restored object has no attribute 'state'"
-        assert restored.state, "Restored state has no 'params' key"
+        assert restored.state, "Restored has no state"
 
         return step_number, restored.state["params"]
 
