@@ -89,19 +89,18 @@ class InferenceEngine:
         return final_tokens[:, None], cache, self.update_seq_lens(1, seq_lens)
 
     @partial(jax.jit, static_argnums=(0,))
-    def decode(self, state: tuple[Array, Array, Array, Array, Array]) -> tuple[Array, Array, Array, Array, Array]:
-        x, key, kv_cache, seq_lens, params = state
+    def decode(self, state: tuple[Array, Array, Array, Array]) -> tuple[Array, Array, Array, Array, Array]:
+        x, kv_cache, seq_lens, params = state
 
         logits, out_cache = self.model.apply(params, x=x, sequence_lens=seq_lens, kv_cache=kv_cache)
-        key, subkey = jax.random.split(key)
 
-        next_tokens = jax.random.categorical(subkey, logits[:, -1, :], axis=-1)[:, None]
+        next_tokens = jax.random.categorical(key, logits[:, -1, :] / self.config.temperature, axis=-1)[:, None]
         seq_lens = self.update_seq_lens(t=1, seq_lens=seq_lens)
-        return (next_tokens, subkey, out_cache, seq_lens, params)
+        return (next_tokens, out_cache, seq_lens, params)
 
     def batch_decode(self, x: Array, seq_lens: Array, key: Array, params: PyTree) -> Array:
         B, T = x.shape
-        debug = True
+        debug = False
 
         if debug:
             tokens_output = x
@@ -129,8 +128,10 @@ class InferenceEngine:
             tokens_output = jnp.concatenate((x, next_tokens), axis=-1)
 
             for _ in range(T, self.max_seq_len):
-                next_tokens, key, kv_cache, seq_lens, params = self.decode(
-                    (next_tokens, key, kv_cache, seq_lens, params)
+                print(f"Generated token {_}")
+                key, subkey = jax.random.split(key)
+                next_tokens, kv_cache, seq_lens, params = self.decode(
+                    (next_tokens, subkey, kv_cache, seq_lens, params)
                 )
                 tokens_output = jnp.concatenate((tokens_output, next_tokens), axis=-1)
 
@@ -182,7 +183,7 @@ if __name__ == "__main__":
     tokenizer_inp = ["What 2 + 2?"]
     inp_tokens, sequence_lens = engine.tokenize(tokenizer_inp)
 
-    key = jax.random.PRNGKey(0)
+    key = jax.random.PRNGKey(1230)
     params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
     output_tokens = engine.rollout(inp_tokens, sequence_lens, key, params)
 
