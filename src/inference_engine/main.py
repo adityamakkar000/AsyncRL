@@ -63,12 +63,9 @@ class InferenceEngine:
             for text in texts
         ]
         padding_length = self.calculate_max_padding_length(inputs)
-        # inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
-        breakpoint()
+        seq_lens = jnp.array([len(x) for x in inputs], dtype=jnp.int32)
+        inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
         tokens = jnp.array(inputs)
-        mask = tokens != self.tokenizer.pad_token_id
-        seq_lens = jnp.sum(mask, axis=-1)
-        breakpoint()
 
         return tokens, seq_lens
 
@@ -146,8 +143,8 @@ class InferenceEngine:
         for i in range(batches):
             tokens = batch_tokens[i * self.batch_size : (i + 1) * self.batch_size]
             seq_lens_batch = seq_lens[i * self.batch_size : (i + 1) * self.batch_size]
-            self.batch_decode(tokens, seq_lens_batch, key, params)
-            output_tokens = jnp.concatenate((output_tokens, tokens), axis=0)
+            batch_output = self.batch_decode(tokens, seq_lens_batch, key, params)
+            output_tokens = jnp.concatenate((output_tokens, batch_output), axis=0)
 
         return output_tokens
 
@@ -165,7 +162,7 @@ if __name__ == "__main__":
         qwen_config=QwenConfig(
             vocab_size=151936,
             d_ff=3072,
-            sequence_len=20,
+            sequence_len=128,
             model_dim=1024,
             n_heads=16,
             n_groups=8,
@@ -190,4 +187,4 @@ if __name__ == "__main__":
     output_tokens = engine.rollout(inp_tokens, sequence_lens, key, params)
 
     output = engine.detokenizer(output_tokens)
-    breakpoint()
+    print(output)
