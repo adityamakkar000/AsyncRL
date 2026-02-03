@@ -123,7 +123,7 @@ class GroupedQueryAttention(nn.Module):
                 (k_cache, v_cache),
                 (k, v),
             )
-            kv_cache = KVCache(k=k_cache, v=v_cache, length=t_start + T)
+            kv_cache = KVCache(k=k, v=v, length=t_start + T)
 
         q = einops.rearrange(q, pattern="b t (g r) d -> b t g r d", g=k.shape[-2])
 
