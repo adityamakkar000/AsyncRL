@@ -18,11 +18,11 @@ from .config import InferenceConfig
 - fix up static batching
 - integrate dataclass for return outputs from prefill 
 - precompile along batch and T for prefill
-- precombpile decode along batch 
+- precompile decode along batch 
 - max sequence length + stop token breaking
 - roll kv cache 
 - donate kv cache memory optimization 
-- setup inference  loop
+- setup inference loop
 - integrate tokenizer into single call function
 - return back prob tokens
 - precompile attention length so no need to do full 16k for every turn

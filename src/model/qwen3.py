@@ -136,9 +136,9 @@ class GroupedQueryAttention(nn.Module):
         wei = einops.rearrange(tensor=wei, pattern="b (g r ) t T -> b t T g r", g=k.shape[2])
 
         out = jnp.einsum("btTgr, bTgd -> btgrd", wei, v.astype(jnp.float32))
-        out = out.astype(x.dtype)
+        out = out.astype(self.activation_dtype)
 
-        out = einops.rearrange(out, "b t g r d -> b t (g r d)").astype(self.activation_dtype)
+        out = einops.rearrange(out, "b t g r d -> b t (g r d)")
         out = nn.Dense(features=self.model_dim, use_bias=False, dtype=self.activation_dtype)(out)
 
         return out, kv_cache
