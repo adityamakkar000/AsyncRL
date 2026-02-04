@@ -126,9 +126,8 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
-        train: bool = True,
     ) -> PyTree:
-        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, train=train)
+        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache)
 
         return logits, cache
 
@@ -139,6 +138,5 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
-        train: bool = True,
     ) -> PyTree:
-        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, train=train)
+        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache)
