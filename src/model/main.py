@@ -4,10 +4,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
+from flax import linen as nn
 from jax.sharding import Sharding, SingleDeviceSharding
 from jaxtyping import Array, PyTree
 from omegaconf import DictConfig
 from optax import GradientTransformation
+from stax.logger import staxLogger as logger
 from stax.model_module import HFModelBase
 
 from src.model.qwen3 import KVCache, Qwen3
@@ -57,6 +59,9 @@ class Model(HFModelBase):
         if out_state.keys() != sharding.keys():
             raise ValueError(f"sharding keys do not match got {sharding.keys()} expected {out_state.keys()}")
         out_state = jax.tree.map(lambda x, s: jax.device_put(x, s), out_state, sharding)
+
+        table = nn.tabulate(self.model, rngs=jax.random.PRNGKey(0), depth=1)
+        logger.info(table(x=x_init, seq_lens=seq_lens, kv_cache=None))
 
         return out_state
 
