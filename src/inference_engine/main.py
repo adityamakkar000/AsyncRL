@@ -6,6 +6,7 @@ from typing import Optional
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, PyTree
+from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
 from src.model import KVCache, Model, ModelConfig, QwenConfig
@@ -55,6 +56,7 @@ class InferenceEngine:
             kv_cache = self.model_module.init_kv_cache(x_init, dtype=self.config.kv_cache_dtype)
 
             self.precompile_dict[curr_seq_len] = jax.jit(self.prefill)
+            logger.info(f"Precompiled prefill function for sequence length {curr_seq_len}")
             _output = self.precompile_dict[curr_seq_len](params, x_init, seq_lens, key, kv_cache=kv_cache)
             curr_seq_len *= 2
 
