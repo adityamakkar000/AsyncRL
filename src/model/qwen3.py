@@ -222,7 +222,7 @@ class Qwen3(nn.Module):
 
         attention_mask = make_attention_mask(
             query_shape=T,
-            key_shape=T if not kv_cache else self.sequence_len,
+            key_shape=T if not kv_cache else kv_cache[0].k.shape[1],
             t_start=t_start,
             seq_lens=sequence_lens,
         )
