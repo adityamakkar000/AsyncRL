@@ -196,7 +196,10 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "ruff", specifier = ">=0.14.10" },
     { name = "stax", git = "https://github.com/adityamakkar000/stax.git" },
+<<<<<<< HEAD
     { name = "tfds-nightly", marker = "extra == 'data'", specifier = ">=4.9.9.dev202510250044" },
+=======
+>>>>>>> 47d89d5 (remove model changes)
     { name = "torch", specifier = ">=2.9.0" },
     { name = "transformers", specifier = ">=4.57.3" },
     { name = "vllm-tpu", marker = "extra == 'eval'", specifier = "==0.12.0" },
@@ -4458,7 +4461,11 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
+<<<<<<< HEAD
 source = { git = "https://github.com/adityamakkar000/stax.git#d70984d96a0fd688f78ce53ff302a944e35f8ca5" }
+=======
+source = { git = "https://github.com/adityamakkar000/stax.git#080e26cebb5b008814224d5fc907987973f4c273" }
+>>>>>>> 47d89d5 (remove model changes)
 dependencies = [
     { name = "flax" },
     { name = "jax" },
