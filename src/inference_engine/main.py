@@ -70,6 +70,7 @@ class InferenceEngine:
             self.precompile_dict["prefill"][curr_seq_len] = jax.jit(self.prefill)
             _output = self.precompile_dict["prefill"][curr_seq_len](x_init, state)
             curr_seq_len *= 2
+        logger.info("Finished prefill precompile")
 
     def precompile_decode(self, params: PyTree) -> None:
         curr_size = self.inital_sequence_len
@@ -149,6 +150,7 @@ class InferenceEngine:
         return next_tokens
 
     def prefill(self, input_tokens: Array, state: InferenceState) -> InferenceState:
+        logger.info(f"Compiling prefill for sequence length {input_tokens.shape[1]}")
         key, sample_key = jax.random.split(state.key)
         logits, out_cache = self.model.apply(
             state.params, x=input_tokens, sequence_lens=state.seq_lens, kv_cache=state.kv_cache
