@@ -1,4 +1,5 @@
 from functools import partial
+from typing import Dict
 
 import jax
 import jax.numpy as jnp
@@ -135,14 +136,15 @@ def get_rl_step_fn(config: RLConfig) -> StepFn:
         x_logprobs = model.apply(params, x=batch.tokens, sequence_lens=batch.seq_lens, kv_cache=None, train=train)
         loss, aux_metrics = loss_fn(x_logprobs, batch)
 
-        # since we are gradient descenting we want to minimize the loss 
+        # since we are gradient descenting we want to minimize the loss
         # hence negate the loss you want to maximize
-        loss *= -1.0  
+        loss *= -1.0
 
         return loss, aux_metrics
 
     # TODO: (anyone) figure out why this is erroring
     return step_fn  # type: ignore
+
 
 @jax.jit
 def compute_aux_metrics(batch: RLBatch) -> Dict[str, jnp.ndarray]:
@@ -154,4 +156,3 @@ def compute_aux_metrics(batch: RLBatch) -> Dict[str, jnp.ndarray]:
         "mean_length": jnp.mean(batch.token_mask.sum(axis=1)),
         "median_length": jnp.median(batch.token_mask.sum(axis=1)),
     }
-
