@@ -179,14 +179,10 @@ class Trainer:
         def train_step(param: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
             aux_metrics = {}
             for step in range(self.config.loss_config.grad_steps):
-                out = train_fn(
-                    self.params,
-                    self.opt_state,
-                    batch
-                )
+                out = train_fn(self.params, self.opt_state, batch)
                 self.params = out["params"]
                 self.opt_state = out["opt_state"]
-                aux_metrics |= {f"{k}_step_{step}": v for k,v in out["aux_metrics"].items()}
+                aux_metrics |= {f"{k}_step_{step}": v for k, v in out["aux_metrics"].items()}
 
             return {
                 "params": self.params,
@@ -194,7 +190,7 @@ class Trainer:
                 "aux_metrics": aux_metrics | compute_aux_metrics(batch),
             }
 
-        self.train_step : TrainFn = train_step
+        self.train_step: TrainFn = train_step
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
@@ -382,13 +378,12 @@ class Trainer:
         assert self.checkpointer is not None, "Checkpointer not set up."
 
         logger.info("Starting training loop...")
-        while (self.global_step < self.total_steps):
-
-            # get train batch 
+        while self.global_step < self.total_steps:
+            # get train batch
             # TODO: (chinmay)
             # prompts = self.train_dataset()
 
-            # get rollouts 
+            # get rollouts
             # TODO: (divya)
             # inference_engine.rollout(prompts)
 
@@ -397,21 +392,17 @@ class Trainer:
             # train_batch = self.train_dataset.prepare_batch(rollouts)
             train_batch = ...
 
-            out = self.train_step(
-                self.params,
-                self.opt_state,
-                train_batch
-            )
+            out = self.train_step(self.params, self.opt_state, train_batch)
             self.params = out["params"]
             self.opt_state = out["opt_state"]
             self.writer(self.global_step, out["aux_metrics"])
 
             if self.global_step % self.config.val_interval == 0:
-                #TODO: val step here
+                # TODO: val step here
                 ...
 
             self.global_step += 1
-        
+
         logger.info("Training complete.")
 
     @partial(setup, component="cleanup")
