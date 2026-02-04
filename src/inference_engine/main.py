@@ -34,6 +34,9 @@ class InferenceEngine:
         self.config = config
         self.max_seq_len = config.max_seq_len
         self.batch_size = config.batch_size
+        self.group_size = config.group_size
+        self.num_prompts = self.batch_size // self.group_size
+        self.inital_sequence_len = 128
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model.config.hf_model_name)
 
@@ -43,23 +46,33 @@ class InferenceEngine:
         }
 
         self.precompile_decode(params)
+        self.precompile_prefill(params)
 
-    def precompile(self) -> None:
-        self.precompile_dict = {}
-        curr_size = 2
-        while curr_size <= self.max_seq_len:
-            x_init = jnp.ones((1, curr_size), dtype=jnp.int32)
-            seq_lens = jnp.array([curr_size])
-            key = jax.random.PRNGKey(0)
-            params = self.model.init_state(jax.random.PRNGKey(0), None, None)
-            kv_cache = self.model.init_kv_cache(x_init, dtype=self.config.kv_cache_dtype)
+    def precompile_prefill(self, params: PyTree) -> None:
+        """Precompile prefill function for different sequence lengths up to max_seq_len.
+        The structure self.precompiled_dict = dict[seq_len --> compiled_fn]."""
 
-            jit_func = jax.jit(self.prefill, static_argnums=(0,))
-            self.precompile_dict[curr_size] = jit_func(params, x_init, seq_lens, key, kv_cache=kv_cache)
-            curr_size *= 2
+        curr_seq_len = self.inital_sequence_len
+        key = jax.random.PRNGKey(0)
+        seq_lens = jnp.array([1] * self.num_prompts)
+        kv_cache = self.model.init_kv_cache(jnp.ones((self.batch_size, 1)), dtype=self.config.kv_cache_dtype)
+
+        while curr_seq_len <= self.max_seq_len:
+            x_init = jnp.ones((self.num_prompts, curr_seq_len), dtype=jnp.int32)
+            state = InferenceState(
+                next_token=jnp.ones((self.num_prompts, 1), dtype=jnp.int32),
+                kv_cache=kv_cache,
+                key=key,
+                seq_lens=seq_lens,
+                params=params,
+            )
+
+            self.precompile_dict["prefill"][curr_seq_len] = jax.jit(self.prefill)
+            _output = self.precompile_dict["prefill"][curr_seq_len](x_init, state)
+            curr_seq_len *= 2
 
     def precompile_decode(self, params: PyTree) -> None:
-        curr_size = 128  # start at 128 sequence length
+        curr_size = self.inital_sequence_len
 
         state = InferenceState(
             next_token=jnp.ones((self.batch_size, 1), dtype=jnp.int32),
@@ -78,8 +91,8 @@ class InferenceEngine:
     def compute_max_power_of_two(self, n: int, upper_bound: int) -> int:
         return min(1 << (n.bit_length()), upper_bound)
 
-    def compute_max_padding_length(self, seq_lens: list[int]) -> int:
-        return self.compute_max_power_of_two(max(seq_lens), self.max_seq_len)
+    def compute_max_padding_length(self, seq_lens: Array) -> int:
+        return self.compute_max_power_of_two(max(seq_lens).item(), self.max_seq_len)
 
     def compute_attention_length(self, cache_length) -> int:
         return self.compute_max_power_of_two(cache_length, self.model.config.qwen_config.sequence_len)
@@ -91,7 +104,7 @@ class InferenceEngine:
             )
             for text in texts
         ]
-        seq_lens = [len(x) for x in inputs]
+        seq_lens = jnp.array([len(x) for x in inputs], dtype=jnp.int32)
         padding_length = self.compute_max_padding_length(seq_lens)
         inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
         tokens = jnp.array(inputs)
@@ -180,13 +193,18 @@ class InferenceEngine:
 
         # TODO: use stax timer and use a blocking call
         start_time = time.perf_counter()
-        inference_state = self.prefill(x, inference_state)
+
+        precompiled_length = max(self.inital_sequence_len, self.compute_max_padding_length(seq_lens))
+        inference_state = self.precompile_dict["prefill"][precompiled_length](x, inference_state)
         ttft_time = jnp.array(time.perf_counter() - start_time)
 
         out_tokens = jnp.concatenate((out_tokens, inference_state.next_token), axis=-1)
         tps = []
 
-        attention_len: int = self.compute_attention_length(inference_state.kv_cache[0].length)
+        attention_len: int = max(
+            self.compute_attention_length(inference_state.kv_cache[0].length),
+            self.inital_sequence_len
+        )
 
         start_time = time.perf_counter()
         for _ in range(T + 1, self.max_seq_len):
@@ -235,7 +253,15 @@ class InferenceEngine:
         return output, metrics
 
 
+def get_memory_usage():
+    stats = jax.local_devices()[0].memory_stats()
+    return stats["bytes_in_use"] / (1024**3)
+
+
 if __name__ == "__main__":
+    print(f"Memory inital: {get_memory_usage()}")  # 6.48e-05 GB
+
+    # ------------ init model --------------
     model_config = ModelConfig(
         "Qwen/Qwen3-0.6B",
         qwen_config=QwenConfig(
@@ -260,8 +286,8 @@ if __name__ == "__main__":
 
     engine = InferenceEngine(model, params, config)
 
-    # inp = jnp.array([[0, 0, 1, 2, 3], [0, 0, 0, 2, 5], [3, 4, 5, 6, 9]], dtype=jnp.int32)
-    # seq_lens = jnp.array([3, 2, 5], dtype=jnp.int32)
+    key = jax.random.PRNGKey(2303)
+    params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
 
     tokenizer_inp = ["Create a generating series for the composition of parts in {1, 2, \ldots, 100}"]
 
@@ -272,4 +298,3 @@ if __name__ == "__main__":
 
     output = engine.detokenizer(output_tokens)
     print(metrics)
-    breakpoint()
