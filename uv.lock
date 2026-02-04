@@ -178,7 +178,7 @@ requires-dist = [
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "ruff", specifier = ">=0.14.10" },
-    { name = "stax", git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FexposeTypeSignature" },
+    { name = "stax", git = "https://github.com/adityamakkar000/stax.git" },
     { name = "torch", specifier = ">=2.9.0" },
     { name = "transformers", specifier = ">=4.57.3" },
     { name = "vllm-tpu", marker = "extra == 'eval'", specifier = "==0.12.0" },
@@ -3606,7 +3606,7 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FexposeTypeSignature#f6303578e5a0761d0c7c65cb7a84c23e5e6261c8" }
+source = { git = "https://github.com/adityamakkar000/stax.git#080e26cebb5b008814224d5fc907987973f4c273" }
 dependencies = [
     { name = "flax" },
     { name = "jax" },
