@@ -16,7 +16,7 @@ from src.constants import CACHE, CHECKPOINTS, GS_BUCKET
 from src.model import Model
 
 from .config import TrainerConfig
-from .steps import sft_step, standard_rl_step
+from .steps import sft_step
 from .utils import Key, set_jax_cache, setup, write_to_gcs
 
 load_dotenv()
@@ -50,14 +50,18 @@ class Trainer:
             self._setup_dataset()
             self._setup_train_state()
             self._setup_writer()
+            self._setup_inference_engine()
 
             assert self.checkpointer is not None, "Checkpointer not set up."
             if self.checkpointer.latest_step is None:
                 logger.info("Saving intial checkpoint ...")
                 self.save_checkpoint(step=self.global_step)
+
+                # write config to gcs
                 dict_config = json.dumps(OmegaConf.to_container(self.config))
                 config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
                 write_to_gcs(config_path, dict_config)
+
                 self.checkpointer.wait_until_finished()
 
             sync_global_devices("Trainer initialization")
@@ -247,6 +251,13 @@ class Trainer:
             best_key=self.config.best_metric.name if self.has_best_ckpt else None,  # type: ignore
             best_mode="max" if self.has_best_ckpt and self.config.best_metric.maximize else "min",  # type: ignore
         )
+
+    @partial(setup, component="inference engine")
+    def _setup_inference_engine(self):
+        """Setup the inference engine for generation during training."""
+        assert self.model is not None, "Model must be set up before inference engine init."
+        # TODO: Divya
+        ...
 
     def make_save_tree(
         self,
