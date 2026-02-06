@@ -1,7 +1,8 @@
 import argparse
-import gcsfs
 import json
 from typing import Iterable, Optional
+
+import gcsfs
 
 from src.data.dataset import OmniMath, load_omni_math
 
