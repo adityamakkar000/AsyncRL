@@ -1,5 +1,5 @@
-from dataclasses import dataclass
 import random
+from dataclasses import dataclass, load_dataset
 from typing import Any, Optional
 
 # from src.data.config import DataConfig -- remove when not testing
@@ -129,7 +129,6 @@ def load_omni_math(
     source_contains: Optional[str] = None,
 ) -> list[OmniMath]:
 
-    load_dataset = _require_datasets()
     ds = load_dataset(name, split=split, cache_dir=cache_dir)
 
     examples: list[OmniMath] = []

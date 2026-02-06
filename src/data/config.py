@@ -1,6 +1,8 @@
 from dataclasses import dataclass
+
 import jax
 from flax import struct
+
 
 @dataclass
 class DataConfig:
