@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-import jax  # type: ignore[import-not-found]
+import jax
 from flax import struct
 
 @dataclass
