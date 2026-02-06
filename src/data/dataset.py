@@ -6,7 +6,7 @@ from typing import Any, Optional
 from config import DataConfig
 
 
-@dataclass()
+@dataclass
 class OmniMath:
 
     id: int
@@ -87,17 +87,6 @@ class OmniMathPromptDataset:
     def __call__(self, batch_size: int) -> list[str]:
         self.last_batch = self.sample(batch_size)
         return self.last_batch.prompts
-
-
-def _require_datasets() -> Any:
-    try:
-        from datasets import load_dataset  # type: ignore[import-not-found]
-    except ModuleNotFoundError as e:
-        raise ModuleNotFoundError(
-            "Missing optional dependency `datasets`.\n"
-            "Install via: `uv sync --extra data` (see `pyproject.toml`)."
-        ) from e
-    return load_dataset
 
 
 def _as_list_str(value: Any) -> list[str]:
