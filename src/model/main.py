@@ -63,13 +63,11 @@ class Model(HFModelBase):
     def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
         return get_qwen_3_weights(params, name=model_name)
 
-    def init_kv_cache(self, x: Array, dtype: str = "bfloat16") -> list[KVCache]:
-        B, _ = x.shape
-
+    def init_kv_cache(self, batch_size: int, dtype: str = "bfloat16") -> list[KVCache]:
         def zeros():
             return jnp.zeros(
                 (
-                    B,
+                    batch_size,
                     self.config.qwen_config.sequence_len,
                     self.config.qwen_config.n_groups,
                     self.config.qwen_config.head_dim,
