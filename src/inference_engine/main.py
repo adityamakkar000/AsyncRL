@@ -1,13 +1,10 @@
-import time
-import math
-
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, PyTree
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
-from src.model import Model, ModelConfig, QwenConfig
+from src.model import KVCache, Model, ModelConfig, QwenConfig
 
 from .config import InferenceConfig, InferenceRollout, InferenceState
 
@@ -19,7 +16,6 @@ from .config import InferenceConfig, InferenceRollout, InferenceState
 - precompile along batch and T for prefill
 - precompile decode along batch 
 - max sequence length + stop token breaking
-- roll kv cache 
 - donate kv cache memory optimization 
 - setup inference loop
 - integrate tokenizer into single call function (done)
@@ -53,6 +49,9 @@ class InferenceEngine:
         )
         assert self.max_seq_len & (self.max_seq_len - 1) == 0, (
             f"max_seq_len must be a power of 2, got {self.max_seq_len}"
+        )
+        assert self.config.group_size % self.batch_size == 0, (
+            "Batch size must be divisible by group size for static batching"
         )
 
         if self.config.top_k is not None:
@@ -139,8 +138,24 @@ class InferenceEngine:
 
         return tokens, jnp.array(seq_lens, dtype=jnp.int32)
 
-    def detokenizer(self, tokens: Array) -> list[str]:
-        return self.tokenizer.batch_decode(tokens, skip_special_tokens=False)
+    def detokenizer(self, batch_tokens: list[list[int]]) -> list[str]:
+        def remove_padding(tokens: list[int]) -> list[int]:
+            start_idx = next((i for i, token in enumerate(tokens) if token != self.tokenizer.pad_token_id), len(tokens))
+            end_idx = (
+                len(tokens)
+                - next(
+                    (i for i, token in enumerate(reversed(tokens)) if token != self.tokenizer.eos_token_id), len(tokens)
+                )
+                + 1
+            )
+            if end_idx <= start_idx:
+                logger.warning("All tokens are padding, returning empty string")
+                return []
+            return tokens[start_idx:end_idx]
+
+        return self.tokenizer.batch_decode(
+            [remove_padding(tokens) for tokens in batch_tokens], skip_special_tokens=False
+        )
 
     def sample_logits(self, logits: Array, key: Array) -> tuple[Array, Array]:
         B, T, V = logits.shape
@@ -178,14 +193,10 @@ class InferenceEngine:
         logits, out_cache = self.model.apply(
             state.params, x=input_tokens[:, :-1], sequence_lens=state.seq_lens - 1, kv_cache=state.kv_cache
         )
-        return InferenceState(
+        return state.replace(  # type: ignore : state is of flax dataclass and replace is an function
             next_token=input_tokens[:, -1:],
             next_probs=jnp.ones((self.batch_size, 1)),
             kv_cache=out_cache,
-            key=state.key,
-            seq_lens=state.seq_lens,
-            params=state.params,
-            stop_mask=state.stop_mask,
         )
 
     def decode(self, state: InferenceState, attention_length: int) -> InferenceState:
@@ -204,24 +215,21 @@ class InferenceEngine:
             | (next_token == self.tokenizer.eos_token_id)
             | (state.seq_lens[:, None] + 1 > self.max_seq_len)
         )
-        return InferenceState(
+        return state.replace(  # type: ignore : state is of flax dataclass and replace is an function
             next_token=jnp.where(stop_mask, self.tokenizer.eos_token_id, next_token),
             next_probs=jnp.where(stop_mask, 0, next_log_prob),
             kv_cache=out_cache,
             key=key,
             seq_lens=state.seq_lens + jnp.where(stop_mask, 0, 1)[:, 0],
             stop_mask=stop_mask,
-            params=state.params,
         )
 
-    def prefill_step(self, input_tokens: Array, inference_state: InferenceState) -> tuple[Array, InferenceState]:
-        precompiled_length = max(self.inital_sequence_len, self.compute_max_padding_length(inference_state.seq_lens))
+    def prefill_step(self, input_tokens: Array, inference_state: InferenceState) -> InferenceState:
+        precompiled_length = input_tokens.shape[1]
         if self.precompile_dict["prefill"].get(precompiled_length) is None:
             self.precompile_dict["prefill"][precompiled_length] = jax.jit(self.prefill)
 
-        inference_state = self.precompile_dict["prefill"][precompiled_length](input_tokens, inference_state)
-
-        return input_tokens, inference_state
+        return self.precompile_dict["prefill"][precompiled_length](input_tokens, inference_state)
 
     def decode_step(
         self, inference_state: InferenceState, attention_length: int, out_tokens: Array
@@ -231,12 +239,41 @@ class InferenceEngine:
                 lambda state: self.decode(state, attention_length)
             )
         inference_state = self.precompile_dict["decode"][attention_length](inference_state)
-        out_tokens = jnp.concatenate((out_tokens, inference_state.next_token), axis=-1)
+        out_tokens = jnp.concat((out_tokens, inference_state.next_token), axis=-1)
         return out_tokens, inference_state
 
-    def batch_decode(self, x: Array, seq_lens: Array, key: Array, params: PyTree) -> tuple[Array, PyTree]:
-        B, T = x.shape
-        inference_state = InferenceState(
+    def get_decode_batch(self, batch: int, step: int, intial_state: InferenceState) -> InferenceState:
+        def repeat_to_batch(x: Array) -> Array:
+            return jnp.repeat(x, self.batch_size, axis=0)
+
+        kv_cache = [
+            KVCache(
+                k=repeat_to_batch(layer_cache.k[batch : batch + 1, ...]),
+                v=repeat_to_batch(layer_cache.v[batch : batch + 1, ...]),
+                length=layer_cache.length,
+            )
+            for layer_cache in intial_state.kv_cache
+        ]
+
+        return InferenceState(
+            next_token=repeat_to_batch(intial_state.next_token[batch : batch + 1, :]),
+            kv_cache=kv_cache,
+            key=jax.random.fold_in(intial_state.key, batch * step + step),
+            seq_lens=repeat_to_batch(intial_state.seq_lens[batch : batch + 1]),
+            params=intial_state.params,
+            stop_mask=repeat_to_batch(intial_state.stop_mask[batch : batch + 1, :]),
+        )
+
+    def single_batch_decode(self, inference_state: InferenceState, prompt_tokens: Array) -> list[int]:
+        out_tokens = prompt_tokens
+        while not jnp.all(inference_state.stop_mask):
+            attention_len = self.compute_attention_length(inference_state.kv_cache[0].length)  # type: ignore
+            out_tokens, inference_state = self.decode_step(inference_state, attention_len, out_tokens)
+        return jax.device_get(out_tokens).tolist()
+
+    def batch_decode(self, x: Array, seq_lens: Array, key: Array, params: PyTree) -> tuple[list[list[int]], PyTree]:
+        assert (B := x.shape[0]) == self.batch_size, f"Expected batch size {self.batch_size}, got {B}"
+        intial_state = InferenceState(
             next_token=jnp.empty((self.batch_size, 1), dtype=jnp.int32),
             next_probs=jnp.empty((self.batch_size, 1)),
             kv_cache=self.model.init_kv_cache(self.batch_size, dtype=self.config.kv_cache_dtype),
@@ -246,14 +283,19 @@ class InferenceEngine:
             stop_mask=jnp.zeros((self.batch_size, 1), dtype=bool),
         )
 
-        out_tokens, inference_state = self.prefill_step(x, inference_state)
+        output_list_tokens: list[list[list[int]]] = [[] for _ in range(self.batch_size)]
 
-        while not jnp.all(inference_state.stop_mask):
-            attention_len = self.compute_attention_length(inference_state.kv_cache[0].length)  # type: ignore
-            out_tokens, inference_state = self.decode_step(inference_state, attention_len, out_tokens)
+        prefill_state = self.prefill_step(x, intial_state)
+
+        for batch in range(self.batch_size):
+            for step in range(self.config.group_size // self.batch_size):
+                inference_state = self.get_decode_batch(batch, step, prefill_state)
+                prompt_tokens = jnp.repeat(x[batch : batch + 1, :], self.batch_size, axis=0)
+                output_tokens = self.single_batch_decode(inference_state, prompt_tokens)
+                output_list_tokens[batch].extend(output_tokens)
 
         metrics = {}
-        return out_tokens, metrics
+        return output_list_tokens, metrics
 
     def multi_batch_decode(
         self, batch_tokens: Array, seq_lens: Array, key: Array, params: PyTree
@@ -333,7 +375,7 @@ if __name__ == "__main__":
         top_k=50,
         max_seq_len=1024,
         batch_size=2,
-        group_size=1,
+        group_size=2,
         kv_cache_dtype="bfloat16",
         precompile=False,
     )
@@ -350,8 +392,6 @@ if __name__ == "__main__":
     key = jax.random.PRNGKey(2303)
     output_tokens, output_logprobs, metrics = engine.rollout(inp_tokens, sequence_lens, key, params)
 
-    output = engine.detokenizer(output_tokens)
-    print(output)
-    print(output_logprobs)
+    output = list(map(engine.detokenizer, output_tokens))
     print(metrics)
     breakpoint()
