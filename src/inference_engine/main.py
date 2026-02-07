@@ -55,6 +55,12 @@ class InferenceEngine:
             f"max_seq_len must be a power of 2, got {self.max_seq_len}"
         )
 
+        if self.config.top_k is not None:
+            assert self.config.top_k > 0, f"top_k must be positive, got {self.config.top_k}"
+
+        if self.config.top_p is not None:
+            assert 0.0 < self.config.top_p <= 1.0, f"top_p must be in the range (0, 1], got {self.config.top_p}"
+
         self.tokenizer = AutoTokenizer.from_pretrained(self.model.config.hf_model_name)
 
         self.precompile_dict = {
@@ -78,6 +84,7 @@ class InferenceEngine:
             x_init = jnp.ones((self.num_prompts, curr_seq_len), dtype=jnp.int32)
             state = InferenceState(
                 next_token=jnp.ones((self.num_prompts, 1), dtype=jnp.int32),
+                next_probs=jnp.ones((self.num_prompts, 1)),
                 kv_cache=kv_cache,
                 key=key,
                 seq_lens=seq_lens,
@@ -94,6 +101,7 @@ class InferenceEngine:
 
         state = InferenceState(
             next_token=jnp.ones((self.batch_size, 1), dtype=jnp.int32),
+            next_probs=jnp.ones((self.batch_size, 1)),
             kv_cache=self.model.init_kv_cache(jnp.ones((self.batch_size, curr_size)), dtype=self.config.kv_cache_dtype),
             key=jax.random.PRNGKey(0),
             seq_lens=jnp.array([1] * self.batch_size),
@@ -134,20 +142,21 @@ class InferenceEngine:
     def update_seq_lens(self, t: int, seq_lens: Array):
         return t + seq_lens
 
-    def sample_logits(self, logits: Array, key: Array) -> Array:
+    def sample_logits(self, logits: Array, key: Array) -> tuple[Array, Array]:
         B, T, V = logits.shape
         logits = logits[:, -1, :] / self.config.temperature
 
-        if self.config.top_k > 0:
+        if self.config.top_k:
+            assert self.config.top_k < V, f"top_k must be less than vocab size {V}, got {self.config.top_k}"
             top_k = min(self.config.top_k, V)
             logits, base_indices = jax.lax.top_k(logits, top_k)
         else:
             base_indices = jnp.tile(jnp.arange(V), (B, 1))
+        log_probs = jax.nn.log_softmax(logits, axis=-1)
 
-        probs = jax.nn.softmax(logits, axis=-1)
-        if self.config.top_p < 1.0:
-            sort_idx = jnp.argsort(-probs, axis=-1)
-            sorted_probs = jnp.take_along_axis(probs, sort_idx, axis=-1)
+        if self.config.top_p:
+            sort_idx = jnp.argsort(-log_probs, axis=-1)
+            sorted_probs = jnp.take_along_axis(log_probs, sort_idx, axis=-1)
             sorted_logits = jnp.take_along_axis(logits, sort_idx, axis=-1)
 
             mask = jnp.cumsum(sorted_probs, axis=-1) <= self.config.top_p
@@ -156,14 +165,14 @@ class InferenceEngine:
             filtered_logits = jnp.where(mask, sorted_logits, -jnp.inf)
 
             logits = jnp.take_along_axis(filtered_logits, jnp.argsort(sort_idx, axis=-1), axis=-1)
-            probs = jax.nn.softmax(logits, axis=-1)
+            log_probs = jax.nn.log_softmax(logits, axis=-1)
 
         next_idx = jax.random.categorical(key, logits, axis=-1)[:, None]
         next_tokens = jnp.take_along_axis(base_indices, next_idx, axis=-1)
         # TODO: return next probs
-        _next_probs = jnp.take_along_axis(probs, next_idx, axis=-1)
+        next_probs = jnp.take_along_axis(log_probs, next_idx, axis=-1)
 
-        return next_tokens
+        return next_tokens, next_probs
 
     def prefill(self, input_tokens: Array, state: InferenceState) -> InferenceState:
         logger.info(f"Compiling prefill for sequence length {input_tokens.shape[1]}")
@@ -171,9 +180,10 @@ class InferenceEngine:
         logits, out_cache = self.model.apply(
             state.params, x=input_tokens, sequence_lens=state.seq_lens, kv_cache=state.kv_cache
         )
-        next_token = self.sample_logits(logits, sample_key)
+        next_token, next_probs = self.sample_logits(logits, sample_key)
         return InferenceState(
             next_token=next_token,
+            next_probs=next_probs,
             kv_cache=out_cache,
             key=key,
             seq_lens=self.update_seq_lens(t=1, seq_lens=state.seq_lens),
@@ -190,18 +200,22 @@ class InferenceEngine:
             kv_cache=state.kv_cache,
             attention_len=attention_length,
         )
+
+        tokens, log_probs = self.sample_logits(logits, sample_key)
         return InferenceState(
-            next_token=self.sample_logits(logits, sample_key),
+            next_token=tokens,
+            next_probs=log_probs,
             kv_cache=out_cache,
             key=key,
             seq_lens=self.update_seq_lens(t=1, seq_lens=state.seq_lens),
             params=state.params,
         )
 
-    def batch_decode(self, x: Array, seq_lens: Array, key: Array, params: PyTree) -> tuple[Array, PyTree]:
+    def batch_decode(self, x: Array, seq_lens: Array, key: Array, params: PyTree) -> tuple[Array, Array, PyTree]:
         B, T = x.shape
         inference_state = InferenceState(
-            next_token=jnp.empty((self.batch_size, 1), dtype=jnp.int32),
+            next_token=jnp.ones((self.batch_size, 1), dtype=jnp.int32),
+            next_probs=jnp.ones((self.batch_size, 1)),
             kv_cache=self.model.init_kv_cache(x, dtype=self.config.kv_cache_dtype),
             key=key,
             seq_lens=seq_lens,
@@ -217,6 +231,7 @@ class InferenceEngine:
         ttft_time = jnp.array(time.perf_counter() - start_time)
 
         out_tokens = jnp.concatenate((out_tokens, inference_state.next_token), axis=-1)
+        out_logprobs = inference_state.next_probs
         tps = []
 
         attention_len: int = max(
@@ -227,7 +242,7 @@ class InferenceEngine:
         for _ in range(T + 1, self.max_seq_len):
             inference_state = self.precompile_dict["decode"][attention_len](inference_state)
             out_tokens = jnp.concatenate((out_tokens, inference_state.next_token), axis=-1)
-
+            out_logprobs = jnp.concatenate((out_logprobs, inference_state.next_probs), axis=-1)
             if inference_state.kv_cache[0].length >= attention_len:
                 attention_len *= 2
 
@@ -238,36 +253,38 @@ class InferenceEngine:
                 start_time = time.perf_counter()
 
         metrics = {"tokens_per_second": jnp.array(tps[1:]).mean() if tps else 0.0, "ttft": ttft_time}
-        return out_tokens, metrics
+        return out_tokens, out_logprobs, metrics
 
     def multi_batch_decode(
         self, batch_tokens: Array, seq_lens: Array, key: Array, params: PyTree
-    ) -> tuple[Array, PyTree]:
+    ) -> tuple[Array, Array, PyTree]:
         B, _ = batch_tokens.shape
         batches = math.ceil(B / self.batch_size)
         output_tokens = jnp.array([], dtype=jnp.int32)
+        output_logprobs = jnp.array([])
         metrics = []
         for i in range(batches):
             tokens = batch_tokens[i * self.batch_size : (i + 1) * self.batch_size]
             seq_lens_batch = seq_lens[i * self.batch_size : (i + 1) * self.batch_size]
-            batch_output, batch_metrics = self.batch_decode(tokens, seq_lens_batch, key, params)
+            batch_output, batch_logprobs, batch_metrics = self.batch_decode(tokens, seq_lens_batch, key, params)
             output_tokens = jnp.concatenate((output_tokens, batch_output), axis=0)
+            output_logprobs = jnp.concatenate((output_logprobs, batch_logprobs), axis=0)
             metrics.append(batch_metrics)
 
         metrics = jax.tree.map(lambda *x: jnp.stack(x).mean(axis=0), *metrics)
-        return output_tokens, metrics
+        return output_tokens, output_logprobs, metrics
 
-    def rollout(self, batch_tokens: Array, seq_lens: Array, key: Array, params: PyTree) -> tuple[Array, PyTree]:
+    def rollout(self, batch_tokens: Array, seq_lens: Array, key: Array, params: PyTree) -> tuple[Array, Array, PyTree]:
         B, _ = batch_tokens.shape
         if B > self.batch_size:
             return self.multi_batch_decode(batch_tokens, seq_lens, key, params)
         return self.batch_decode(batch_tokens, seq_lens, key, params)
 
-    def __call__(self, texts: list[str], key: Array, params: PyTree) -> tuple[list[str], PyTree]:
+    def __call__(self, texts: list[str], key: Array, params: PyTree) -> tuple[list[str], Array, PyTree]:
         inp_tokens, seq_lens = self.tokenize(texts)
-        output_tokens, metrics = self.rollout(inp_tokens, seq_lens, key, params)
+        output_tokens, output_logprobs, metrics = self.rollout(inp_tokens, seq_lens, key, params)
         output = self.detokenizer(output_tokens)
-        return output, metrics
+        return output, output_logprobs, metrics
 
 
 def get_memory_usage():
@@ -297,7 +314,7 @@ if __name__ == "__main__":
 
     params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
     config = InferenceConfig(
-        temperature=0.6, top_p=0.95, top_k=50, max_seq_len=128, batch_size=1, group_size=1, kv_cache_dtype="bfloat16"
+        temperature=1, top_p=0.9, top_k=None, max_seq_len=128, batch_size=1, group_size=1, kv_cache_dtype="bfloat16"
     )
 
     engine = InferenceEngine(model, params, config)
@@ -310,7 +327,9 @@ if __name__ == "__main__":
     inp_tokens, sequence_lens = engine.tokenize(tokenizer_inp)
 
     key = jax.random.PRNGKey(2303)
-    output_tokens, metrics = engine.rollout(inp_tokens, sequence_lens, key, params)
+    output_tokens, output_logprobs, metrics = engine.rollout(inp_tokens, sequence_lens, key, params)
 
     output = engine.detokenizer(output_tokens)
+    print(output)
+    print(output_logprobs)
     print(metrics)
