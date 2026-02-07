@@ -1,4 +1,3 @@
-import math
 import time
 
 import jax
@@ -9,7 +8,7 @@ from transformers import AutoTokenizer
 
 from src.model import Model, ModelConfig, QwenConfig
 
-from .config import InferenceConfig, InferenceState
+from .config import InferenceConfig, InferenceRollout, InferenceState
 
 """
 #TODO: Inference 
@@ -211,7 +210,9 @@ class InferenceEngine:
             params=state.params,
         )
 
-    def batch_decode(self, x: Array, seq_lens: Array, key: Array, params: PyTree) -> tuple[Array, Array, PyTree]:
+    def batch_decode(
+        self, x: Array, seq_lens: Array, key: Array, params: PyTree
+    ) -> tuple[list[InferenceRollout], PyTree]:
         B, T = x.shape
         inference_state = InferenceState(
             next_token=jnp.ones((self.batch_size, 1), dtype=jnp.int32),
@@ -253,32 +254,46 @@ class InferenceEngine:
                 start_time = time.perf_counter()
 
         metrics = {"tokens_per_second": jnp.array(tps[1:]).mean() if tps else 0.0, "ttft": ttft_time}
-        return out_tokens, out_logprobs, metrics
+        return InferenceRollout(rollouts=out_tokens, logprobs=out_logprobs), metrics
 
     def multi_batch_decode(
         self, batch_tokens: Array, seq_lens: Array, key: Array, params: PyTree
-    ) -> tuple[Array, Array, PyTree]:
+    ) -> tuple[list[InferenceRollout], PyTree]:
         B, _ = batch_tokens.shape
-        batches = math.ceil(B / self.batch_size)
-        output_tokens = jnp.array([], dtype=jnp.int32)
-        output_logprobs = jnp.array([])
+        batches = B // self.batch_size
+        output = []
         metrics = []
+
         for i in range(batches):
             tokens = batch_tokens[i * self.batch_size : (i + 1) * self.batch_size]
             seq_lens_batch = seq_lens[i * self.batch_size : (i + 1) * self.batch_size]
-            batch_output, batch_logprobs, batch_metrics = self.batch_decode(tokens, seq_lens_batch, key, params)
-            output_tokens = jnp.concatenate((output_tokens, batch_output), axis=0)
-            output_logprobs = jnp.concatenate((output_logprobs, batch_logprobs), axis=0)
+            batch_output, batch_metrics = self.batch_decode(tokens, seq_lens_batch, key, params)
+            output.append(batch_output)
             metrics.append(batch_metrics)
 
         metrics = jax.tree.map(lambda *x: jnp.stack(x).mean(axis=0), *metrics)
-        return output_tokens, output_logprobs, metrics
+        return output, metrics
 
-    def rollout(self, batch_tokens: Array, seq_lens: Array, key: Array, params: PyTree) -> tuple[Array, Array, PyTree]:
-        B, _ = batch_tokens.shape
-        if B > self.batch_size:
-            return self.multi_batch_decode(batch_tokens, seq_lens, key, params)
-        return self.batch_decode(batch_tokens, seq_lens, key, params)
+    def pad_to_batch_size(self, batch_tokens: Array, seq_lens: Array) -> tuple[Array, Array]:
+        breakpoint()
+        B, T = batch_tokens.shape
+        if B % self.batch_size == 0:
+            return batch_tokens, seq_lens
+
+        pad_size = batch_tokens % self.batch_size
+        padded_inputs = jnp.concatenate(
+            (batch_tokens, jnp.full((pad_size, T), self.tokenizer.pad_token_id, dtype=jnp.int32)), axis=0
+        )
+        padded_seq_lens = jnp.concatenate((seq_lens, jnp.array([T] * pad_size)), axis=0)
+        breakpoint()
+        return padded_inputs, padded_seq_lens
+
+    def rollout(
+        self, batch_tokens: Array, seq_lens: Array, key: Array, params: PyTree
+    ) -> tuple[list[InferenceRollout], PyTree]:
+        padded_batch_tokens, padded_seq_lens = self.pad_to_batch_size(batch_tokens, seq_lens)
+        return self.multi_batch_decode(padded_batch_tokens, padded_seq_lens, key, params)
+        # return self.batch_decode(batch_tokens, seq_lens, key, params)
 
     def __call__(self, texts: list[str], key: Array, params: PyTree) -> tuple[list[str], Array, PyTree]:
         inp_tokens, seq_lens = self.tokenize(texts)
