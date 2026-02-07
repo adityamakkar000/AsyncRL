@@ -94,6 +94,7 @@ class GroupedQueryAttention(nn.Module):
         mask: Array,
         rope_matrix: tuple[Array, Array],
         kv_cache: Optional[KVCache] = None,
+        attention_len: Optional[int] = None,
     ):
         B, T, C = x.shape
         t_start = kv_cache.length if kv_cache else 0
@@ -113,14 +114,14 @@ class GroupedQueryAttention(nn.Module):
         k = apply_rope(k, rope_matrix[0], rope_matrix[1])
 
         if kv_cache:
-            k, v = jax.tree.map(
-                lambda cache, val: jax.lax.dynamic_update_slice_in_dim(
-                    cache, val.astype(cache.dtype), t_start, axis=1
-                ).astype(self.activation_dtype),
+            k_cache, v_cache = jax.tree.map(
+                lambda cache, val: jax.lax.dynamic_update_slice_in_dim(cache, val.astype(cache.dtype), t_start, axis=1),
                 (kv_cache.k, kv_cache.v),
                 (k, v),
             )
-            kv_cache = KVCache(k=k, v=v, length=t_start + T)
+            kv_cache = KVCache(k=k_cache, v=v_cache, length=t_start + T)
+
+            k, v = k_cache[:, :attention_len, ...], v_cache[:, :attention_len, ...]
 
         q = einops.rearrange(q, pattern="b t (g r) d -> b t g r d", g=k.shape[-2])
 
@@ -161,6 +162,7 @@ class Block(nn.Module):
         mask: Array,
         rope_matrix: tuple[Array, Array],
         layer_cache: Optional[KVCache] = None,
+        attention_len: Optional[int] = None,
     ):
         connection_1 = x
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)
@@ -171,7 +173,7 @@ class Block(nn.Module):
             head_dim=self.head_dim,
             rope_base=self.rope_base,
             activation_dtype=self.activation_dtype,
-        )(x, sequence_lens, mask, rope_matrix, layer_cache)
+        )(x, sequence_lens, mask, rope_matrix, layer_cache, attention_len)
 
         x = x + connection_1
 
@@ -196,7 +198,13 @@ class Qwen3(nn.Module):
     activation_dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, x: Array, sequence_lens: jax.Array, kv_cache: Optional[list[KVCache]] = None):
+    def __call__(
+        self,
+        x: Array,
+        sequence_lens: jax.Array,
+        kv_cache: Optional[list[KVCache]] = None,
+        attention_len: Optional[int] = None,
+    ) -> tuple[Array, list[KVCache]]:
         B, T = x.shape
         embed_layer = nn.Embed(
             num_embeddings=self.vocab_size,
@@ -207,22 +215,22 @@ class Qwen3(nn.Module):
 
         x = embed_layer(x)
 
-        out_cache = []
+        out_cache: list[KVCache] = []
 
         rope_cache = RoPEMatrixCache(sequence_len=self.sequence_len, model_dim=self.head_dim, rope_base=self.rope_base)
+        if attention_len is None:
+            attention_len = self.sequence_len
 
         t_start = kv_cache[0].length if kv_cache else 0
-        prompt_mask = make_prompt_mask(self.sequence_len, cache_len=t_start + T, seq_lens=sequence_lens)
+        prompt_mask = make_prompt_mask(attention_len, cache_len=t_start + T, seq_lens=sequence_lens)
         index_map = jnp.cumsum(prompt_mask, axis=-1)
-        # account for kv_cache length
-        index_map_with_offset = jnp.where(index_map > 0, index_map + t_start - 1, 0)
+        index_map_with_offset = jnp.where(index_map > 0, index_map - 1, 0)
         index_map_with_offset_sliced = jax.lax.dynamic_slice(index_map_with_offset, (0, t_start), (B, T))
-
         sin, cos = rope_cache.get_rope_matrix(index_map_with_offset_sliced)
 
         attention_mask = make_attention_mask(
             query_shape=T,
-            key_shape=T if not kv_cache else kv_cache[0].k.shape[1],
+            key_shape=T if not kv_cache else attention_len,
             t_start=t_start,
             seq_lens=sequence_lens,
         )
@@ -237,14 +245,14 @@ class Qwen3(nn.Module):
                 head_dim=self.head_dim,
                 rope_base=self.rope_base,
                 activation_dtype=self.activation_dtype,
-            )(x, sequence_lens, attention_mask, (sin, cos), in_layer_cache)
+            )(x, sequence_lens, attention_mask, (sin, cos), in_layer_cache, attention_len)
             out_cache.append(out_layer_cache)
 
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)
 
         # logits = embed_layer.attend(x)
         logits = nn.Dense(features=self.vocab_size, use_bias=False, dtype=self.activation_dtype)(x)
-        return logits, out_cache if kv_cache else None
+        return logits, out_cache
 
     @classmethod
     def from_config(cls, config: QwenConfig):
