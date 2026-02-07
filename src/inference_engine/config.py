@@ -28,6 +28,7 @@ class InferenceState:
     key: Array
     seq_lens: Array
     params: PyTree
+    stop_mask: Array
 
 
 @dataclass

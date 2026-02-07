@@ -1,6 +1,5 @@
 import time
 import math
-from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -80,7 +79,7 @@ class InferenceEngine:
         curr_seq_len = self.inital_sequence_len
         key = jax.random.PRNGKey(0)
         seq_lens = jnp.array([1] * self.num_prompts)
-        kv_cache = self.model.init_kv_cache(jnp.ones((self.batch_size, 1)), dtype=self.config.kv_cache_dtype)
+        kv_cache = self.model.init_kv_cache(self.batch_size, dtype=self.config.kv_cache_dtype)
 
         while curr_seq_len <= self.max_seq_len:
             x_init = jnp.ones((self.num_prompts, curr_seq_len), dtype=jnp.int32)
@@ -91,6 +90,7 @@ class InferenceEngine:
                 key=key,
                 seq_lens=seq_lens,
                 params=params,
+                stop_mask=jnp.zeros((self.num_prompts, 1), dtype=bool),
             )
 
             self.precompile_dict["prefill"][curr_seq_len] = jax.jit(self.prefill)
@@ -104,10 +104,11 @@ class InferenceEngine:
         state = InferenceState(
             next_token=jnp.ones((self.batch_size, 1), dtype=jnp.int32),
             next_probs=jnp.ones((self.batch_size, 1)),
-            kv_cache=self.model.init_kv_cache(jnp.ones((self.batch_size, curr_size)), dtype=self.config.kv_cache_dtype),
+            kv_cache=self.model.init_kv_cache(self.batch_size, dtype=self.config.kv_cache_dtype),
             key=jax.random.PRNGKey(0),
             seq_lens=jnp.array([1] * self.batch_size),
             params=params,
+            stop_mask=jnp.zeros((self.batch_size, 1), dtype=bool),
         )
         while curr_size <= self.max_seq_len:
             self.precompile_dict["decode"][curr_size] = jax.jit(lambda state: self.decode(state, curr_size))
@@ -132,7 +133,7 @@ class InferenceEngine:
             for text in texts
         ]
         seq_lens = jnp.array([len(x) for x in inputs], dtype=jnp.int32)
-        padding_length = min(self.compute_max_padding_length(seq_lens), self.initial_sequence_len)
+        padding_length = max(self.compute_max_padding_length(seq_lens), self.inital_sequence_len)
         inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
         tokens = jnp.array(inputs)
 
@@ -140,9 +141,6 @@ class InferenceEngine:
 
     def detokenizer(self, tokens: Array) -> list[str]:
         return self.tokenizer.batch_decode(tokens, skip_special_tokens=False)
-
-    def update_seq_lens(self, t: int, seq_lens: Array):
-        return t + seq_lens
 
     def sample_logits(self, logits: Array, key: Array) -> tuple[Array, Array]:
         B, T, V = logits.shape
@@ -171,25 +169,23 @@ class InferenceEngine:
 
         next_idx = jax.random.categorical(key, logits, axis=-1)[:, None]
         next_tokens = jnp.take_along_axis(base_indices, next_idx, axis=-1)
-        # TODO: return next probs
         next_logprobs = jnp.take_along_axis(log_probs, next_idx, axis=-1)
 
         return next_tokens, next_logprobs
 
     def prefill(self, input_tokens: Array, state: InferenceState) -> InferenceState:
         logger.info(f"Compiling prefill for sequence length {input_tokens.shape[1]}")
-        key, sample_key = jax.random.split(state.key)
         logits, out_cache = self.model.apply(
-            state.params, x=input_tokens, sequence_lens=state.seq_lens, kv_cache=state.kv_cache
+            state.params, x=input_tokens[:, :-1], sequence_lens=state.seq_lens - 1, kv_cache=state.kv_cache
         )
-        next_token, next_probs = self.sample_logits(logits, sample_key)
         return InferenceState(
-            next_token=next_token,
-            next_probs=next_probs,
+            next_token=input_tokens[:, -1:],
+            next_probs=jnp.ones((self.batch_size, 1)),
             kv_cache=out_cache,
-            key=key,
-            seq_lens=self.update_seq_lens(t=1, seq_lens=state.seq_lens),
+            key=state.key,
+            seq_lens=state.seq_lens,
             params=state.params,
+            stop_mask=state.stop_mask,
         )
 
     def decode(self, state: InferenceState, attention_length: int) -> InferenceState:
@@ -202,77 +198,59 @@ class InferenceEngine:
             kv_cache=state.kv_cache,
             attention_len=attention_length,
         )
-
-        tokens, log_probs = self.sample_logits(logits, sample_key)
+        next_token, next_log_prob = self.sample_logits(logits, sample_key)
+        stop_mask = (
+            state.stop_mask
+            | (next_token == self.tokenizer.eos_token_id)
+            | (state.seq_lens[:, None] + 1 > self.max_seq_len)
+        )
         return InferenceState(
-            next_token=tokens,
-            next_probs=log_probs,
+            next_token=jnp.where(stop_mask, self.tokenizer.eos_token_id, next_token),
+            next_probs=jnp.where(stop_mask, 0, next_log_prob),
             kv_cache=out_cache,
             key=key,
-            seq_lens=self.update_seq_lens(t=1, seq_lens=state.seq_lens),
+            seq_lens=state.seq_lens + jnp.where(stop_mask, 0, 1)[:, 0],
+            stop_mask=stop_mask,
             params=state.params,
         )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def post_process_decode(self, inference_state: InferenceState, stop_mask: Array) -> tuple[InferenceState, Array]:
-        stop_mask |= (inference_state.next_token == self.tokenizer.eos_token_id) | (
-            inference_state.seq_lens[:, None] > self.max_seq_len
-        )
-        return InferenceState(
-            next_token=jnp.where(stop_mask, self.tokenizer.eos_token_id, inference_state.next_token),
-            kv_cache=inference_state.kv_cache,
-            key=inference_state.key,
-            seq_lens=inference_state.seq_lens,
-            params=inference_state.params,
-        ), stop_mask
-
-    def prefill_step(self, out_tokens: Array, inference_state: InferenceState) -> tuple[Array, InferenceState, Array]:
+    def prefill_step(self, input_tokens: Array, inference_state: InferenceState) -> tuple[Array, InferenceState]:
         precompiled_length = max(self.inital_sequence_len, self.compute_max_padding_length(inference_state.seq_lens))
         if self.precompile_dict["prefill"].get(precompiled_length) is None:
             self.precompile_dict["prefill"][precompiled_length] = jax.jit(self.prefill)
 
-        inference_state = self.precompile_dict["prefill"][precompiled_length](out_tokens, inference_state)
-        inference_state, stop_mask = self.post_process_decode(
-            inference_state, jnp.zeros((self.batch_size, 1), dtype=bool)
-        )
-        out_tokens = jnp.concatenate((out_tokens, inference_state.next_token), axis=-1)
-        return out_tokens, inference_state, stop_mask
+        inference_state = self.precompile_dict["prefill"][precompiled_length](input_tokens, inference_state)
+
+        return input_tokens, inference_state
 
     def decode_step(
-        self, inference_state: InferenceState, attention_length: int, stop_mask: Array, out_tokens: Array
-    ) -> tuple[Array, InferenceState, Array]:
+        self, inference_state: InferenceState, attention_length: int, out_tokens: Array
+    ) -> tuple[Array, InferenceState]:
         if self.precompile_dict["decode"].get(attention_length) is None:
             self.precompile_dict["decode"][attention_length] = jax.jit(
                 lambda state: self.decode(state, attention_length)
             )
         inference_state = self.precompile_dict["decode"][attention_length](inference_state)
-        inference_state, stop_mask = self.post_process_decode(inference_state, stop_mask)
         out_tokens = jnp.concatenate((out_tokens, inference_state.next_token), axis=-1)
-        return out_tokens, inference_state, stop_mask
+        return out_tokens, inference_state
 
     def batch_decode(self, x: Array, seq_lens: Array, key: Array, params: PyTree) -> tuple[Array, PyTree]:
         B, T = x.shape
         inference_state = InferenceState(
-            next_token=jnp.ones((self.batch_size, 1), dtype=jnp.int32),
-            next_probs=jnp.ones((self.batch_size, 1)),
-            kv_cache=self.model.init_kv_cache(x, dtype=self.config.kv_cache_dtype),
+            next_token=jnp.empty((self.batch_size, 1), dtype=jnp.int32),
+            next_probs=jnp.empty((self.batch_size, 1)),
+            kv_cache=self.model.init_kv_cache(self.batch_size, dtype=self.config.kv_cache_dtype),
             key=key,
             seq_lens=seq_lens,
             params=params,
+            stop_mask=jnp.zeros((self.batch_size, 1), dtype=bool),
         )
 
-        # count_per_prompt = jnp.zeros((self.batch_size,), dtype=jnp.int32)
+        out_tokens, inference_state = self.prefill_step(x, inference_state)
 
-        out_tokens, inference_state, stop_mask = self.prefill_step(x, inference_state)
-
-        attention_len = self.compute_attention_length(inference_state.kv_cache[0].length)
-
-        while not jnp.all(stop_mask):
-            out_tokens, inference_state, stop_mask = self.decode_step(
-                inference_state, attention_len, stop_mask, out_tokens
-            )
-            if inference_state.kv_cache[0].length >= attention_len:
-                attention_len *= 2
+        while not jnp.all(inference_state.stop_mask):
+            attention_len = self.compute_attention_length(inference_state.kv_cache[0].length)  # type: ignore
+            out_tokens, inference_state = self.decode_step(inference_state, attention_len, out_tokens)
 
         metrics = {}
         return out_tokens, metrics
