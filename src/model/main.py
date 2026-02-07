@@ -8,7 +8,7 @@ from jax.sharding import Sharding, SingleDeviceSharding
 from jaxtyping import Array, PyTree
 from omegaconf import DictConfig
 from optax import GradientTransformation
-from stax.model_module import HFModelBase
+from stax import HFModelBase
 
 from src.model.qwen3 import KVCache, Qwen3
 
@@ -64,26 +64,20 @@ class Model(HFModelBase):
         return get_qwen_3_weights(params, name=model_name)
 
     def init_kv_cache(self, x: Array, dtype: str = "bfloat16") -> list[KVCache]:
-        B = x.shape[0]
-        n_layers = self.config.qwen_config.n_layers
-        n_groups = self.config.qwen_config.n_groups
-        max_sequence_len = self.config.qwen_config.sequence_len
-        head_dim = self.config.qwen_config.head_dim
-        cache_dtype = convert_dtype(dtype)
+        B, _ = x.shape
 
-        initial_cache: list[KVCache] = []
-        for _ in range(n_layers):
-            length = 0
-            k = jnp.zeros((B, max_sequence_len, n_groups, head_dim), dtype=cache_dtype)
-            v = jnp.zeros((B, max_sequence_len, n_groups, head_dim), dtype=cache_dtype)
-            _cache = KVCache(
-                k=k,
-                v=v,
-                length=length,
+        def zeros():
+            return jnp.zeros(
+                (
+                    B,
+                    self.config.qwen_config.sequence_len,
+                    self.config.qwen_config.n_groups,
+                    self.config.qwen_config.head_dim,
+                ),
+                dtype=convert_dtype(dtype),
             )
-            initial_cache.append(_cache)
 
-        return initial_cache
+        return [KVCache(k=zeros(), v=zeros(), length=0) for _ in range(self.config.qwen_config.n_layers)]
 
     def load_from_ckpt(self, path: str, step_number: Optional[int] = None, use_best=False):
         assert (step_number is not None) ^ use_best, "Either step_number or use_best must be set."
@@ -109,7 +103,7 @@ class Model(HFModelBase):
         assert hasattr(restored, "state"), "Restored object has no attribute 'state'"
         assert restored.state, "Restored has no state"
 
-        return restored.state["params"]
+        return restored.state["params"]  # type: ignore
 
     def save_hf(self, path: str, params: PyTree) -> None:
         """Saves the model parameters in a local safetensors file. Inverse of load_from_hf."""
@@ -122,8 +116,20 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
-    ) -> PyTree:
-        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache)
+        attention_len: Optional[int] = None,
+    ) -> tuple[Array, list[KVCache]]:
+        """
+        Forward pass of the model. This is a wrapper around the model's __call__ that allows for additional processing if needed.
+        Args:
+            params: Model parameters.
+            x: Input tokens of shape (B, T).
+            sequence_lens: Sequence lengths of shape (B,).
+            kv_cache: Optional list of KVCache for each layer.
+        Returns:
+            logits: Output logits of shape (B, T, vocab_size).
+            out_cache: Optional list of KVCache for each layer if kv_cache was provided.
+        """
+        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, attention_len)
 
         return logits, cache
 
@@ -134,5 +140,14 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
-    ) -> PyTree:
-        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache)
+        attention_len: Optional[int] = None,
+    ) -> tuple[Array, list[KVCache]]:
+        """
+        Applies the model to the input data. This is a wrapper around __call__ that allows for additional processing if needed.
+        """
+        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, attention_len=attention_len)
+
+    @property
+    def sequence_len(self) -> int:
+        """Max sequence length supported by the model"""
+        return self.config.qwen_config.sequence_len
