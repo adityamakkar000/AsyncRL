@@ -31,6 +31,5 @@ class InferenceState:
 
 @dataclass
 class InferenceRollout:
-    prompt: str
-    rollouts: list[str]
+    rollouts: list[list[int]]
     logprobs: list[Array]
