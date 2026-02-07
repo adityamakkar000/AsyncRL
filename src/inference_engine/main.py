@@ -28,6 +28,16 @@ from .config import InferenceConfig, InferenceState
 """
 
 
+"""
+
+1. return back logprobs
+2. self.batch_decode always same batch size + fix multi batch decode 
+3. rollout G groups in the resonse and convert otuput to list[InferenceRollout]
+4. stopping mechanism based on eos token or max length
+
+"""
+
+
 class InferenceEngine:
     def __init__(self, model: Model, params: PyTree, config: InferenceConfig):
         self.model = model
@@ -36,7 +46,14 @@ class InferenceEngine:
         self.batch_size = config.batch_size
         self.group_size = config.group_size
         self.num_prompts = self.batch_size // self.group_size
-        self.inital_sequence_len = 128
+        self.inital_sequence_len = 64
+
+        assert self.max_seq_len <= self.model.sequence_len, (
+            f"expcted inference max seq len {self.max_seq_len} to be less than model sequence length {self.model.sequence_len}"
+        )
+        assert self.max_seq_len & (self.max_seq_len - 1) == 0, (
+            f"max_seq_len must be a power of 2, got {self.max_seq_len}"
+        )
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model.config.hf_model_name)
 
@@ -45,8 +62,8 @@ class InferenceEngine:
             "decode": {},
         }
 
-        self.precompile_decode(params)
         self.precompile_prefill(params)
+        self.precompile_decode(params)
 
     def precompile_prefill(self, params: PyTree) -> None:
         """Precompile prefill function for different sequence lengths up to max_seq_len.
@@ -82,8 +99,7 @@ class InferenceEngine:
             seq_lens=jnp.array([1] * self.batch_size),
             params=params,
         )
-        max_len = min(self.compute_attention_length(self.max_seq_len), self.model.config.qwen_config.sequence_len)
-        while curr_size <= max_len:
+        while curr_size <= self.max_seq_len:
             self.precompile_dict["decode"][curr_size] = jax.jit(lambda state: self.decode(state, curr_size))
             _ = self.precompile_dict["decode"][curr_size](state)
             curr_size *= 2
@@ -93,10 +109,10 @@ class InferenceEngine:
         return min(1 << (n.bit_length()), upper_bound)
 
     def compute_max_padding_length(self, seq_lens: Array) -> int:
-        return self.compute_max_power_of_two(max(seq_lens).item(), self.max_seq_len)
+        return self.compute_max_power_of_two(jnp.max(seq_lens).item(), self.max_seq_len)
 
-    def compute_attention_length(self, cache_length) -> int:
-        return self.compute_max_power_of_two(cache_length, self.model.config.qwen_config.sequence_len)
+    def compute_attention_length(self, cache_length: Array) -> int:
+        return self.compute_max_power_of_two(cache_length.item(), self.model.config.qwen_config.sequence_len)
 
     def tokenize(self, texts: list[str]) -> tuple[Array, Array]:
         inputs: list[list[int]] = [
@@ -204,8 +220,7 @@ class InferenceEngine:
         tps = []
 
         attention_len: int = max(
-            self.compute_attention_length(inference_state.kv_cache[0].length),
-            self.inital_sequence_len
+            self.compute_attention_length(inference_state.kv_cache[0].length), self.inital_sequence_len
         )
 
         start_time = time.perf_counter()
@@ -263,7 +278,6 @@ def get_memory_usage():
 if __name__ == "__main__":
     print(f"Memory inital: {get_memory_usage()}")  # 6.48e-05 GB
 
-    # ------------ init model --------------
     model_config = ModelConfig(
         "Qwen/Qwen3-0.6B",
         qwen_config=QwenConfig(
@@ -283,7 +297,7 @@ if __name__ == "__main__":
 
     params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
     config = InferenceConfig(
-        temperature=0.6, top_p=0.95, top_k=50, max_seq_len=8000, batch_size=1, group_size=1, kv_cache_dtype="bfloat16"
+        temperature=0.6, top_p=0.95, top_k=50, max_seq_len=128, batch_size=1, group_size=1, kv_cache_dtype="bfloat16"
     )
 
     engine = InferenceEngine(model, params, config)
