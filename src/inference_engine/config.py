@@ -17,6 +17,7 @@ class InferenceConfig:
     batch_size: int = MISSING
     group_size: int = MISSING
     kv_cache_dtype: str = MISSING
+    precompile: bool = True
 
 
 @struct.dataclass
