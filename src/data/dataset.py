@@ -2,7 +2,6 @@ import random
 from dataclasses import dataclass, load_dataset
 from typing import Any, Optional
 
-# from src.data.config import DataConfig -- remove when not testing
 from config import DataConfig
 
 
