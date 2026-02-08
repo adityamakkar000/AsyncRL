@@ -1,9 +1,11 @@
+from functools import partial
 from typing import Optional
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
+from jax.sharding import PartitionSpec as P
 from jax.sharding import Sharding, SingleDeviceSharding
 from jaxtyping import Array, PyTree
 from omegaconf import DictConfig
@@ -63,19 +65,30 @@ class Model(HFModelBase):
     def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
         return get_qwen_3_weights(params, name=model_name)
 
-    def init_kv_cache(self, batch_size: int, dtype: str = "bfloat16") -> list[KVCache]:
-        def zeros():
-            return jnp.zeros(
-                (
-                    batch_size,
-                    self.config.qwen_config.sequence_len,
-                    self.config.qwen_config.n_groups,
-                    self.config.qwen_config.head_dim,
-                ),
-                dtype=convert_dtype(dtype),
-            )
+    def init_kv_cache(self, batch_size: int, mesh: jax.sharding.Mesh, dtype: str = "bfloat16") -> list[KVCache]:
+        split_sharding = P(mesh.axis_names[0])
+        out_shardings = KVCache(
+            k=jax.NamedSharding(mesh, split_sharding),
+            v=jax.NamedSharding(mesh, split_sharding),
+            length=jax.NamedSharding(mesh, P()),
+        )
 
-        return [KVCache(k=zeros(), v=zeros(), length=0) for _ in range(self.config.qwen_config.n_layers)]
+        @partial(jax.jit, out_shardings=out_shardings)
+        def _init():
+            def zeros():
+                return jnp.zeros(
+                    (
+                        batch_size,
+                        self.config.qwen_config.sequence_len,
+                        self.config.qwen_config.n_groups,
+                        self.config.qwen_config.head_dim,
+                    ),
+                    dtype=convert_dtype(dtype),
+                )
+
+            return KVCache(k=zeros(), v=zeros(), length=0)
+
+        return [_init() for _ in range(self.config.qwen_config.n_layers)]
 
     def load_from_ckpt(self, path: str, step_number: Optional[int] = None, use_best=False):
         assert (step_number is not None) ^ use_best, "Either step_number or use_best must be set."
