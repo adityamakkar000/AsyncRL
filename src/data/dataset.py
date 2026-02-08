@@ -1,7 +1,6 @@
 import random
 from dataclasses import dataclass, load_dataset
 from typing import Any, Optional
-
 from config import DataConfig
 
 

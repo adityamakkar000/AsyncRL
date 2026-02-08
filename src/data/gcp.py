@@ -1,8 +1,9 @@
-import argparse
 import json
 from typing import Iterable, Optional
 
 import gcsfs
+import hydra
+from omegaconf import DictConfig, OmegaConf
 
 from src.data.dataset import OmniMath, load_omni_math
 
@@ -19,18 +20,30 @@ def write_jsonl(examples: Iterable[OmniMath], gs_path: str) -> None:
             f.write(json.dumps(ex.to_json(), ensure_ascii=False) + "\n")
 
 
-def stage_omnimath_to_gcs(
-    *,
-    gs_path: str,
-    name: str = "KbsdJames/Omni-MATH",
-    split: str = "test",
-    cache_dir: Optional[str] = None,
-    min_difficulty: Optional[float] = None, # placeholders for now, aditya tell me how you want to do this
-    max_difficulty: Optional[float] = None,
-    domain_contains: Optional[str] = None,
-    source_contains: Optional[str] = None,
-) -> None:
-    
+@hydra.main(
+    version_base=None,
+    config_path=None,
+    config_name=None,
+)
+def stage_omnimath_to_gcs(cfg: DictConfig) -> None:
+    """
+    Export Omni-MATH to a GCS JSONL file via Hydra config.
+    Usage:
+        python src/data/gcp.py gs_path=gs://bucket/path/omnimath.jsonl split=test ...
+    """
+    # Unpack config with defaults
+    gs_path = cfg.get("gs_path")
+    name = cfg.get("name", "KbsdJames/Omni-MATH")
+    split = cfg.get("split", "test")
+    cache_dir = cfg.get("cache_dir", None)
+    min_difficulty = cfg.get("min_difficulty", None)
+    max_difficulty = cfg.get("max_difficulty", None)
+    domain_contains = cfg.get("domain_contains", None)
+    source_contains = cfg.get("source_contains", None)
+
+    if gs_path is None:
+        raise ValueError("`gs_path` must be specified (e.g. gs_path=gs://bucket/data.jsonl).")
+
     examples = load_omni_math(
         name=name,
         split=split,
@@ -43,32 +56,5 @@ def stage_omnimath_to_gcs(
     write_jsonl(examples, gs_path)
 
 
-def _main() -> None:
-    parser = argparse.ArgumentParser(description="Dataset GCS utilities")
-    sub = parser.add_subparsers(dest="cmd", required=True)
-
-    stage = sub.add_parser("stage-omnimath", help="Export Omni-MATH to a GCS JSONL file")
-    stage.add_argument("--gs-path", required=True, help="Destination like gs://bucket/path/omnimath.jsonl")
-    stage.add_argument("--split", default="test")
-    stage.add_argument("--cache-dir", default=None)
-    stage.add_argument("--min-difficulty", type=float, default=None)
-    stage.add_argument("--max-difficulty", type=float, default=None)
-    stage.add_argument("--domain-contains", default=None)
-    stage.add_argument("--source-contains", default=None)
-
-    args = parser.parse_args()
-
-    if args.cmd == "stage-omnimath":
-        stage_omnimath_to_gcs(
-            gs_path=args.gs_path,
-            split=args.split,
-            cache_dir=args.cache_dir,
-            min_difficulty=args.min_difficulty,
-            max_difficulty=args.max_difficulty,
-            domain_contains=args.domain_contains,
-            source_contains=args.source_contains,
-        )
-
-
 if __name__ == "__main__":
-    _main()
+    stage_omnimath_to_gcs()
