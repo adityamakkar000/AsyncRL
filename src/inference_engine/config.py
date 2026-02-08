@@ -33,5 +33,12 @@ class InferenceState:
 
 @dataclass
 class InferenceRollout:
-    rollouts: list[list[int]]
+    rollouts: list[Array]
     logprobs: list[Array]
+
+
+@dataclass
+class InferenceResults:
+    rollouts: list[InferenceRollout]
+    output_strs: Optional[list[list[str]] | list[str]]
+    metrics: PyTree
