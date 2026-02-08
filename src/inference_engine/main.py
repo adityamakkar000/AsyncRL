@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, PyTree
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
@@ -10,8 +11,8 @@ from .config import InferenceConfig, InferenceResults, InferenceRollout, Inferen
 
 """
 #TODO: Inference 
-- multihost 
 - integrate into trainer 
+- fix key splitting across devices
 """
 
 
@@ -20,10 +21,12 @@ class InferenceEngine:
         self.model = model
         self.config = config
         self.max_seq_len = config.max_seq_len
-        self.batch_size = config.batch_size
+        self.batch_size = config.batch_size * jax.local_device_count()
         self.group_size = config.group_size
         self.num_prompts = self.batch_size // self.group_size
         self.inital_sequence_len = 64
+
+        self.mesh = jax.make_mesh((jax.local_device_count(),), ("data",), devices=jax.local_devices())
 
         assert self.max_seq_len <= self.model.sequence_len, (
             f"expcted inference max seq len {self.max_seq_len} to be less than model sequence length {self.model.sequence_len}"
@@ -52,28 +55,42 @@ class InferenceEngine:
             self.precompile_prefill(params)
             self.precompile_decode(params)
 
+    def replicate_across_axis(self, value):
+        return jax.device_put(value, jax.sharding.NamedSharding(self.mesh, P()))
+
+    def split_across_axis(self, value):
+        return jax.device_put(value, jax.sharding.NamedSharding(self.mesh, P(self.mesh.axis_names[0])))
+
     def precompile_prefill(self, params: PyTree) -> None:
         """Precompile prefill function for different sequence lengths up to max_seq_len.
         The structure self.precompiled_dict = dict[seq_len --> compiled_fn]."""
 
         curr_seq_len = self.inital_sequence_len
         key = jax.random.PRNGKey(0)
-        seq_lens = jnp.array([1] * self.num_prompts)
-        kv_cache = self.model.init_kv_cache(self.batch_size, dtype=self.config.kv_cache_dtype)
+        seq_lens = jnp.array([1] * self.batch_size)
+        kv_cache = self.model.init_kv_cache(self.batch_size, dtype=self.config.kv_cache_dtype, mesh=self.mesh)
+
+        params, key = self.replicate_across_axis(params), self.replicate_across_axis(key)
+        seq_lens = self.split_across_axis(seq_lens)
 
         while curr_seq_len <= self.max_seq_len:
-            x_init = jnp.ones((self.num_prompts, curr_seq_len), dtype=jnp.int32)
+            x_init = self.split_across_axis(jnp.ones((self.batch_size, curr_seq_len), dtype=jnp.int32))
             state = InferenceState(
-                next_token=jnp.ones((self.num_prompts, 1), dtype=jnp.int32),
-                next_probs=jnp.ones((self.num_prompts, 1)),
+                next_token=self.split_across_axis(jnp.ones((self.batch_size, 1), dtype=jnp.int32)),
+                next_probs=self.split_across_axis(jnp.ones((self.batch_size, 1))),
                 kv_cache=kv_cache,
                 key=key,
                 seq_lens=seq_lens,
                 params=params,
-                stop_mask=jnp.zeros((self.num_prompts, 1), dtype=bool),
+                stop_mask=self.split_across_axis(jnp.zeros((self.batch_size, 1), dtype=bool)),
             )
 
-            self.precompile_dict["prefill"][curr_seq_len] = jax.jit(self.prefill)
+            in_shardings = jax.tree.map(lambda x: x.sharding, (x_init, state))
+            out_shardings = jax.tree.map(lambda x: x.sharding, state)
+
+            self.precompile_dict["prefill"][curr_seq_len] = jax.jit(
+                self.prefill, in_shardings=in_shardings, out_shardings=out_shardings
+            )  # float32[B, T] float32[B, T]['data']
             _output = self.precompile_dict["prefill"][curr_seq_len](x_init, state)
             curr_seq_len *= 2
         logger.info("Finished prefill precompile")
@@ -82,17 +99,22 @@ class InferenceEngine:
         curr_size = self.inital_sequence_len
 
         state = InferenceState(
-            next_token=jnp.ones((self.batch_size, 1), dtype=jnp.int32),
-            next_probs=jnp.ones((self.batch_size, 1)),
-            kv_cache=self.model.init_kv_cache(self.batch_size, dtype=self.config.kv_cache_dtype),
-            key=jax.random.PRNGKey(0),
-            seq_lens=jnp.array([1] * self.batch_size),
-            params=params,
-            stop_mask=jnp.zeros((self.batch_size, 1), dtype=bool),
+            next_token=self.split_across_axis(jnp.ones((self.batch_size, 1), dtype=jnp.int32)),
+            next_probs=self.split_across_axis(jnp.ones((self.batch_size, 1))),
+            kv_cache=self.model.init_kv_cache(self.batch_size, dtype=self.config.kv_cache_dtype, mesh=self.mesh),
+            key=self.replicate_across_axis(jax.random.PRNGKey(0)),
+            seq_lens=self.split_across_axis(jnp.array([1] * self.batch_size)),
+            params=self.replicate_across_axis(params),
+            stop_mask=self.split_across_axis(jnp.zeros((self.batch_size, 1), dtype=bool)),
         )
+
+        in_shardings = out_shardings = jax.tree.map(lambda x: x.sharding, state)
         while curr_size <= self.max_seq_len:
             self.precompile_dict["decode"][curr_size] = jax.jit(
-                lambda state: self.decode(state, curr_size), donate_argnums=(0,)
+                lambda state: self.decode(state, curr_size),
+                donate_argnums=(0,),
+                in_shardings=(in_shardings,),
+                out_shardings=out_shardings,
             )
             _ = self.precompile_dict["decode"][curr_size](state)
             curr_size *= 2
@@ -228,7 +250,11 @@ class InferenceEngine:
     def prefill_step(self, input_tokens: Array, inference_state: InferenceState) -> InferenceState:
         precompiled_length = input_tokens.shape[1]
         if self.precompile_dict["prefill"].get(precompiled_length) is None:
-            self.precompile_dict["prefill"][precompiled_length] = jax.jit(self.prefill)
+            in_shardings = jax.tree.map(lambda x: x.sharding, (input_tokens, inference_state))
+            out_shardings = jax.tree.map(lambda x: x.sharding, inference_state)
+            self.precompile_dict["prefill"][precompiled_length] = jax.jit(
+                self.prefill, in_shardings=in_shardings, out_shardings=out_shardings
+            )
 
         return self.precompile_dict["prefill"][precompiled_length](input_tokens, inference_state)
 
@@ -237,8 +263,12 @@ class InferenceEngine:
     ) -> tuple[InferenceState, Array, Array]:
         attention_length = self.compute_attention_length(inference_state.kv_cache[0].length)  # type: ignore
         if self.precompile_dict["decode"].get(attention_length) is None:
+            in_shardings = out_shardings = jax.tree.map(lambda x: x.sharding, inference_state)
             self.precompile_dict["decode"][attention_length] = jax.jit(
-                lambda state: self.decode(state, attention_length), donate_argnums=(0,)
+                lambda state: self.decode(state, attention_length),
+                donate_argnums=(0,),
+                in_shardings=(in_shardings,),
+                out_shardings=out_shardings,
             )
         new_state: InferenceState = self.precompile_dict["decode"][attention_length](inference_state)
         out_tokens = jnp.concat((out_tokens, new_state.next_token[...]), axis=-1)
@@ -275,19 +305,8 @@ class InferenceEngine:
             inference_state, out_tokens, out_logprobs = self.decode_step(inference_state, out_tokens, out_logprobs)
         return jax.tree.map(lambda x: list(jax.device_get(x)), (out_tokens, out_logprobs))
 
-    def batch_decode(
-        self, x: Array, seq_lens: Array, key: Array, params: PyTree
-    ) -> tuple[list[InferenceRollout], PyTree]:
+    def batch_decode(self, x: Array, intial_state: InferenceState) -> tuple[list[InferenceRollout], PyTree]:
         assert (B := x.shape[0]) == self.batch_size, f"Expected batch size {self.batch_size}, got {B}"
-        intial_state = InferenceState(
-            next_token=jnp.empty((self.batch_size, 1), dtype=jnp.int32),
-            next_probs=jnp.empty((self.batch_size, 1)),
-            kv_cache=self.model.init_kv_cache(self.batch_size, dtype=self.config.kv_cache_dtype),
-            key=key,
-            seq_lens=seq_lens,
-            params=params,
-            stop_mask=jnp.zeros((self.batch_size, 1), dtype=bool),
-        )
 
         output_rollouts = [InferenceRollout(rollouts=[], logprobs=[]) for _ in range(self.batch_size)]
 
@@ -313,10 +332,26 @@ class InferenceEngine:
         output = []
         metrics = []
 
+        key, params = self.replicate_across_axis(key), self.replicate_across_axis(params)
+        batch_tokens, seq_lens = self.split_across_axis(batch_tokens), self.split_across_axis(seq_lens)
+        next_token = self.split_across_axis(jnp.zeros((self.batch_size, 1), dtype=jnp.int32))
+        next_probs = self.split_across_axis(jnp.zeros((self.batch_size, 1)))
+        stop_mask = self.split_across_axis(jnp.zeros((self.batch_size, 1), dtype=bool))
+
         for i in range(batches):
             tokens = batch_tokens[i * self.batch_size : (i + 1) * self.batch_size]
             seq_lens_batch = seq_lens[i * self.batch_size : (i + 1) * self.batch_size]
-            batch_output, batch_metrics = self.batch_decode(tokens, seq_lens_batch, key, params)
+            intial_state = InferenceState(
+                next_token=next_token,
+                next_probs=next_probs,
+                kv_cache=self.model.init_kv_cache(self.batch_size, dtype=self.config.kv_cache_dtype, mesh=self.mesh),
+                key=jax.random.fold_in(key, i),
+                seq_lens=seq_lens_batch,
+                params=params,
+                stop_mask=stop_mask,
+            )
+
+            batch_output, batch_metrics = self.batch_decode(tokens, intial_state)
             output.extend(batch_output)
             metrics.append(batch_metrics)
 
@@ -371,9 +406,9 @@ if __name__ == "__main__":
         temperature=0.6,
         top_p=0.95,
         top_k=50,
-        max_seq_len=1024,
+        max_seq_len=128,
         batch_size=2,
-        group_size=2,
+        group_size=8,
         kv_cache_dtype="bfloat16",
         precompile=False,
     )
@@ -383,7 +418,7 @@ if __name__ == "__main__":
     key = jax.random.PRNGKey(2303)
     params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
 
-    tokenizer_inp = ["What is 2 + 2", "Explain the theory of relativity"]
+    tokenizer_inp = ["What is 2 + 2", "Explain the theory of relativity", "what is 3 + 3", "what is 4 + 4"]
 
     # inp_tokens, sequence_lens = engine.tokenize(tokenizer_inp)
 
@@ -391,3 +426,4 @@ if __name__ == "__main__":
     # output_rollouts, metrics = engine.rollout(inp_tokens, sequence_lens, key, params)
 
     output = engine(tokenizer_inp, key, params, detokenize=True)
+    breakpoint()
