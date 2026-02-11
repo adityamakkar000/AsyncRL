@@ -1,3 +1,5 @@
+# train batch, don't need this right now, skeleton (need to review)
+
 class AnnealedRLDataset:
     def __init__(self, gcs_path, mask_rate=0.0):
         """
