@@ -9,11 +9,15 @@ from constants import COLUMNS, DATA, DATASETS, GS_BUCKET, HF_PATHS
 from utils import write_dataset_to_local_jsonl, upload_local_file_to_gcs, delete_local_file
 
 CHUNK_SIZE = 50_000 # max number of rows per jsonl file for larger datasets
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+END = "\033[0m"
 
 def _rename_messages_to_trace_if_present(dataset: Dataset) -> Dataset:
     """If the dataset has a 'messages' column, rename it to 'trace'. Otherwise return as-is."""
     if "messages" in dataset.column_names:
-        print("Renaming 'messages' column to 'trace'.")
+        print(f"{GREEN}Renaming 'messages' column to 'trace'.{END}")
         return dataset.rename_column("messages", "trace")
     return dataset
 
@@ -24,16 +28,16 @@ def process_and_upload_dataset(
     split: str = "train",
 ) -> None:
     
-    print(f"Loading dataset from HuggingFace: {hf_path} (split={split})...")
+    print(f"{YELLOW}Loading dataset from HuggingFace: {hf_path} (split={split})...{END}")
     dataset = load_dataset(hf_path, split=split) # get the dataset from HF
-    print(f"Loaded dataset with {len(dataset)} rows and columns: {dataset.column_names}")
+    print(f"{GREEN}Loaded dataset with {len(dataset)} rows and columns: {dataset.column_names}{END}")
 
     # remove columns that are not in the columns list
     if columns is not None:
         original_columns = dataset.column_names
         columns_to_remove = [c for c in original_columns if c not in columns]
         if columns_to_remove:
-            print(f"Removing unused columns: {columns_to_remove}")
+            print(f"{YELLOW}Removing unused columns: {columns_to_remove}{END}")
         dataset = dataset.remove_columns(columns_to_remove)
 
     # optional: rename "messages" to "trace" for clarity
@@ -44,43 +48,43 @@ def process_and_upload_dataset(
     base_name = f"{dataset_name}.jsonl"
 
     n = len(dataset)
-    print(f"Preparing to write and upload dataset ({n} rows) to GCS at: {base_gs}")
+    print(f"{YELLOW}Preparing to write and upload dataset ({n} rows) to GCS at: {base_gs}{END}")
 
     # if the dataset is small enough, write to a single file
     if n <= CHUNK_SIZE:
         local_path = os.path.join(cwd, base_name)
-        print(f"Writing entire dataset to single JSONL file: {local_path}")
+        print(f"{YELLOW}Writing entire dataset to single JSONL file: {local_path}{END}")
         write_dataset_to_local_jsonl(dataset, local_path)
-        print(f"Uploading {local_path} to GCS at {base_gs}.jsonl ...")
-        upload_local_file_to_gcs(local_path, f"{base_gs}.jsonl")
+        print(f"{YELLOW}Uploading {local_path} to GCS at {base_gs}/{base_name}...{END}")
+        upload_local_file_to_gcs(local_path, f"{base_gs}/{base_name}")
         delete_local_file(local_path)
-        print("Upload complete. Local file deleted.")
+        print(f"{GREEN}Upload complete. Local file deleted.{END}")
         return
 
     # if the dataset is larger than the chunk size, split into chunks and upload each chunk to GCS
-    print(f"Dataset is large, splitting into chunks of size {CHUNK_SIZE}...")
+    print(f"{YELLOW}Dataset is large, splitting into chunks of size {CHUNK_SIZE}...{END}")
 
     iteration = 0
     start_idx = 0
 
     while start_idx < n:
         end_idx = min(start_idx + CHUNK_SIZE, n)
-        print(f"Processing chunk {iteration}: rows {start_idx} to {end_idx-1}")
+        print(f"{YELLOW}Processing chunk {iteration}: rows {start_idx} to {end_idx-1}{END}")
         chunk = dataset.select(range(start_idx, end_idx))
         chunk_name = f"{iteration}_{base_name}"
         local_path = os.path.join(cwd, chunk_name)
 
-        print(f"Writing chunk to {local_path}")
+        print(f"{YELLOW}Writing chunk to {local_path}{END}")
         write_dataset_to_local_jsonl(chunk, local_path)
-        print(f"Uploading chunk to GCS at {base_gs}/{chunk_name}")
+        print(f"{YELLOW}Uploading chunk to GCS at {base_gs}/{chunk_name}{END}")
         upload_local_file_to_gcs(local_path, f"{base_gs}/{chunk_name}")
         delete_local_file(local_path)
-        print(f"Finished chunk {iteration}. Local chunk file deleted.\n")
+        print(f"{GREEN}Finished chunk {iteration}. Local chunk file deleted.\n{END}")
         
         iteration += 1
         start_idx = end_idx
 
-    print("All chunks processed and uploaded.")
+    print(f"{GREEN}All chunks processed and uploaded.{END}")
 
 
 def main() -> None:

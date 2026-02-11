@@ -10,8 +10,8 @@ def upload_local_file_to_gcs(local_path: str, gs_path: str):
 
     with open(local_path, "rb") as src:
         data = src.read()
-    with fs.open(gcs_path, "wb") as dst:
-        dst.write(data)
+        with fs.open(gcs_path, "wb") as dst:
+            dst.write(data)
 
 
 def write_dataset_to_local_jsonl(dataset: Dataset, local_path: str) -> None:
