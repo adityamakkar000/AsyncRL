@@ -2,12 +2,10 @@ from dataclasses import dataclass
 import jax
 from flax import struct
 
-
 @dataclass
 class DataConfig:
     name: str
-    gcs_path: str
-    local_path: str
+    batch_size: int
 
 @struct.dataclass
 class RLBatch:

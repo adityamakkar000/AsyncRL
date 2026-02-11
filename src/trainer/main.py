@@ -261,7 +261,6 @@ class Trainer:
 
     def make_save_tree(
         self,
-        step: int,
         *,
         params: Optional[PyTree] = None,
         opt_state: Optional[PyTree] = None,
