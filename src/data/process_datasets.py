@@ -1,5 +1,4 @@
 import argparse
-import json
 import os
 from typing import List
 from datasets import Dataset, load_dataset
@@ -87,14 +86,14 @@ def process_and_upload_dataset(
     print(f"{GREEN}All chunks processed and uploaded.{END}")
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser(
         description="Process a HuggingFace dataset and upload to GCS (one-time per dataset)."
     )
-    parser.add_argument(
+    hf_group = parser.add_mutually_exclusive_group()
+    hf_group.add_argument(
         "--dataset-name",
         type=str,
-        required=True,
         choices=DATASETS,
         help="One of the DATASETS from src.constants.",
     )
@@ -104,7 +103,34 @@ def main() -> None:
         default="train",
         help="Dataset split to process (default: train).",
     )
+    hf_group.add_argument(
+        "--hf",
+        type=str,
+        help="optional, provide dataset path for a new dataset (if specified, --name and --columns is required)",
+    )
+    parser.add_argument(
+        "--name",
+        type=str,
+        help="dataset name for internal use if using --hf option (required if --hf is specified)",
+    )
+    parser.add_argument(
+        "--columns",
+        type=str,
+        help="the columns you want to keep, seperated by /. assumes they exist in the dataset"
+    )
     args = parser.parse_args()
+
+    if args.hf:
+        # we are given a new hf path
+        if not args.name or not args.columns:
+            raise ValueError("name or columsn not passed in for the dataset, make sure they're correct")
+        hf_path = args.hf
+        dataset_name = args.name
+        columns = args.columns.split("/")
+
+        print(f"Starting NEW dataset processing for: {dataset_name} found at {hf_path}")
+        process_and_upload_dataset(dataset_name, hf_path, columns, split=args.split)
+        return
 
     print(f"Starting dataset processing for: {args.dataset_name} (split={args.split})")
 
@@ -120,15 +146,10 @@ def main() -> None:
     hf_path = HF_PATHS[idx]
     columns = COLUMNS[idx]
 
-    if args.dataset_name == "omnimath": # omni math custom logic
-        print("Detected omnimath: using split 'test' for processing.")
-        args.split = "test"
-
     print(f"Using HuggingFace path: {hf_path}")
     print(f"Columns to keep: {columns}")
 
     process_and_upload_dataset(args.dataset_name, hf_path, columns, split=args.split)
-
 
 if __name__ == "__main__":
     main()
