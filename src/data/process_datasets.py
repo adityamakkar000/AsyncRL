@@ -73,7 +73,7 @@ def process_and_upload_dataset(
         end_idx = min(start_idx + CHUNK_SIZE, n)
         print(f"{YELLOW}Processing chunk {iteration}: rows {start_idx} to {end_idx-1}{END}")
         chunk = dataset.select(range(start_idx, end_idx))
-        chunk_name = f"{iteration}_{base_name}"
+        chunk_name = f"{iteration:03d}_{base_name}"
         local_path = os.path.join(cwd, chunk_name)
 
         print(f"{YELLOW}Writing chunk to {local_path}{END}")
@@ -121,7 +121,7 @@ def main():
     parser.add_argument(
         "--columns",
         type=str,
-        help="the columns you want to keep, seperated by /. assumes they exist in the dataset"
+        help="the columns you want to keep, seperated by \"/\". Assumes they exist in the dataset (or will be skipped) - required if --hf is specified"
     )
     args = parser.parse_args()
 
