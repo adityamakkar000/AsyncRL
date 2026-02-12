@@ -5,7 +5,7 @@ CHECKPOINTS = "checkpoints"  # checkpoints bucket
 DATA = "data"  # data bucket
 # DATASETS, HF_PATHS, COLUMNS correspond to each other in index order
 DATASETS = ["omnimath", "acereason", "openr1", "numina-cot"]  # dataset bucket names
-HF_PATHS = ["KbsdJames/Omni-MATH", "nvidia/AceReason-Math", "open-r1/OpenR1-Math-220k", "numina-cot"]  # hf paths
+HF_PATHS = ["KbsdJames/Omni-MATH", "nvidia/AceReason-Math", "open-r1/OpenR1-Math-220k", "AI-MO/NuminaMath-CoT"]  # hf paths
 COLUMNS = [["problem", "solution", "answer"], ["problem", "answer"], ["problem", "solution", "answer", "messages"], ["problem", "solution", "messages"]]  # columns to keep
 CACHE = "cache"  # cache bucket
 
