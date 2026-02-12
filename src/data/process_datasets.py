@@ -49,23 +49,6 @@ def process_and_upload_dataset(
     n = len(dataset)
     print(f"{YELLOW}Preparing to write and upload dataset ({n} rows) to GCS at: {base_gs}{END}")
 
-    # if the dataset is small enough, write to a single file
-    if n <= CHUNK_SIZE:
-        local_path = os.path.join(cwd, base_name)
-        print(f"{YELLOW}Writing entire dataset to single JSONL file: {local_path}{END}")
-        write_dataset_to_local_jsonl(dataset, local_path)
-        print(f"{YELLOW}Uploading {local_path} to GCS at {base_gs}/{base_name}...{END}")
-        upload_local_file_to_gcs(local_path, f"{base_gs}/{base_name}")
-        delete_local_file(local_path)
-        print(f"{GREEN}Upload complete. Local file deleted.{END}")
-        print(f"{GREEN}All chunks processed and uploaded.{END}")
-        print(f"{RED}Cleaning up cache files.{END}")
-        dataset.cleanup_cache_files()
-        print(f"{GREEN}Cache cleaned up.{END}")
-        return
-
-    # if the dataset is larger than the chunk size, split into chunks and upload each chunk to GCS
-    print(f"{YELLOW}Dataset is large, splitting into chunks of size {CHUNK_SIZE}...{END}")
     iteration = 0
     start_idx = 0
 
