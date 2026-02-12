@@ -58,11 +58,14 @@ def process_and_upload_dataset(
         upload_local_file_to_gcs(local_path, f"{base_gs}/{base_name}")
         delete_local_file(local_path)
         print(f"{GREEN}Upload complete. Local file deleted.{END}")
+        print(f"{GREEN}All chunks processed and uploaded.{END}")
+        print(f"{RED}Cleaning up cache files.{END}")
+        dataset.cleanup_cache_files()
+        print(f"{GREEN}Cache cleaned up.{END}")
         return
 
     # if the dataset is larger than the chunk size, split into chunks and upload each chunk to GCS
     print(f"{YELLOW}Dataset is large, splitting into chunks of size {CHUNK_SIZE}...{END}")
-
     iteration = 0
     start_idx = 0
 
@@ -84,7 +87,9 @@ def process_and_upload_dataset(
         start_idx = end_idx
 
     print(f"{GREEN}All chunks processed and uploaded.{END}")
-
+    print(f"{RED}Cleaning up cache files.{END}")
+    dataset.cleanup_cache_files()
+    print(f"{GREEN}Cache cleaned up.{END}")
 
 def main():
     parser = argparse.ArgumentParser(
