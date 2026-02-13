@@ -5,7 +5,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
-from jax.sharding import PartitionSpec as P
 from jax.sharding import Sharding, SingleDeviceSharding
 from jaxtyping import Array, PyTree
 from omegaconf import DictConfig
@@ -65,21 +64,14 @@ class Model(HFModelBase):
     def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
         return get_qwen_3_weights(params, name=model_name)
 
-    def init_kv_cache(self, batch_size: int, mesh: jax.sharding.Mesh, dtype: str = "bfloat16") -> list[KVCache]:
-        split_sharding = P(mesh.axis_names[0])
-        out_shardings = KVCache(
-            k=jax.NamedSharding(mesh, split_sharding),
-            v=jax.NamedSharding(mesh, split_sharding),
-            length=jax.NamedSharding(mesh, P()),
-        )
-
-        @partial(jax.jit, out_shardings=out_shardings)
+    def init_kv_cache(self, batch_size: int, sharding: jax.NamedSharding, dtype: str = "bfloat16") -> list[KVCache]:
+        @partial(jax.jit, out_shardings=sharding)
         def _init():
             def zeros():
                 return jnp.zeros(
                     (
                         batch_size,
-                        self.config.qwen_config.sequence_len,
+                        self.config.qwen_config.sequence_len + 1024,  # buffer for prompt input + padding
                         self.config.qwen_config.n_groups,
                         self.config.qwen_config.head_dim,
                     ),
