@@ -28,4 +28,4 @@ eval = [
 ]
 
 [tool.uv.sources]
-stax = { git = "https://github.com/adityamakkar000/stax.git", branch="aditya/fixSync"}
+stax = { git = "https://github.com/adityamakkar000/stax.git"}

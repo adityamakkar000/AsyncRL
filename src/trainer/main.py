@@ -1,7 +1,7 @@
 import json
 import os
 from functools import partial
-from typing import Optional
+from typing import Dict, Optional
 
 import jax
 import optax
@@ -10,13 +10,15 @@ from dotenv import load_dotenv
 from jax.experimental.multihost_utils import sync_global_devices
 from jaxtyping import PyTree
 from omegaconf import DictConfig, OmegaConf
+from stax import TrainFn
 from stax import staxLogger as logger
 
 from src.constants import CACHE, CHECKPOINTS, GS_BUCKET
+from src.data import RLBatch
 from src.model import Model
 
 from .config import TrainerConfig
-from .steps import sft_step, standard_rl_step
+from .loss import compute_aux_metrics, get_rl_step_fn
 from .utils import Key, set_jax_cache, setup, write_to_gcs
 
 load_dotenv()
@@ -62,13 +64,14 @@ class Trainer:
 
             sync_global_devices("Trainer initialization")
 
+        logger.info("Training Configuration:\n" + OmegaConf.to_yaml(config))
         logger.info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds")
 
     def validate_config(self):
         """Method to validate the TrainerConfig parameters."""
         # validate config here
         cfg = self.config
-        if cfg.grad_steps < 1:
+        if cfg.grad_accum_steps < 1:
             raise ValueError("grad_accumulation must be at least 1")
         if cfg.num_steps < 1:
             raise ValueError("num_steps must be at least 1")
@@ -84,11 +87,14 @@ class Trainer:
             raise ValueError("warmup_steps and decay_steps must sum to at most 1.0")
         if cfg.sharding_config.sharding_type not in ["single", "dp", "fsdp"]:
             raise ValueError("sharding_type must be one of 'single', 'dp', or 'fsdp'")
+        if cfg.loss_config.rl_config.algorithm not in ["grpo", "dr_grpo", "dapo"]:
+            raise ValueError(f"Unsupported RL algorithm: {cfg.loss_config.rl_config.algorithm}")
+
+        # TODO: check if group size divices batch size
 
     @partial(setup, component="initialized state")
     def _init_state(self):
         self.train_fn = None
-        self.val_fn = None
 
         self.model = None
         self.tx = None
@@ -143,13 +149,15 @@ class Trainer:
         abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx, abstract=True)
         params_shape, opt_state_shape = abstract_state["params"], abstract_state["opt_state"]
 
-        step_fn = sft_step
-        self.train_fn, self.val_fn, shardings = stax.fn.get_steps_fn(
+        step_fn = get_rl_step_fn(self.config.loss_config.rl_config)
+
+        # val fn not needed since we just care about val reward, not loss
+        train_fn, _val_fn, shardings = stax.fn.get_steps_fn(
             step_fn,
             self.model,
             self.tx,
             has_aux=True,
-            grad_steps=self.config.grad_steps,
+            grad_steps=self.config.grad_accum_steps,
             val_steps=self.config.val_steps,
             sharding=stax.ShardingConfig(
                 params_shape=params_shape,
@@ -163,6 +171,22 @@ class Trainer:
         )
 
         self.params_sharding, self.opt_state_sharding = shardings.param_sharding, shardings.opt_state_sharding
+
+        def train_step(param: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
+            aux_metrics = {}
+            for step in range(self.config.loss_config.grad_steps):
+                out = train_fn(self.params, self.opt_state, batch)
+                self.params = out["params"]
+                self.opt_state = out["opt_state"]
+                aux_metrics |= {f"{k}_step_{step}": v for k, v in out["aux_metrics"].items()}
+
+            return {
+                "params": self.params,
+                "opt_state": self.opt_state,
+                "aux_metrics": aux_metrics | compute_aux_metrics(batch),
+            }
+
+        self.train_step: TrainFn = train_step
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
@@ -323,28 +347,48 @@ class Trainer:
         # self.val_dataset.load_from_state(state["dataset"]["val"])
 
     def train(self):
-        if self.train_fn is None or self.val_fn is None:
-            raise ValueError("Functions not initialized yet")
+        assert self.train_fn is not None, "Train function not set up."
+        assert self.train_dataset is not None, "Train dataset not set up."
+        assert self.writer is not None, "Writer not set up."
+        assert self.checkpointer is not None, "Checkpointer not set up."
 
-        for step in range(self.global_step, self.total_steps):
-            # might have to do something here for RL
-            batch = self.train_dataset()
-            out = self.train_fn(
-                self.params,
-                self.opt_state,
-            )
+        logger.info("Starting training loop...")
+        while self.global_step < self.total_steps:
+            # get train batch
+            # TODO: (chinmay)
+            # prompts = self.train_dataset()
 
-            # val step
+            # get rollouts
+            # TODO: (divya)
+            # inference_engine.rollout(prompts)
 
-            # val generations
+            # prepare batch
+            # TODO: (chinmay)
+            # train_batch = self.train_dataset.prepare_batch(rollouts)
+            train_batch = ...
 
-            # checkpoint step
+            out = self.train_step(self.params, self.opt_state, train_batch)
+            self.params = out["params"]
+            self.opt_state = out["opt_state"]
+            self.writer(self.global_step, out["aux_metrics"])
 
+            if self.global_step % self.config.val_interval == 0:
+                # TODO: val step here
+                ...
+
+            self.global_step += 1
+
+        logger.info("Training complete.")
+
+    @partial(setup, component="cleanup")
     def finish(self):
         """Finalize training and clean up resources."""
-        if self.writer is not None:
+        if self.writer:
+            logger.info("Cleaning up writer resources...")
             self.writer.finish()
-        logger.info("Training complete. Resources cleaned up.")
+        if self.checkpointer:
+            logger.info("Cleaning up checkpointer resources...")
+            self.checkpointer.wait_until_finished()
 
     @property
     def has_best_ckpt(self):

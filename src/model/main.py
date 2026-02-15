@@ -11,9 +11,8 @@ from omegaconf import DictConfig
 from optax import GradientTransformation
 from stax import HFModelBase
 
-from src.model.qwen3 import KVCache, Qwen3
-
 from .config import ModelConfig
+from .qwen3 import KVCache, Qwen3
 from .utils import convert_dtype, get_qwen_3_weights, save_to_hf
 
 sizes = [0.6, 1.7, 4, 8]

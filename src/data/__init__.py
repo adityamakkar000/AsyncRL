@@ -1,3 +1,3 @@
-from src.data.config import DataConfig
+from src.data.config import DataConfig, RLBatch
 
-__all__ = ["DataConfig"]
+__all__ = ["DataConfig", "RLBatch"]

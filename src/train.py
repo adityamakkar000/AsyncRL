@@ -1,7 +1,6 @@
 import hydra
 from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig, OmegaConf
-from stax import staxLogger as logger
 
 from src.trainer import Trainer, TrainerConfig
 
@@ -11,7 +10,6 @@ cs.store(name="base", node=TrainerConfig)
 
 @hydra.main(version_base=None, config_path="./configs/train")
 def main(cfg: DictConfig) -> None:
-    logger.info("Training Configuration:\n" + OmegaConf.to_yaml(cfg))
     trainer = Trainer(config=cfg)
 
     try:

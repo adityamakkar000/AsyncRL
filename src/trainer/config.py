@@ -1,10 +1,29 @@
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional
+from typing import List, Optional, Protocol
 
+from jaxtyping import Array, PyTree
 from omegaconf import MISSING
 
-from src.data import DataConfig
+from src.data import DataConfig, RLBatch
 from src.model import ModelConfig
+
+
+class LossFunction(Protocol):
+    """
+    A protocol for loss functions used in reinforcement learning.
+    """
+
+    def __call__(self, token_logprobs: Array, batch: RLBatch) -> tuple[Array, PyTree]:
+        """
+        Compute the loss given token log probabilities, token mask, and rewards.
+        Args:
+            token_logprobs (Array): Log probabilities of the tokens. Shape: [batch_size, seq_len, vocab_size].
+            batch (RLBatch): A batch of data containing tokens, token masks, and rewards.
+        Returns:
+            loss (Array): The computed loss.
+            aux_metrics (PyTree): Auxiliary metrics for monitoring.
+        """
+        ...
 
 
 @dataclass
@@ -23,10 +42,9 @@ class WandBConfig:
     tags: Optional[List[str]] = None
 
 
+# TODO: actual experiment config
 @dataclass
-class AnnealedLoss:
-    # TODO: represent the real experiment
-    ...
+class AnnealedLoss: ...
 
 
 @dataclass
@@ -35,11 +53,36 @@ class BestMetric:
     maximize: bool = False  # Whether to maximize or minimize the metric
 
 
+# TODO: (Divya) actual inference config
+@dataclass
+class InferenceConfig:
+    max_new_tokens: int = 512
+    temperature: float = 1.0
+    top_p: float = 1.0
+
+
+@dataclass
+class RLConfig:
+    algorithm: str = "grpo"  # "grpo", "dr_grpo", "dapo"
+    epsilon_high: float = 1.0
+    epsilon_low: float = 0.1
+    group_size: int = 16
+
+
+@dataclass
+class LossConfig:
+    rl_config: RLConfig = field(default_factory=RLConfig)
+    grad_steps: int = 1  # how many off-policy ppo steps to take
+    inference_config: InferenceConfig = field(default_factory=InferenceConfig)
+    annealing_config: Optional[AnnealedLoss] = None  # TODO: Annealed RL config will go here
+
+
 @dataclass
 class TrainerConfig:
     experiment_name: str = MISSING  # The name of the experiment
     data_config: DataConfig = MISSING  # The configuration for the data module
     model_config: ModelConfig = MISSING  # The configuration for the model
+    loss_config: LossConfig = MISSING  # The configuration for the loss function
 
     sharding_config: ShardingConfig = field(default_factory=ShardingConfig)  # The configuration for sharding
 
@@ -49,7 +92,7 @@ class TrainerConfig:
     # figure out if we want epochs or steps
     # pros of epochs: more interpretable, cons: lr scheduling, etc
     num_steps: int = 1000  # The number of training epochs
-    grad_steps: int = 1  # The number of gradient accumulation steps
+    grad_accum_steps: int = 1  # The number of gradient accumulation steps
     val_interval: int = 100  # The interval (in steps) at which to validate the model
     val_steps: int = 10  # The number of validation steps to run
 
