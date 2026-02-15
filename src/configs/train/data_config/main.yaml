@@ -1,3 +1,4 @@
-# Data configuration placeholder
-# TODO: Add data config fields when DataConfig is defined
-name: "TODO"
+name: "omnimath"
+batch_size: 4
+gcs_path: null  # null = gs://arl-experiments/data/{name}/
+prompt_column: "problem"

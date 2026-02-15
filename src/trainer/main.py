@@ -12,7 +12,10 @@ from jaxtyping import PyTree
 from omegaconf import DictConfig, OmegaConf
 from stax import staxLogger as logger
 
+from transformers import AutoTokenizer
+
 from src.constants import CACHE, CHECKPOINTS, GS_BUCKET
+from src.data.dataloader import PromptRLDataset
 from src.model import Model
 
 from .config import TrainerConfig
@@ -171,10 +174,18 @@ class Trainer:
     @partial(setup, component="dataset")
     def _setup_dataset(self):
         """Setup the dataset for training."""
-        # TODO: (chinmay)
-        # setup the train and the val dataset
-        self.train_dataset = None
-        self.val_dataset = None
+        tokenizer = AutoTokenizer.from_pretrained(
+            self.config.model_config.hf_model_name,
+            trust_remote_code=True,
+        )
+        max_length = self.config.model_config.qwen_config.sequence_len
+        self.train_dataset = PromptRLDataset(
+            data_config=self.config.data_config,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            seed=self.config.seed,
+        )
+        self.val_dataset = None  # TODO: add val dataset when needed
 
     @partial(setup, component="model")
     def _setup_model(self):
@@ -266,14 +277,22 @@ class Trainer:
         opt_state: Optional[PyTree] = None,
         metadata_metrics: Optional[dict[str, float]] = None,
     ):
-        # TODO: (chinmay) save dataset state
-        # dataset_state = {"train": self.train_dataset.save_checkpoint(), "val": self.val_dataset.save_checkpoint()}
+        dataset_state = None
+        if self.train_dataset is not None and hasattr(
+            self.train_dataset, "save_checkpoint"
+        ):
+            dataset_state = {"train": self.train_dataset.save_checkpoint()}
+        if self.val_dataset is not None and hasattr(
+            self.val_dataset, "save_checkpoint"
+        ):
+            dataset_state = dataset_state or {}
+            dataset_state["val"] = self.val_dataset.save_checkpoint()
 
         state = {
             "params": params if params else self.params,
             "opt_state": opt_state if opt_state else self.opt_state,
             "global_step": self.global_step,
-            "dataset": None,  # TODO: (chinmay) add dataset state here
+            "dataset": dataset_state,
             "key": jax.device_get(self.key.key),
         }
         metadata = {
@@ -286,7 +305,7 @@ class Trainer:
 
     def save_checkpoint(self, step: int, metadata_metrics: Optional[dict[str, float]] = None):
         assert self.checkpointer is not None, "Checkpointer not set up."
-        state, metadata = self.make_save_tree(step, metadata_metrics=metadata_metrics)
+        state, metadata = self.make_save_tree(metadata_metrics=metadata_metrics)
         logger.info(f"Saving checkpoint at step {step} ...")
         self.checkpointer.save_checkpoint(step=step, save_tree=state, metadata=metadata)
 
@@ -313,7 +332,6 @@ class Trainer:
 
         # don't need metadata
         save_tree, _ = self.make_save_tree(
-            step=-1,
             params=out["params"],
             opt_state=out["opt_state"],
         )
@@ -328,20 +346,30 @@ class Trainer:
 
         self.writer_id = metadata.get("writer_id", None)
 
-        # TODO: (chinmay) restore dataset state
-        # self.train_dataset.load_from_state(state["dataset"]["train"])
-        # self.val_dataset.load_from_state(state["dataset"]["val"])
+        if state.get("dataset") and self.train_dataset is not None:
+            train_state = state["dataset"].get("train")
+            if train_state is not None and hasattr(
+                self.train_dataset, "restore_checkpoint"
+            ):
+                self.train_dataset.restore_checkpoint(train_state)
+        if state.get("dataset") and self.val_dataset is not None:
+            val_state = state["dataset"].get("val")
+            if val_state is not None and hasattr(
+                self.val_dataset, "restore_checkpoint"
+            ):
+                self.val_dataset.restore_checkpoint(val_state)
 
     def train(self):
         if self.train_fn is None or self.val_fn is None:
             raise ValueError("Functions not initialized yet")
 
+        batch_size = self.config.data_config.batch_size
         for step in range(self.global_step, self.total_steps):
-            # might have to do something here for RL
-            batch = self.train_dataset()
+            batch = self.train_dataset(batch_size)
             out = self.train_fn(
                 self.params,
                 self.opt_state,
+                batch,
             )
 
             # val step
