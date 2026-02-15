@@ -25,4 +25,8 @@ wandb/
 .virtual_documents/
 *_rsa*
 *.safetensors
+<<<<<<< HEAD
 src/data/README.md
+=======
+**/inference_trace/*
+>>>>>>> 1339e05 (base model working)
