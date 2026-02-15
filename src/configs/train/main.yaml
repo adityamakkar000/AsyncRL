@@ -3,9 +3,12 @@ defaults:
   - data_config: main
   - model_config: qwen_0.6b
   - sharding_config: fsdp
+  - loss_config: loss
   - _self_
 
-grad_steps: 1
+experiment_name: "test_run_divya"
+
+grad_accum_steps: 1
 seed: 0
 num_steps: 1000
 val_interval: 100

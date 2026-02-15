@@ -5,6 +5,7 @@ from jaxtyping import Array, PyTree
 from omegaconf import MISSING
 
 from src.data import DataConfig, RLBatch
+from src.inference_engine import InferenceConfig
 from src.model import ModelConfig
 
 
@@ -53,14 +54,6 @@ class BestMetric:
     maximize: bool = False  # Whether to maximize or minimize the metric
 
 
-# TODO: (Divya) actual inference config
-@dataclass
-class InferenceConfig:
-    max_new_tokens: int = 512
-    temperature: float = 1.0
-    top_p: float = 1.0
-
-
 @dataclass
 class RLConfig:
     algorithm: str = "grpo"  # "grpo", "dr_grpo", "dapo"
@@ -73,7 +66,7 @@ class RLConfig:
 class LossConfig:
     rl_config: RLConfig = field(default_factory=RLConfig)
     grad_steps: int = 1  # how many off-policy ppo steps to take
-    inference_config: InferenceConfig = field(default_factory=InferenceConfig)
+    inference: InferenceConfig = field(default_factory=InferenceConfig)
     annealing_config: Optional[AnnealedLoss] = None  # TODO: Annealed RL config will go here
 
 
