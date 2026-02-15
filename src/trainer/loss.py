@@ -112,7 +112,7 @@ def dapo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tup
 
 
 def get_loss_fn(RLConfig) -> LossFunction:
-    match RLConfig.loss_type:
+    match RLConfig.algorithm:
         case "grpo":
             loss = grpo_loss
         case "dr_grpo":
@@ -120,7 +120,7 @@ def get_loss_fn(RLConfig) -> LossFunction:
         case "dapo":
             loss = dapo_loss
         case _:
-            raise ValueError(f"Unknown loss type: {RLConfig.loss_type}")
+            raise ValueError(f"Unknown loss type: {RLConfig.algorithm}")
 
     return partial(loss, config=RLConfig)
 

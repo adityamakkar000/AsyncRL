@@ -1,0 +1,4 @@
+algorithm: grpo
+epsilon_high: 1.0
+epsilon_low: 0.1
+group_size: 16

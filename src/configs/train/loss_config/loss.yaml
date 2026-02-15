@@ -1,0 +1,6 @@
+defaults:
+  - rl_config: grpo
+  - inference: main
+  - _self_
+
+grad_steps: 1
