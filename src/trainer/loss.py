@@ -21,8 +21,11 @@ def grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tup
     group_rewards = batch.rewards.reshape(B // G, G)
     group_mean = group_rewards.mean(axis=1, keepdims=True) * jnp.ones_like(group_rewards)
     group_std = group_rewards.std(axis=1, keepdims=True) * jnp.ones_like(group_rewards) + 1e-8
-    advantages = batch.rewards - group_mean.reshape(
-        B,
+    advantages = (
+        batch.rewards
+        - group_mean.reshape(
+            B,
+        )
     ) / group_std.reshape(
         B,
     )
