@@ -10,6 +10,8 @@ results/
 *.pyc
 **/outputs/*
 *.log 
+src/data/README.md
+src/data/test.ipynb
 **/Qwen/*
 *.pyo
 *.egg-info/
