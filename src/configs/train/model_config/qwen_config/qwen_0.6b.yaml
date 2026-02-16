@@ -1,6 +1,6 @@
 vocab_size: 151936
 d_ff: 3072
-sequence_len: 20
+sequence_len: 1024
 model_dim: 1024
 n_heads: 16
 n_groups: 8
