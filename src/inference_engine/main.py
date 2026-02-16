@@ -146,7 +146,6 @@ class InferenceEngine:
         while curr_size <= self.max_seq_len:
             self.precompile_dict["decode"][curr_size] = jax.jit(
                 lambda state: self.decode(state, curr_size),
-                donate_argnums=(0,),
                 in_shardings=(self.state_sharding,),
                 out_shardings=self.state_sharding,
             )
@@ -431,7 +430,7 @@ if __name__ == "__main__":
         qwen_config=QwenConfig(
             vocab_size=151936,
             d_ff=3072,
-            sequence_len=16_384,
+            sequence_len=1024,
             model_dim=1024,
             n_heads=16,
             n_groups=8,
@@ -453,7 +452,7 @@ if __name__ == "__main__":
         n_replicas=4,
         group_size=64,
         kv_cache_dtype="bfloat16",
-        precompile=False,
+        precompile=True,
     )
 
     engine = InferenceEngine(model, params, config)
