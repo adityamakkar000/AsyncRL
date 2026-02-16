@@ -15,6 +15,7 @@ from stax import staxLogger as logger
 
 from src.constants import CACHE, CHECKPOINTS, GS_BUCKET
 from src.data import RLBatch
+from src.inference_engine import InferenceEngine
 from src.model import Model
 
 from .config import TrainerConfig
@@ -102,6 +103,7 @@ class Trainer:
 
         self.model = None
         self.tx = None
+        self.inference_engine = None
 
         self.params = None
         self.opt_state = None
@@ -175,6 +177,7 @@ class Trainer:
         )
 
         self.params_sharding, self.opt_state_sharding = shardings.param_sharding, shardings.opt_state_sharding
+        self.train_fn = train_fn
 
         def train_step(param: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
             aux_metrics = {}
@@ -223,6 +226,22 @@ class Trainer:
         self.opt_state = out_state["opt_state"]
 
         logger.info(f"Params intialized with total size: {self.model.count_params(self.params):_} parameters.")
+
+    @partial(setup, component="inference engine")
+    def _setup_inference_engine(self):
+        """Setup the inference engine for evaluation and generation rollouts."""
+        if self.config.loss_config.inference_config is None:
+            logger.info("No inference config provided, skipping inference engine setup.")
+            return
+
+        assert self.model is not None, "Model must be set up before inference engine init."
+        assert self.params is not None, "Train state must be initialized before inference engine init."
+
+        inference_params = {"params": self.params}
+        # inference_engine requires {params: params...}
+        self.inference_engine = InferenceEngine(
+            model=self.model, params=inference_params, config=self.config.loss_config.inference_config
+        )
 
     @partial(setup, component="optimizer")
     def _setup_optimizer(self):
@@ -372,8 +391,10 @@ class Trainer:
         self.val_dataset.restore_checkpoint(val_state)
 
     def train(self):
+        self._setup_inference_engine()
         assert self.train_fn is not None, "Train function not set up."
-        assert self.train_dataset is not None, "Train dataset not set up."
+        assert self.inference_engine is not None, "Inference engine not set up."
+        # assert self.train_dataset is not None, "Train dataset not set up."
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
@@ -384,12 +405,14 @@ class Trainer:
             # prompts = self.train_dataset()
 
             # get rollouts
-            # TODO: (divya)
-            # inference_engine.rollout(prompts)
+            _output = self.inference_engine(
+                ["what is your name"], jax.random.PRNGKey(0), {"params": self.params}, detokenize=True
+            )
 
             # prepare batch
             # TODO: (chinmay)
             # train_batch = self.train_dataset.prepare_batch(rollouts)
+            breakpoint()
             train_batch = ...
 
             out = self.train_step(self.params, self.opt_state, train_batch)
