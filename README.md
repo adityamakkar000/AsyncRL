@@ -26,25 +26,3 @@ Eval is only supported on a single-host TPU vm, ideally you want a tpu-v6e-8.
 ## Dataset
 
 The dataset layer lives in `src/data/`
-
-- A callable dataset object returns raw prompt strings for rollouts
-- The dataset keeps the aligned examples around so rewards can be computed from
-  ground truth (e.g., `answer`)
-
-### Install dataset dependencies
-
-```bash
-uv sync --extra data
-```
-
-### Sample prompts (local, HuggingFace)
-
-```python
-from src.data.dataclass import OmniMathPromptDataset
-
-ds = OmniMathPromptDataset()
-prompts = ds(batch_size=4)
-examples = ds.last_examples  # aligned with prompts, contains answer/metadata
-```
-
-- to do: make it read from gcs bucket instead of loading from huggingface
