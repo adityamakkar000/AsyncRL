@@ -11,6 +11,7 @@ class DataConfig:
     gcs_path: str | None = None
     prompt_column: str = "problem"
 
+
 @struct.dataclass
 class RLBatch:
     tokens: jax.Array  # [batch_size, max_seq_len]
