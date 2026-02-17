@@ -33,23 +33,16 @@ class ProcessDataset:
         """Resolve dataset_name vs custom hf_path/name/columns."""
         if self.cfg.hf_path is not None:
             if not self.cfg.name or not self.cfg.columns:
-                raise ValueError(
-                    "name and columns are required when hf_path is specified"
-                )
+                raise ValueError("name and columns are required when hf_path is specified")
             self.dataset_name = self.cfg.name
             self.hf_path = self.cfg.hf_path
-            self.columns = (
-                list(self.cfg.columns)
-                if isinstance(self.cfg.columns, (list, tuple))
-                else [self.cfg.columns]
-            )
+            self.columns = list(self.cfg.columns) if isinstance(self.cfg.columns, (list, tuple)) else [self.cfg.columns]
         else:
             if self.cfg.dataset_name is None:
                 raise ValueError("Either dataset_name or hf_path must be set")
             if self.cfg.dataset_name not in self.cfg.datasets:
                 raise ValueError(
-                    f"Unknown dataset_name: {self.cfg.dataset_name}. "
-                    f"Available: {list(self.cfg.datasets.keys())}"
+                    f"Unknown dataset_name: {self.cfg.dataset_name}. Available: {list(self.cfg.datasets.keys())}"
                 )
             preset = self.cfg.datasets[self.cfg.dataset_name]
             self.dataset_name = self.cfg.dataset_name
@@ -59,15 +52,9 @@ class ProcessDataset:
 
     def _process_and_upload(self) -> None:
         """Load dataset from HuggingFace, process, and upload chunks to GCS."""
-        print(
-            f"{YELLOW}Loading dataset from HuggingFace: {self.hf_path} "
-            f"(split={self.split})...{END}"
-        )
+        print(f"{YELLOW}Loading dataset from HuggingFace: {self.hf_path} (split={self.split})...{END}")
         dataset = load_dataset(self.hf_path, split=self.split)
-        print(
-            f"{GREEN}Loaded dataset with {len(dataset)} rows and columns: "
-            f"{dataset.column_names}{END}"
-        )
+        print(f"{GREEN}Loaded dataset with {len(dataset)} rows and columns: {dataset.column_names}{END}")
 
         if self.columns is not None:
             original_columns = dataset.column_names
@@ -83,20 +70,14 @@ class ProcessDataset:
         base_name = f"{self.dataset_name}.jsonl"
 
         n = len(dataset)
-        print(
-            f"{YELLOW}Preparing to write and upload dataset ({n} rows) to GCS at: "
-            f"{base_gs}{END}"
-        )
+        print(f"{YELLOW}Preparing to write and upload dataset ({n} rows) to GCS at: {base_gs}{END}")
 
         iteration = 0
         start_idx = 0
 
         while start_idx < n:
             end_idx = min(start_idx + CHUNK_SIZE, n)
-            print(
-                f"{YELLOW}Processing chunk {iteration}: rows {start_idx} to "
-                f"{end_idx - 1}{END}"
-            )
+            print(f"{YELLOW}Processing chunk {iteration}: rows {start_idx} to {end_idx - 1}{END}")
             chunk = dataset.select(range(start_idx, end_idx))
             chunk_name = f"{iteration:03d}_{base_name}"
             local_path = os.path.join(cwd, chunk_name)

@@ -271,13 +271,9 @@ class Trainer:
         metadata_metrics: Optional[dict[str, float]] = None,
     ):
         dataset_state = None
-        if self.train_dataset is not None and hasattr(
-            self.train_dataset, "save_checkpoint"
-        ):
+        if self.train_dataset is not None and hasattr(self.train_dataset, "save_checkpoint"):
             dataset_state = {"train": self.train_dataset.save_checkpoint()}
-        if self.val_dataset is not None and hasattr(
-            self.val_dataset, "save_checkpoint"
-        ):
+        if self.val_dataset is not None and hasattr(self.val_dataset, "save_checkpoint"):
             dataset_state = dataset_state or {}
             dataset_state["val"] = self.val_dataset.save_checkpoint()
 
@@ -342,15 +338,11 @@ class Trainer:
 
         if state.get("dataset") and self.train_dataset is not None:
             train_state = state["dataset"].get("train")
-            if train_state is not None and hasattr(
-                self.train_dataset, "restore_checkpoint"
-            ):
+            if train_state is not None and hasattr(self.train_dataset, "restore_checkpoint"):
                 self.train_dataset.restore_checkpoint(train_state)
         if state.get("dataset") and self.val_dataset is not None:
             val_state = state["dataset"].get("val")
-            if val_state is not None and hasattr(
-                self.val_dataset, "restore_checkpoint"
-            ):
+            if val_state is not None and hasattr(self.val_dataset, "restore_checkpoint"):
                 self.val_dataset.restore_checkpoint(val_state)
 
     def train(self):

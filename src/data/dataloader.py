@@ -3,13 +3,13 @@ from typing import Any
 
 from src.data.config import DataConfig
 
-class DataLoader:
 
+class DataLoader:
     def __init__(
         self,
         data_config: DataConfig,
         seed: int = 0,
-        max_length: int = 2048, # TODO: @adityamakkar000 add max length
+        max_length: int = 2048,  # TODO: @adityamakkar000 add max length
     ) -> None:
         self.data_config = data_config
         self.seed = seed
