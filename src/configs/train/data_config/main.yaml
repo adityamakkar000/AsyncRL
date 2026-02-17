@@ -1,4 +1,5 @@
+# TODO: change these for the actual run. below are test values @adityamakkar000
 name: "omnimath"
 batch_size: 4
-gcs_path: null  # null = gs://arl-experiments/data/{name}/
+gcs_path: gs://arl-experiments/data/omnimath/000_omnimath.jsonl
 prompt_column: "problem"

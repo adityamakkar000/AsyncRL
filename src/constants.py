@@ -5,6 +5,7 @@ CHECKPOINTS = "checkpoints"  # checkpoints bucket
 DATA = "data"  # data bucket
 CACHE = "cache"  # cache bucket
 
+# eval constants
 SERVED_MODEL_NAME = "eval_model"
 IP = "localhost"
 PORT = "8000"

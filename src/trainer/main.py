@@ -12,10 +12,8 @@ from jaxtyping import PyTree
 from omegaconf import DictConfig, OmegaConf
 from stax import staxLogger as logger
 
-from transformers import AutoTokenizer
-
 from src.constants import CACHE, CHECKPOINTS, GS_BUCKET
-from src.data.dataloader import PromptRLDataset
+from src.data.dataloader import DataLoader
 from src.model import Model
 
 from .config import TrainerConfig
@@ -173,19 +171,13 @@ class Trainer:
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
-        """Setup the dataset for training."""
-        tokenizer = AutoTokenizer.from_pretrained(
-            self.config.model_config.hf_model_name,
-            trust_remote_code=True,
-        )
         max_length = self.config.model_config.qwen_config.sequence_len
-        self.train_dataset = PromptRLDataset(
+        self.train_dataset = DataLoader(
             data_config=self.config.data_config,
-            tokenizer=tokenizer,
-            max_length=max_length,
             seed=self.config.seed,
+            max_length=max_length,
         )
-        self.val_dataset = None  # TODO: add val dataset when needed
+        self.val_dataset = None  # TODO: @adityamakkar000 add val dataset when needed
 
     @partial(setup, component="model")
     def _setup_model(self):
@@ -272,6 +264,7 @@ class Trainer:
 
     def make_save_tree(
         self,
+        step: int,
         *,
         params: Optional[PyTree] = None,
         opt_state: Optional[PyTree] = None,
@@ -305,7 +298,7 @@ class Trainer:
 
     def save_checkpoint(self, step: int, metadata_metrics: Optional[dict[str, float]] = None):
         assert self.checkpointer is not None, "Checkpointer not set up."
-        state, metadata = self.make_save_tree(metadata_metrics=metadata_metrics)
+        state, metadata = self.make_save_tree(step, metadata_metrics=metadata_metrics)
         logger.info(f"Saving checkpoint at step {step} ...")
         self.checkpointer.save_checkpoint(step=step, save_tree=state, metadata=metadata)
 
@@ -332,6 +325,7 @@ class Trainer:
 
         # don't need metadata
         save_tree, _ = self.make_save_tree(
+            step=-1,
             params=out["params"],
             opt_state=out["opt_state"],
         )
@@ -365,6 +359,7 @@ class Trainer:
 
         batch_size = self.config.data_config.batch_size
         for step in range(self.global_step, self.total_steps):
+            # might have to do something here for rl
             batch = self.train_dataset(batch_size)
             out = self.train_fn(
                 self.params,
