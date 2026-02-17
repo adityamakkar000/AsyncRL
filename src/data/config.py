@@ -8,8 +8,7 @@ from flax import struct
 class DataConfig:
     name: str
     batch_size: int = 4
-    # GCS path to processed data: gs://bucket/data/{dataset_name}/ or dataset_name (resolved via constants)
-    gcs_path: str | None = None  # e.g. "gs://arl-experiments/data/omnimath" or None → use name
+    gcs_path: str | None = None
     prompt_column: str = "problem"
 
 @struct.dataclass
