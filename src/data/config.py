@@ -10,6 +10,9 @@ class DataConfig:
     batch_size: int = 4
     gcs_path: str | None = None
     prompt_column: str = "problem"
+    answer_column: str = "answer"
+    trace_column: str | None = None
+    split: str = "train"
 
 
 @struct.dataclass

@@ -172,10 +172,11 @@ class Trainer:
     @partial(setup, component="dataset")
     def _setup_dataset(self):
         max_length = self.config.model_config.qwen_config.sequence_len
+        split = self.config.data_config.split
         self.train_dataset = DataLoader(
             data_config=self.config.data_config,
-            seed=self.config.seed,
             max_length=max_length,
+            split=split,
         )
         self.val_dataset = None  # TODO: @adityamakkar000 add val dataset when needed
 
@@ -271,9 +272,9 @@ class Trainer:
         metadata_metrics: Optional[dict[str, float]] = None,
     ):
         dataset_state = None
-        if self.train_dataset is not None and hasattr(self.train_dataset, "save_checkpoint"):
+        if self.train_dataset is not None:
             dataset_state = {"train": self.train_dataset.save_checkpoint()}
-        if self.val_dataset is not None and hasattr(self.val_dataset, "save_checkpoint"):
+        if self.val_dataset is not None:
             dataset_state = dataset_state or {}
             dataset_state["val"] = self.val_dataset.save_checkpoint()
 
@@ -336,14 +337,22 @@ class Trainer:
 
         self.writer_id = metadata.get("writer_id", None)
 
-        if state.get("dataset") and self.train_dataset is not None:
-            train_state = state["dataset"].get("train")
-            if train_state is not None and hasattr(self.train_dataset, "restore_checkpoint"):
-                self.train_dataset.restore_checkpoint(train_state)
-        if state.get("dataset") and self.val_dataset is not None:
-            val_state = state["dataset"].get("val")
-            if val_state is not None and hasattr(self.val_dataset, "restore_checkpoint"):
-                self.val_dataset.restore_checkpoint(val_state)
+        if "dataset" not in state:
+            raise KeyError("No 'dataset' in checkpoint state.")
+        if self.train_dataset is None:
+            raise ValueError("self.train_dataset is not set.")
+        if self.val_dataset is None:
+            raise ValueError("self.val_dataset is not set.")
+
+        train_state = state["dataset"].get("train")
+        if train_state is None:
+            raise KeyError("No 'train' dataset state in checkpoint.")
+        self.train_dataset.restore_checkpoint(train_state)
+
+        val_state = state["dataset"].get("val")
+        if val_state is None:
+            raise KeyError("No 'val' dataset state in checkpoint.")
+        self.val_dataset.restore_checkpoint(val_state)
 
     def train(self):
         if self.train_fn is None or self.val_fn is None:

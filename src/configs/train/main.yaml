@@ -5,7 +5,7 @@ defaults:
   - sharding_config: fsdp
   - _self_
 
-experiment_name: "annealed_rl_debug"
+experiment_name: null
 grad_steps: 1
 seed: 0
 num_steps: 1000
