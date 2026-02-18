@@ -381,7 +381,7 @@ class Trainer:
             # prompts = self.train_dataset()
 
             # get rollouts
-            _output = self.inference_engine(
+            _rollouts = self.inference_engine(
                 ["what is your name"], jax.random.PRNGKey(0), {"params": self.params}, detokenize=True
             )
 
