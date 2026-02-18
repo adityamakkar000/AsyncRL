@@ -1,4 +1,3 @@
-from functools import partial
 from typing import Optional
 
 import jax
@@ -33,7 +32,7 @@ class Model(HFModelBase):
     def init_state(
         self, rng: Array, tx: Optional[GradientTransformation], *, sharding: shardingType = None, abstract: bool = False
     ) -> PyTree:
-        x_init = jnp.ones((1, 1), dtype=jnp.int32)
+        x_init = jnp.ones((1, self.config.qwen_config.sequence_len), dtype=jnp.int32)
         seq_lens = jnp.array([1])
 
         @jax.jit
@@ -67,7 +66,7 @@ class Model(HFModelBase):
         return get_qwen_3_weights(params, name=model_name)
 
     def init_kv_cache(self, batch_size: int, sharding: jax.NamedSharding, dtype: str = "bfloat16") -> list[KVCache]:
-        @partial(jax.jit, out_shardings=sharding)
+        # @partial(jax.jit, out_shardings=sharding)
         def _init():
             def zeros():
                 return jnp.zeros(
