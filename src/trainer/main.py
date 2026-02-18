@@ -72,8 +72,12 @@ class Trainer:
                 config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
                 write_to_gcs(config_path, dict_config)
                 # block to ensure first checkpoint is written
+<<<<<<< HEAD
                 self.block_until_checkpoints_saved() 
 >>>>>>> 55a6206 (update everything)
+=======
+                self.block_until_checkpoints_saved()
+>>>>>>> 8b29434 (update inference speeds)
 
             sync_global_devices("Trainer initialization")
 
@@ -212,7 +216,7 @@ class Trainer:
             }
 
         self.train_step: TrainFn = train_step
-        self.val_step = lambda params, batch: { f"val/{k}": v for k,v in compute_aux_metrics(batch).items()}
+        self.val_step = lambda params, batch: {f"val/{k}": v for k, v in compute_aux_metrics(batch).items()}
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
@@ -359,7 +363,6 @@ class Trainer:
         logger.info(f"Saving checkpoint at step {step} ...")
         self.checkpointer.save_checkpoint(step=step, save_tree=state, metadata=metadata)
 
-
     def block_until_checkpoints_saved(self):
         if not self.checkpointer:
             logger.warning("Checkpointer not set up, cannot block until checkpoints are saved.")
@@ -429,19 +432,17 @@ class Trainer:
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
-
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
             # TODO: (chinmay) get prompts
             # prompts = self.train_dataset()
-            prompts = [
-                " Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"
-            ]
-            generations= self.inference_engine(prompts, self.key(), {"params": self.params}, detokenize=True)
+            prompts = [" Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"]
+            generations = self.inference_engine(prompts, self.key(), {"params": self.params}, detokenize=True)
             logger.info(generations.metrics)
 
-            import sys; sys.exit()
+            import sys
 
+            sys.exit()
 
             # TODO: (chinmay) prepare batch
             train_batch = self.train_dataset.prepare_batch(generations)
@@ -451,7 +452,9 @@ class Trainer:
             metrics = out["aux_metrics"] | generations.metrics
             if self.global_step % self.config.val_interval == 0:
                 val_prompts = self.val_dataset()
-                val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params}, detokenize=True)
+                val_generations = self.inference_engine(
+                    val_prompts, self.key(), {"params": self.params}, detokenize=True
+                )
                 val_batch = self.val_dataset.prepare_batch(val_generations)
 
                 val_metrics: dict[str, float] = self.val_step(self.params, val_batch)
@@ -460,7 +463,7 @@ class Trainer:
             self.writer(self.global_step, metrics)
             self.global_step += 1
 
-            # save after you update step 
+            # save after you update step
             # since if you want to save every 10 steps
             # you want to save after you have done 10 steps and resume at the 11th step
             if self.global_step % self.config.checkpoint_interval == 0:
