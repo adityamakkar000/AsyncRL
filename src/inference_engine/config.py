@@ -1,9 +1,11 @@
 from dataclasses import dataclass
 from typing import Optional
 
+import jax
 from flax import struct
 from jaxtyping import Array, PyTree
 from omegaconf import MISSING
+from tensorstore import KvStore
 
 from src.model import KVCache
 
@@ -31,6 +33,16 @@ class InferenceState:
     seq_lens: Array
     params: PyTree
     stop_mask: Array
+
+
+@dataclass
+class InferenceShardings:
+    split_sharding: jax.NamedSharding
+    replicate_sharding: jax.NamedSharding
+    kv_cache_sharding: KVCache
+    state_sharding: InferenceState
+    prefill_shardings: dict[str, PyTree]
+    decode_shardings: dict[str, PyTree]
 
 
 @dataclass

@@ -1,6 +1,6 @@
 import hydra
 from hydra.core.config_store import ConfigStore
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 from src.trainer import Trainer, TrainerConfig
 
