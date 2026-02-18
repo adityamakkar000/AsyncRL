@@ -52,8 +52,8 @@ class Trainer:
             self._setup_functions()
             self._setup_dataset()
             self._setup_train_state()
-            self._setup_writer()
             self._setup_inference_engine()
+            self._setup_writer()
 
             if not self.resumed:
                 logger.info("Saving intial checkpoint ...")
@@ -424,16 +424,25 @@ class Trainer:
     def train(self):
         assert self.train_fn is not None, "Train function not set up."
         assert self.inference_engine is not None, "Inference engine not set up."
-        assert self.train_dataset is not None, "Train dataset not set up."
-        assert self.val_dataset is not None, "Validation dataset not set up."
+        # assert self.train_dataset is not None, "Train dataset not set up."
+        # assert self.val_dataset is not None, "Validation dataset not set up."
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
+
 
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
             # TODO: (chinmay) get prompts
-            prompts = self.train_dataset()
+            # prompts = self.train_dataset()
+            prompts = [
+                " Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"
+            ]
             generations= self.inference_engine(prompts, self.key(), {"params": self.params}, detokenize=True)
+            logger.info(generations.metrics)
+
+            import sys; sys.exit()
+
+
             # TODO: (chinmay) prepare batch
             train_batch = self.train_dataset.prepare_batch(generations)
 

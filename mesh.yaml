@@ -1,6 +1,8 @@
 # mesh config for https://github.com/adityamakkar000/mesh
 commands:
   - curl -LsSf https://astral.sh/uv/install.sh | sh
+  - rm -rf ~/job
+  - rm -rf ~/.cache/uv
 
 ignore:
   - "*.pyc"
@@ -12,6 +14,6 @@ prerun:
   - uv venv --clear
   - source .venv/bin/activate
   - source .env
-  - git config --global url."https://${STAX_TOKEN}@github.com/".insteadOf "https://github.com/"
+  - echo "machine github.com login x-access-token password ${STAX_TOKEN}" > ~/.netrc
+  - chmod 600 ~/.netrc
   - uv sync --extra eval
-  - wandb login ${WANDB_API_KEY} --relogin
