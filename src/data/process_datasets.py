@@ -3,6 +3,7 @@ import os
 import hydra
 from datasets import Dataset, load_dataset
 from omegaconf import DictConfig, OmegaConf
+from loguru import logger
 
 from src.constants import DATA, GS_BUCKET
 from src.data.utils import delete_local_file, upload_local_file_to_gcs, write_dataset_to_local_jsonl
@@ -97,17 +98,13 @@ class ProcessDataset:
         dataset.cleanup_cache_files()
         print(f"{GREEN}Cache cleaned up.{END}")
 
-    def run(self) -> None:
-        """Run the dataset processing pipeline."""
-        self._process_and_upload()
-
 
 @hydra.main(version_base=None, config_path="../configs/process_datasets")
 def main(cfg: DictConfig) -> None:
     """Entry point for Hydra."""
-    print("ProcessDataset configuration:\n" + OmegaConf.to_yaml(cfg))
+    logger.info("ProcessDataset configuration:\n" + OmegaConf.to_yaml(cfg))
     processor = ProcessDataset(cfg)
-    processor.run()
+    processor._process_and_upload()
 
 
 if __name__ == "__main__":

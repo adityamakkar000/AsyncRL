@@ -1,4 +1,3 @@
-import random
 from typing import Any
 
 from src.data.config import DataConfig
@@ -8,15 +7,15 @@ class DataLoader:
     def __init__(
         self,
         data_config: DataConfig,
-        seed: int = 0,
-        max_length: int = 2048,  # TODO: @adityamakkar000 add max length
+        max_length: int,
+        split: str,
     ) -> None:
         self.data_config = data_config
-        self.seed = seed
         self.max_length = max_length
-        self._rng = random.Random(seed)
-        self._examples, self._prompts = self._load_from_gcs()
+        self.split = split
+        self._examples, self._prompts, self._answers = self._load_from_gcs()
         self._last_examples = []
+        self._current_idx = 0
 
     def _resolve_gcs_path(self) -> str:
         from src.constants import DATA, GS_BUCKET
@@ -30,14 +29,22 @@ class DataLoader:
 
         gs_path = self._resolve_gcs_path()
         prompt_key = self.data_config.prompt_column
+        answer_key = self.data_config.answer_column
         rows = load_jsonl_from_gcs(gs_path, prompt_column=prompt_key)
         if not rows:
             raise ValueError(f"No rows with '{prompt_key}' found at {gs_path}")
         prompts = [str(r[prompt_key]).strip() for r in rows]
-        return rows, prompts
+        answers = [str(r[answer_key]).strip() for r in rows]
+        # TODO: need a column to add thinking traces
+        return rows, prompts, answers
 
     def get_prompt(self, batch_size: int) -> list[str]:
-        indices = [self._rng.randrange(len(self._prompts)) for _ in range(batch_size)]
+        start_idx = self._current_idx
+        end_idx = self._current_idx + batch_size
+        total = len(self._prompts)
+        # so we can cycle through the dataset indefinitely
+        indices = [i % total for i in range(start_idx, end_idx)]
+        self._current_idx = end_idx % total
         return [self._prompts[i] for i in indices]
 
     @property
@@ -46,25 +53,27 @@ class DataLoader:
         return self._last_examples
 
     def __call__(self, batch_size: int) -> dict[str, Any]:
-        indices = [self._rng.randrange(len(self._prompts)) for _ in range(batch_size)]
+        start_idx = self._current_idx
+        end_idx = self._current_idx + batch_size
+        total = len(self._prompts)
+        indices = [i % total for i in range(start_idx, end_idx)]
         prompts = [self._prompts[i] for i in indices]
         examples = [self._examples[i] for i in indices]
         self._last_examples = examples
+        self._current_idx = end_idx % total
         return {
             "prompts": prompts,
             "examples": examples,
         }
 
     def save_checkpoint(self) -> dict[str, Any]:
-        """Return random generator state and seed for checkpointing."""
+        """Return current index for checkpointing."""
         return {
-            "rng_state": self._rng.getstate(),
-            "seed": self.seed,
+            "current_idx": self._current_idx,
         }
 
     def restore_checkpoint(self, state: dict[str, Any]) -> None:
-        """Restore random generator state and seed from checkpoint."""
-        if "rng_state" in state:
-            self._rng.setstate(state["rng_state"])
-        if "seed" in state:
-            self.seed = state["seed"]
+        """Restore index from checkpoint."""
+        if "current_idx" not in state:
+            raise ValueError("Missing 'current_idx' in checkpoint state")
+        self._current_idx = state["current_idx"]

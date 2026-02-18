@@ -1,5 +1,8 @@
-# TODO: change these for the actual run. below are test values @adityamakkar000
 name: "omnimath"
 batch_size: 4
-gcs_path: gs://arl-experiments/data/omnimath/000_omnimath.jsonl
+gcs_path: gs://arl-experiments/data/omnimath
 prompt_column: "problem"
+answer_column: "answer"
+# TODO: add trace column
+# trace_column: "trace"
+split: "train"
