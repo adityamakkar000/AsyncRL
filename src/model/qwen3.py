@@ -109,7 +109,7 @@ class GroupedQueryAttention(nn.Module):
 
         q = einops.rearrange(q, pattern="b t (g r) d -> b t g r d", g=k.shape[-2])
 
-        wei = jnp.einsum("btgrd, bTgd -> btTgr", q.astype(jnp.float32), k.astype(jnp.float32)) * (self.head_dim**-0.5)
+        wei = jnp.einsum("btgrd, bTgd -> btTgr", q, k) * (self.head_dim**-0.5)
 
         wei = einops.rearrange(wei, pattern="b t T g r -> b (g r) t T ")
 
@@ -120,12 +120,12 @@ class GroupedQueryAttention(nn.Module):
 
         wei = einops.rearrange(tensor=wei, pattern="b (g r ) t T -> b t T g r", g=k.shape[2])
 
-        out = jnp.einsum("btTgr, bTgd -> btgrd", wei, v.astype(jnp.float32))
+        out = jnp.einsum("btTgr, bTgd -> btgrd", wei, v)
 
         out = einops.rearrange(out, "b t g r d -> b t (g r d)")
         return out, kv_cache
 
-    def flash_gqa(self, q: Array, k: Array, v: Array, segment_ids: SegmentIds) -> Array:
+    def flash_gqa(self, q: Array, k: Array, v: Array, mask: Array) -> Array:
         q = einops.rearrange(q, "... t h d -> ... h t d", d=self.head_dim)
         k = einops.rearrange(k, "... t g d -> ... g t d", d=self.head_dim)
         v = einops.rearrange(v, "... t g d -> ... g t d", d=self.head_dim)
@@ -135,7 +135,7 @@ class GroupedQueryAttention(nn.Module):
 
         sm_scale = self.head_dim**-0.5
 
-        out = flash_attention(q, k, v, sm_scale=sm_scale, segment_ids=segment_ids, causal=True)
+        out = flash_attention(q, k, v, sm_scale=sm_scale, segment_ids=SegmentIds(mask, mask), causal=True)
         out = einops.rearrange(out, "b h t d -> b t (h d)")
         return out
 
@@ -162,10 +162,12 @@ class GroupedQueryAttention(nn.Module):
         q = apply_rope(q, rope_matrix[0], rope_matrix[1])
         k = apply_rope(k, rope_matrix[0], rope_matrix[1])
 
+        q, k, v = jax.tree.map(lambda t: t.astype(jnp.float32), (q, k, v))
+
         if kv_cache:
             out, kv_cache = self.gqa(q, k, v, mask, kv_cache)
         else:
-            out = self.flash_gqa(q, k, v, SegmentIds(mask, mask))
+            out = self.flash_gqa(q, k, v, mask)
 
         out = out.astype(self.activation_dtype)
         out = nn.Dense(features=self.model_dim, use_bias=False, dtype=self.activation_dtype)(out)
@@ -257,12 +259,14 @@ class Qwen3(nn.Module):
 
         attention_mask = (
             prompt_mask
-            if not kv_cache
-            else make_attention_mask(
-                query_shape=T,
-                key_shape=T if not kv_cache else attention_len,
-                t_start=t_start,
-                seq_lens=sequence_lens,
+            if kv_cache is None
+            else (
+                make_attention_mask(
+                    query_shape=T,
+                    key_shape=attention_len,
+                    t_start=t_start,
+                    seq_lens=sequence_lens,
+                )
             )
         )
 
