@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Optional
 
 import jax
@@ -63,7 +64,7 @@ class Model(HFModelBase):
         return get_qwen_3_weights(params, name=model_name)
 
     def init_kv_cache(self, batch_size: int, sharding: jax.NamedSharding, dtype: str = "bfloat16") -> list[KVCache]:
-        # @partial(jax.jit, out_shardings=sharding)
+        @partial(jax.jit, out_shardings=sharding)
         def _init():
             def zeros():
                 return jnp.zeros(
