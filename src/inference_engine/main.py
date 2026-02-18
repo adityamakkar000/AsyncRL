@@ -452,11 +452,13 @@ class InferenceEngine:
         out_logprobs = jnp.zeros_like(prompt_tokens, dtype=jnp.float32)
         n_steps = 0
         start = time.perf_counter()
-        while not jnp.all(inference_state.stop_mask):
-            inference_state, out_tokens, out_logprobs = self.decode_step(inference_state, out_tokens, out_logprobs)
-            current_time = time.perf_counter() - start
-            logger.info(f"Inferencing ... tps {self.decode_size / current_time:.2f}, sps {1 / current_time:.2f}")
-            start = time.perf_counter()
+        with Tracker(timer=True) as t:
+            while not jnp.all(inference_state.stop_mask):
+                inference_state, out_tokens, out_logprobs = self.decode_step(inference_state, out_tokens, out_logprobs)
+                current_time = time.perf_counter() - start
+                logger.info(f"Inferencing ... tps {self.decode_size / current_time:.2f}, sps {1 / current_time:.2f}")
+                start = time.perf_counter()
+                n_steps += 1
 
         out_tokens, out_logprobs = jax.tree.map(lambda x: list(jax.device_get(x)), (out_tokens, out_logprobs))
 
@@ -497,8 +499,9 @@ class InferenceEngine:
             # we manually do prefill on each step instead of reusing
             # since then we do not need to keep a copy of a kv cache
             # prefill is very fast and so this save 2x memory
+            prefill_key = jax.random.fold_in(key_sharded, step)
             inference_state, prefill_metrics = self.prefill_step(
-                x_batch_sharded, seq_lens_sharded, params_sharded, key_sharded
+                x_batch_sharded, seq_lens_sharded, params_sharded, prefill_key
             )
             output_tokens, output_logprobs, decode_metrics = self.single_rollout(inference_state, x_batch)
 
@@ -555,7 +558,6 @@ class InferenceEngine:
         metrics = {f"inference_metrics/{k}": v for k, v in metrics.items()}
         return self.cleanup_rollouts(output), metrics
 
-
     def multihost_prep(self, key: Array, params: PyTree) -> tuple[Array, PyTree]:
         """
         Prepare the random key and model parameters for multi-host inference by performing an all-gather across hosts.
@@ -567,10 +569,7 @@ class InferenceEngine:
             PyTree: The model parameters after performing an all-gather across hosts.
         """
         key = jax.random.fold_in(key, stax.get_rank())
-        params = jax.tree.map(
-            lambda p: process_allgather(p, tiled=True),
-            params
-        )
+        params = jax.tree.map(lambda p: process_allgather(p, tiled=True), params)
         return key, params
 
     def __call__(self, prompts: list[str], key: Array, params: PyTree, detokenize: bool = False) -> InferenceResults:
