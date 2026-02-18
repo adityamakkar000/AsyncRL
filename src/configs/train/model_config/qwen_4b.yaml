@@ -1,0 +1,5 @@
+defaults:
+  - qwen_config: qwen_4b
+  - _self_
+
+hf_model_name: "Qwen/Qwen3-4B"

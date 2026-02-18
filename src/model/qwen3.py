@@ -7,6 +7,7 @@ from flax import linen as nn
 from jaxtyping import Array
 
 from .config import KVCache, QwenConfig
+from .flash_attention import SegmentIds, flash_attention
 from .utils import convert_dtype, make_attention_mask, make_prompt_mask
 
 
@@ -86,34 +87,25 @@ class GroupedQueryAttention(nn.Module):
         self.kv_group_size = self.n_heads // self.n_groups
         self.d_out = self.n_heads * self.head_dim
 
+<<<<<<< HEAD
     @nn.compact
     def __call__(self, x: Array, seq_lens: jax.Array, kv_cache: Optional[KVCache] = None):
         B, T, C = x.shape
         t_start = kv_cache.length if kv_cache else 0
+=======
+    def gqa(self, q: Array, k: Array, v: Array, mask: Array, kv_cache: KVCache) -> tuple[Array, KVCache]:
+        t_start = kv_cache.length
+        T = q.shape[1]
+>>>>>>> 403eb97 (flash attention working + added new configs)
 
-        q = nn.Dense(features=self.d_out, use_bias=False, dtype=self.activation_dtype)(x)
-        k = nn.Dense(features=self.n_groups * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
-        v = nn.Dense(features=self.n_groups * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
+        k_cache, v_cache = jax.tree.map(
+            lambda cache, val: jax.lax.dynamic_update_slice_in_dim(cache, val.astype(cache.dtype), t_start, axis=1),
+            (kv_cache.k, kv_cache.v),
+            (k, v),
+        )
+        kv_cache = KVCache(k=k_cache, v=v_cache, length=t_start + T)
 
-        q = einops.rearrange(q, "... t (h d) -> ... t h d", d=self.head_dim)
-        k = einops.rearrange(k, "... t (g d) -> ... t g d", d=self.head_dim)
-        v = einops.rearrange(v, "... t (g d) -> ... t g d", d=self.head_dim)
-
-        q = RMSNorm(self.activation_dtype)(q)
-        k = RMSNorm(self.activation_dtype)(k)
-
-        q = apply_rope(q, rope_matrix[0], rope_matrix[1])
-        k = apply_rope(k, rope_matrix[0], rope_matrix[1])
-
-        if kv_cache:
-            k_cache, v_cache = jax.tree.map(
-                lambda cache, val: jax.lax.dynamic_update_slice_in_dim(cache, val.astype(cache.dtype), t_start, axis=1),
-                (kv_cache.k, kv_cache.v),
-                (k, v),
-            )
-            kv_cache = KVCache(k=k_cache, v=v_cache, length=t_start + T)
-
-            k, v = k_cache[:, :attention_len, ...], v_cache[:, :attention_len, ...]
+        k, v = k_cache[:, : mask.shape[-1], ...], v_cache[:, : mask.shape[-1], ...]
 
         q = einops.rearrange(q, pattern="b t (g r) d -> b t g r d", g=k.shape[-2])
 
@@ -129,9 +121,53 @@ class GroupedQueryAttention(nn.Module):
         wei = einops.rearrange(tensor=wei, pattern="b (g r ) t T -> b t T g r", g=k.shape[2])
 
         out = jnp.einsum("btTgr, bTgd -> btgrd", wei, v.astype(jnp.float32))
-        out = out.astype(self.activation_dtype)
 
         out = einops.rearrange(out, "b t g r d -> b t (g r d)")
+        return out, kv_cache
+
+    def flash_gqa(self, q: Array, k: Array, v: Array, segment_ids: SegmentIds) -> Array:
+        q = einops.rearrange(q, "... t h d -> ... h t d", d=self.head_dim)
+        k = einops.rearrange(k, "... t g d -> ... g t d", d=self.head_dim)
+        v = einops.rearrange(v, "... t g d -> ... g t d", d=self.head_dim)
+
+        k = jnp.repeat(k, self.kv_group_size, axis=1)
+        v = jnp.repeat(v, self.kv_group_size, axis=1)
+
+        sm_scale = self.head_dim**-0.5
+
+        out = flash_attention(q, k, v, sm_scale=sm_scale, segment_ids=segment_ids, causal=True)
+        out = einops.rearrange(out, "b h t d -> b t (h d)")
+        return out
+
+    @nn.compact
+    def __call__(
+        self,
+        x: Array,
+        sequence_lens: jax.Array,
+        mask: Array,
+        rope_matrix: tuple[Array, Array],
+        kv_cache: Optional[KVCache] = None,
+    ):
+        q = nn.Dense(features=self.d_out, use_bias=False, dtype=self.activation_dtype)(x)
+        k = nn.Dense(features=self.n_groups * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
+        v = nn.Dense(features=self.n_groups * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
+
+        q = einops.rearrange(q, "... t (h d) -> ... t h d", d=self.head_dim)
+        k = einops.rearrange(k, "... t (g d) -> ... t g d", d=self.head_dim)
+        v = einops.rearrange(v, "... t (g d) -> ... t g d", d=self.head_dim)
+
+        q = RMSNorm(self.activation_dtype)(q)
+        k = RMSNorm(self.activation_dtype)(k)
+
+        q = apply_rope(q, rope_matrix[0], rope_matrix[1])
+        k = apply_rope(k, rope_matrix[0], rope_matrix[1])
+
+        if kv_cache:
+            out, kv_cache = self.gqa(q, k, v, mask, kv_cache)
+        else:
+            out = self.flash_gqa(q, k, v, SegmentIds(mask, mask))
+
+        out = out.astype(self.activation_dtype)
         out = nn.Dense(features=self.model_dim, use_bias=False, dtype=self.activation_dtype)(out)
 
         return out, kv_cache
@@ -154,7 +190,6 @@ class Block(nn.Module):
         mask: Array,
         rope_matrix: tuple[Array, Array],
         layer_cache: Optional[KVCache] = None,
-        attention_len: Optional[int] = None,
     ):
         connection_1 = x
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)
@@ -165,7 +200,7 @@ class Block(nn.Module):
             head_dim=self.head_dim,
             rope_base=self.rope_base,
             activation_dtype=self.activation_dtype,
-        )(x, sequence_lens, mask, rope_matrix, layer_cache, attention_len)
+        )(x, sequence_lens, mask, rope_matrix, layer_cache)
 
         x = x + connection_1
 
@@ -226,6 +261,8 @@ class Qwen3(nn.Module):
             t_start=t_start,
             seq_lens=sequence_lens,
         )
+        if not kv_cache:
+            attention_mask = prompt_mask
 
         for i in range(self.n_layers):
             in_layer_cache = kv_cache[i] if kv_cache else None
@@ -237,7 +274,7 @@ class Qwen3(nn.Module):
                 head_dim=self.head_dim,
                 rope_base=self.rope_base,
                 activation_dtype=self.activation_dtype,
-            )(x, sequence_lens, attention_mask, (sin, cos), in_layer_cache, attention_len)
+            )(x, sequence_lens, attention_mask, (sin, cos), in_layer_cache)
             out_cache.append(out_layer_cache)
 
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)
