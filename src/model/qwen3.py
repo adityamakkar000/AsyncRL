@@ -255,14 +255,16 @@ class Qwen3(nn.Module):
         index_map_with_offset_sliced = jax.lax.dynamic_slice(index_map_with_offset, (0, t_start), (B, T))
         sin, cos = rope_cache.get_rope_matrix(index_map_with_offset_sliced)
 
-        attention_mask = make_attention_mask(
-            query_shape=T,
-            key_shape=T if not kv_cache else attention_len,
-            t_start=t_start,
-            seq_lens=sequence_lens,
+        attention_mask = (
+            prompt_mask
+            if not kv_cache
+            else make_attention_mask(
+                query_shape=T,
+                key_shape=T if not kv_cache else attention_len,
+                t_start=t_start,
+                seq_lens=sequence_lens,
+            )
         )
-        if not kv_cache:
-            attention_mask = prompt_mask
 
         for i in range(self.n_layers):
             in_layer_cache = kv_cache[i] if kv_cache else None
