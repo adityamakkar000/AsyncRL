@@ -1,4 +1,3 @@
-from flax.core.lift import checkpoint
 from dataclasses import dataclass, field
 from typing import List, Optional, Protocol
 
@@ -102,7 +101,7 @@ class TrainerConfig:
     decay_steps: float = 0.9  # The fraction of total steps to use for learning rate decay
 
     wandb_config: Optional[WandBConfig] = None  # The configuration for Weights & Biases logging
-    metrics_to_log: List[str] = field(default_factory=["train/loss", "val/loss"])  # Metrics to log
+    metrics_to_log: List[str] = field(default_factory=lambda:["train/loss", "val/loss"])  # Metrics to log
 
     spot_training: bool = False  # Whether to enable spot training
     # if true, will load from latest checkpoint if checkpoint dir with same

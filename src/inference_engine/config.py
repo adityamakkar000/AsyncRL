@@ -5,7 +5,6 @@ import jax
 from flax import struct
 from jaxtyping import Array, PyTree
 from omegaconf import MISSING
-from tensorstore import KvStore
 
 from src.model import KVCache
 

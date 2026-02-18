@@ -1,3 +1,5 @@
+import time
+
 import jax
 import jax.numpy as jnp
 import stax
@@ -8,7 +10,7 @@ from stax import Tracker
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
-from src.model import KVCache, Model, ModelConfig, QwenConfig
+from src.model import KVCache, Model
 
 from .config import InferenceConfig, InferenceResults, InferenceRollout, InferenceShardings, InferenceState
 
@@ -33,7 +35,7 @@ class InferenceEngine:
         self.validate_config()
 
         self.decode_size = config.batch_size * config.n_replicas
-        self.shardings = self.get_shardings()
+        self.shardings = self.get_shardings(params)
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model.config.hf_model_name)
         self.precompile_dict = {
@@ -69,7 +71,7 @@ class InferenceEngine:
         if self.config.top_p is not None:
             assert 0.0 < self.config.top_p <= 1.0, f"top_p must be in the range (0, 1], got {self.config.top_p}"
 
-    def get_shardings(self):
+    def get_shardings(self, params: PyTree) -> InferenceShardings:
         """Get the shardings for the model parameters, kv cache, and inference state based on the configuration."""
         mesh = jax.make_mesh((self.config.n_replicas,), (AXIS_NAME,))
 
@@ -143,7 +145,7 @@ class InferenceEngine:
         seq_lens = jnp.array([1] * self.decode_size)
 
         while curr_seq_len <= self.config.max_seq_len:
-            x_init = jnp.ones((self.decode, curr_seq_len), dtype=jnp.int32)
+            x_init = jnp.ones((self.decode_size, curr_seq_len), dtype=jnp.int32)
 
             x_init, seq_lens, params, key = self.put_batch_on_device(x_init, seq_lens, params, key)
             self.precompile_dict["prefill"][curr_seq_len] = jax.jit(
@@ -162,8 +164,8 @@ class InferenceEngine:
         curr_size = self.config.intial_sequence_len
 
         state = InferenceState(
-            next_token=jnp.ones((self.decode, 1), dtype=jnp.int32),
-            next_probs=jnp.ones((self.decode, 1)),
+            next_token=jnp.ones((self.decode_size, 1), dtype=jnp.int32),
+            next_probs=jnp.ones((self.decode_size, 1)),
             kv_cache=self.model.init_kv_cache(
                 self.decode_size, dtype=self.config.kv_cache_dtype, sharding=self.shardings.kv_cache_sharding
             ),
@@ -449,11 +451,14 @@ class InferenceEngine:
         out_tokens = prompt_tokens
         out_logprobs = jnp.zeros_like(prompt_tokens, dtype=jnp.float32)
         n_steps = 0
-        with Tracker(timer=True) as t:
-            while not jnp.all(inference_state.stop_mask):
-                inference_state, out_tokens, out_logprobs = self.decode_step(inference_state, out_tokens, out_logprobs)
-                n_steps += 1
-            out_tokens, out_logprobs = jax.tree.map(lambda x: list(jax.device_get(x)), (out_tokens, out_logprobs))
+        start = time.perf_counter()
+        while not jnp.all(inference_state.stop_mask):
+            inference_state, out_tokens, out_logprobs = self.decode_step(inference_state, out_tokens, out_logprobs)
+            current_time = time.perf_counter() - start
+            logger.info(f"Inferencing ... tps {self.decode_size / current_time:.2f}, sps {1 / current_time:.2f}")
+            start = time.perf_counter()
+
+        out_tokens, out_logprobs = jax.tree.map(lambda x: list(jax.device_get(x)), (out_tokens, out_logprobs))
 
         return (
             out_tokens,
@@ -585,52 +590,3 @@ class InferenceEngine:
         output_strs = self.detokenizer(output_rollouts) if detokenize else None
         sync_global_devices("inference_engine_sync")
         return InferenceResults(rollouts=output_rollouts, output_strs=output_strs, metrics=metrics)
-
-
-if __name__ == "__main__":
-    model_config = ModelConfig(
-        "Qwen/Qwen3-0.6B",
-        qwen_config=QwenConfig(
-            vocab_size=151936,
-            d_ff=3072,
-            sequence_len=1024,
-            model_dim=1024,
-            n_heads=16,
-            n_groups=8,
-            head_dim=128,
-            n_layers=28,
-            rope_base=1000000,
-            activation_dtype="float32",
-        ),
-    )
-    model = Model(model_config)
-
-    params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
-    config = InferenceConfig(
-        temperature=0.6,
-        top_p=0.95,
-        top_k=50,
-        max_seq_len=1024,
-        batch_size=16,
-        n_replicas=4,
-        group_size=64,
-        kv_cache_dtype="bfloat16",
-        precompile=False,
-    )
-
-    engine = InferenceEngine(model, params, config)
-
-    key = jax.random.PRNGKey(2303)
-    params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
-
-    tokenizer_inp = ["What is 2 + 2"]
-
-    # inp_tokens, sequence_lens = engine.tokenize(tokenizer_inp)
-
-    # key = jax.random.PRNGKey(2303)
-    # output_rollouts, metrics = engine.rollout(inp_tokens, sequence_lens, key, params)
-
-    output: InferenceResults = engine(tokenizer_inp, key, params, detokenize=True)
-    print(output)
-
-    breakpoint()
