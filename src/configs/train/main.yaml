@@ -29,7 +29,7 @@ warmup_steps: 0.1
 decay_steps: 0.9
 
 spot_training: true 
-checkpoint_interval: 1000
+checkpoint_interval: 100
 best_metric: null
 max_checkpoints_to_keep: 5
 

@@ -19,7 +19,7 @@ from src.inference_engine import InferenceEngine
 from src.model import Model
 
 from .config import TrainerConfig
-from .loss import compute_aux_metrics, get_rl_step_fn
+from .loss import compute_aux_metrics, get_single_step
 from .utils import Key, set_jax_cache, setup, write_to_gcs
 
 load_dotenv()
@@ -55,9 +55,9 @@ class Trainer:
             self._setup_writer()
             self._setup_inference_engine()
 
-            assert self.checkpointer is not None, "Checkpointer not set up."
-            if self.checkpointer.latest_step is None:
+            if not self.resumed:
                 logger.info("Saving intial checkpoint ...")
+<<<<<<< HEAD
                 self.save_checkpoint(step=self.global_step)
 
                 # write config to gcs
@@ -66,6 +66,14 @@ class Trainer:
                 write_to_gcs(config_path, dict_config)
 
                 self.checkpointer.wait_until_finished()
+=======
+                self.save_checkpoint(step=0)
+                dict_config = json.dumps(OmegaConf.to_container(self.config))
+                config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
+                write_to_gcs(config_path, dict_config)
+                # block to ensure first checkpoint is written
+                self.block_until_checkpoints_saved() 
+>>>>>>> 55a6206 (update everything)
 
             sync_global_devices("Trainer initialization")
 
@@ -86,8 +94,6 @@ class Trainer:
             raise ValueError(f"Unsupported optimizer: {cfg.optimizer}")
         if cfg.grad_clip is not None and cfg.grad_clip <= 0:
             raise ValueError("grad_clip must be positive if set")
-        if cfg.best_metric is not None and cfg.checkpoint_interval % cfg.val_interval != 0:
-            raise ValueError("checkpoint_interval must be a multiple of val_interval when best_metric is set")
         if (cfg.warmup_steps + cfg.decay_steps) > 1.0:
             raise ValueError("warmup_steps and decay_steps must sum to at most 1.0")
         if cfg.sharding_config.sharding_type not in ["single", "dp", "fsdp"]:
@@ -155,7 +161,7 @@ class Trainer:
         abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx, abstract=True)
         params_shape, opt_state_shape = abstract_state["params"], abstract_state["opt_state"]
 
-        step_fn = get_rl_step_fn(self.config.loss_config.rl_config)
+        step_fn = get_single_step(self.config.loss_config.rl_config)
 
         # val fn not needed since we just care about val reward, not loss
         train_fn, _val_fn, shardings = stax.fn.get_steps_fn(
@@ -180,20 +186,33 @@ class Trainer:
         self.train_fn = train_fn
 
         def train_step(param: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
+            """
+            Takes single step and implment PPO-k loss (k steps off-policy)
+            Args:
+                param (PyTree): Model parameters.
+                opt_state (PyTree): Optimizer state.
+                batch (RLBatch): Batch of training data.
+            Returns:
+                Dict[str, PyTree]: Updated parameters, optimizer state, and auxiliary metrics.
+            """
+
             aux_metrics = {}
+            out = {
+                "params": param,
+                "opt_state": opt_state,
+            }
             for step in range(self.config.loss_config.grad_steps):
-                out = train_fn(self.params, self.opt_state, batch)
-                self.params = out["params"]
-                self.opt_state = out["opt_state"]
+                out = train_fn(out["params"], out["opt_state"], batch)
                 aux_metrics |= {f"{k}_step_{step}": v for k, v in out["aux_metrics"].items()}
 
             return {
-                "params": self.params,
-                "opt_state": self.opt_state,
+                "params": out["params"],
+                "opt_state": out["opt_state"],
                 "aux_metrics": aux_metrics | compute_aux_metrics(batch),
             }
 
         self.train_step: TrainFn = train_step
+        self.val_step = lambda params, batch: { f"val/{k}": v for k,v in compute_aux_metrics(batch).items()}
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
@@ -214,7 +233,7 @@ class Trainer:
         )
         assert self.checkpointer is not None, "checkpointer must be set up before initializing train state"
 
-        if self.config.spot_training and self.checkpointer.latest_step is not None:
+        if self.resumed:
             logger.info("Spot training enabled and checkpoint found, skipping parameter initialization.")
             self.restore_save_tree()
             return
@@ -289,7 +308,7 @@ class Trainer:
             output_dir=path,
             max_to_keep=self.config.max_checkpoints_to_keep,
             best_key=self.config.best_metric.name if self.has_best_ckpt else None,  # type: ignore
-            best_mode="max" if self.has_best_ckpt and self.config.best_metric.maximize else "min",  # type: ignore
+            best_mode="max" if (self.has_best_ckpt and self.config.best_metric.maximize) else "min",  # type: ignore
         )
 
     @partial(setup, component="inference engine")
@@ -317,8 +336,13 @@ class Trainer:
         state = {
             "params": params if params else self.params,
             "opt_state": opt_state if opt_state else self.opt_state,
+<<<<<<< HEAD
             "global_step": self.global_step,
             "dataset": dataset_state,
+=======
+            "global_step": step,
+            "dataset": None,  # TODO: (chinmay) add dataset state here
+>>>>>>> 55a6206 (update everything)
             "key": jax.device_get(self.key.key),
         }
         metadata = {
@@ -334,6 +358,13 @@ class Trainer:
         state, metadata = self.make_save_tree(step, metadata_metrics=metadata_metrics)
         logger.info(f"Saving checkpoint at step {step} ...")
         self.checkpointer.save_checkpoint(step=step, save_tree=state, metadata=metadata)
+
+
+    def block_until_checkpoints_saved(self):
+        if not self.checkpointer:
+            logger.warning("Checkpointer not set up, cannot block until checkpoints are saved.")
+            return
+        self.checkpointer.wait_until_finished()
 
     def restore_save_tree(self, use_best: bool = False):
         assert self.checkpointer is not None, "Checkpointer not set up."
@@ -391,40 +422,40 @@ class Trainer:
         self.val_dataset.restore_checkpoint(val_state)
 
     def train(self):
-        self._setup_inference_engine()
         assert self.train_fn is not None, "Train function not set up."
         assert self.inference_engine is not None, "Inference engine not set up."
-        # assert self.train_dataset is not None, "Train dataset not set up."
+        assert self.train_dataset is not None, "Train dataset not set up."
+        assert self.val_dataset is not None, "Validation dataset not set up."
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
-            # get train batch
-            # TODO: (chinmay)
-            # prompts = self.train_dataset()
-
-            # get rollouts
-            _rollouts = self.inference_engine(
-                ["what is your name"], jax.random.PRNGKey(0), {"params": self.params}, detokenize=True
-            )
-
-            # prepare batch
-            # TODO: (chinmay)
-            # train_batch = self.train_dataset.prepare_batch(rollouts)
-            breakpoint()
-            train_batch = ...
+            # TODO: (chinmay) get prompts
+            prompts = self.train_dataset()
+            generations= self.inference_engine(prompts, self.key(), {"params": self.params}, detokenize=True)
+            # TODO: (chinmay) prepare batch
+            train_batch = self.train_dataset.prepare_batch(generations)
 
             out = self.train_step(self.params, self.opt_state, train_batch)
-            self.params = out["params"]
-            self.opt_state = out["opt_state"]
-            self.writer(self.global_step, out["aux_metrics"])
-
+            self.params, self.opt_state = out["params"], out["opt_state"]
+            metrics = out["aux_metrics"] | generations.metrics
             if self.global_step % self.config.val_interval == 0:
-                # TODO: val step here
-                ...
+                val_prompts = self.val_dataset()
+                val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params}, detokenize=True)
+                val_batch = self.val_dataset.prepare_batch(val_generations)
 
+                val_metrics: dict[str, float] = self.val_step(self.params, val_batch)
+                metrics |= val_metrics
+
+            self.writer(self.global_step, metrics)
             self.global_step += 1
+
+            # save after you update step 
+            # since if you want to save every 10 steps
+            # you want to save after you have done 10 steps and resume at the 11th step
+            if self.global_step % self.config.checkpoint_interval == 0:
+                self.save_checkpoint(step=self.global_step, metadata_metrics=metrics)
 
         logger.info("Training complete.")
 
@@ -445,3 +476,8 @@ class Trainer:
     @property
     def total_steps(self):
         return self.config.num_steps
+
+    @property
+    def resumed(self):
+        assert self.checkpointer is not None, "Checkpointer not set up."
+        return self.config.spot_training and self.checkpointer.latest_step is not None

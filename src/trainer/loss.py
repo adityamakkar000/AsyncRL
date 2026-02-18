@@ -111,6 +111,9 @@ def dapo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tup
     return loss, aux_metrics
 
 
+# TODO: implment RLOO
+
+
 def get_loss_fn(RLConfig) -> LossFunction:
     match RLConfig.algorithm:
         case "grpo":
@@ -125,7 +128,7 @@ def get_loss_fn(RLConfig) -> LossFunction:
     return partial(loss, config=RLConfig)
 
 
-def get_rl_step_fn(config: RLConfig) -> StepFn:
+def get_single_step(config: RLConfig) -> StepFn:
     """
     Get the RL step function based on the provided configuration.
     Args:
@@ -135,7 +138,7 @@ def get_rl_step_fn(config: RLConfig) -> StepFn:
     """
     loss_fn = get_loss_fn(config)
 
-    def step_fn(model: Model, params: PyTree, batch: RLBatch, train: bool = True) -> tuple[Array, PyTree]:
+    def single_step(model: Model, params: PyTree, batch: RLBatch, train: bool = True) -> tuple[Array, PyTree]:
         x_logprobs = model.apply(params, x=batch.tokens, sequence_lens=batch.seq_lens, kv_cache=None, train=train)
         loss, aux_metrics = loss_fn(x_logprobs, batch)
 
@@ -145,8 +148,7 @@ def get_rl_step_fn(config: RLConfig) -> StepFn:
 
         return loss, aux_metrics
 
-    # TODO: (anyone) figure out why this is erroring
-    return step_fn  # type: ignore
+    return single_step
 
 
 @jax.jit
