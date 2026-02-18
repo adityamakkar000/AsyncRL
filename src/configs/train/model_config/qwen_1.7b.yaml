@@ -1,0 +1,5 @@
+defaults:
+  - qwen_config: qwen_1.7b
+  - _self_
+
+hf_model_name: "Qwen/Qwen3-1.7B"
