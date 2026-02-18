@@ -66,7 +66,7 @@ class Model(HFModelBase):
     def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
         return get_qwen_3_weights(params, name=model_name)
 
-    def init_kv_cache(self, batch_size: int, sharding: jax.NamedSharding, dtype: str = "bfloat16") -> list[KVCache]:
+    def init_kv_cache(self, batch_size: int, sharding: KVCache, dtype: str = "bfloat16") -> list[KVCache]:
         @partial(jax.jit, out_shardings=sharding)
         def _init():
             def zeros():

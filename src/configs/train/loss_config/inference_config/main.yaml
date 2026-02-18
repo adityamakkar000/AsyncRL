@@ -6,4 +6,4 @@ batch_size: 16
 n_replicas: 4
 group_size: 64
 kv_cache_dtype: "bfloat16"
-precompile: True
+precompile: true
