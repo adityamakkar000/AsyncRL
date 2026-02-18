@@ -40,7 +40,7 @@ class Key:
     def __init__(self, seed: int):
         self.key = jax.random.PRNGKey(seed)
 
-    def __call__(self, num_keys: int = 1, split_by_process: bool = False):
+    def __call__(self, num_keys: int = 1):
         """
         Generate one or more JAX random keys.
         Args:
@@ -51,8 +51,6 @@ class Key:
         """
 
         self.key, subkey = jax.random.split(self.key)
-        if split_by_process:
-            subkey = jax.random.fold_in(subkey, jax.process_index())
         keys = jax.random.split(subkey, (num_keys,))
         return keys if num_keys > 1 else keys[0]
 
