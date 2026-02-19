@@ -61,7 +61,7 @@ class Model(HFModelBase):
         out_state = jax.tree.map(lambda x, s: jax.device_put(x, s), out_state, sharding)
 
         table = nn.tabulate(self.model, rngs=jax.random.PRNGKey(0), depth=1)
-        logger.info(table(x=x_init, seq_lens=seq_lens, kv_cache=None))
+        logger.info(table(x=x_init, sequence_lens=seq_lens, kv_cache=None))
 
         return out_state
 
