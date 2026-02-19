@@ -13,7 +13,7 @@ def set_jax_cache(path: str):
     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
-    # jax.config.update("jax_log_compiles", True)
+    jax.config.update("jax_log_compiles", True)
 
 
 cache_path = f"{GS_BUCKET}/{CACHE}"
@@ -51,8 +51,9 @@ config = InferenceConfig(
     n_replicas=r,
     group_size=bs * r,
     kv_cache_dtype="bfloat16",
-    params_dtype="bfloat16",
     precompile=True,
+    params_dtype="float32",
+    reasoning_budget=64,
 )
 
 engine = InferenceEngine(model, params, config)
@@ -60,7 +61,7 @@ engine = InferenceEngine(model, params, config)
 key = jax.random.PRNGKey(2303)
 params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
 
-tokenizer_inp = ["Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"]
+tokenizer_inp = [" Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"]
 
 output: InferenceResults = engine(tokenizer_inp, key, params, detokenize=True)
 print(output.metrics)

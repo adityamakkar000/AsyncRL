@@ -128,8 +128,20 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
-    ) -> PyTree:
-        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache)
+        attention_len: Optional[int] = None,
+    ) -> tuple[Array, list[KVCache]]:
+        """
+        Forward pass of the model. This is a wrapper around the model's __call__ that allows for additional processing if needed.
+        Args:
+            params: Model parameters.
+            x: Input tokens of shape (B, T).
+            sequence_lens: Sequence lengths of shape (B,).
+            kv_cache: Optional list of KVCache for each layer.
+        Returns:
+            logits: Output logits of shape (B, T, vocab_size).
+            out_cache: Optional list of KVCache for each layer if kv_cache was provided.
+        """
+        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, attention_len)
 
         return logits, cache
 

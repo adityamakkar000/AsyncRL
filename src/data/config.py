@@ -12,7 +12,6 @@ class Sample:
 
     @classmethod
     def from_dict(cls, data: dict):
-
         prompt = data.get("problem")
         answer = data.get("answer")
         solution = data.get("solution")

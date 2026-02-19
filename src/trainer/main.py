@@ -62,6 +62,8 @@ class Trainer:
                 config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
                 write_to_gcs(config_path, dict_config)
                 # block to ensure first checkpoint is written
+                self.block_until_checkpoints_saved()
+
             sync_global_devices("Trainer initialization")
 
         logger.info("Training Configuration:\n" + OmegaConf.to_yaml(config))
@@ -398,22 +400,18 @@ class Trainer:
     def train(self):
         assert self.train_fn is not None, "Train function not set up."
         assert self.inference_engine is not None, "Inference engine not set up."
-        # assert self.train_dataset is not None, "Train dataset not set up."
-        # assert self.val_dataset is not None, "Validation dataset not set up."
+        assert self.train_dataset is not None, "Train dataset not set up."
+        assert self.val_dataset is not None, "Validation dataset not set up."
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
             # TODO: (chinmay) get prompts
-            # prompts = self.train_dataset()
+            prompts = self.train_dataset()
             prompts = [" Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"]
             generations = self.inference_engine(prompts, self.key(), {"params": self.params}, detokenize=True)
             logger.info(generations.metrics)
-
-            import sys
-
-            sys.exit()
 
             # TODO: (chinmay) prepare batch
             train_batch = self.train_dataset.prepare_batch(generations)
@@ -426,14 +424,26 @@ class Trainer:
                 val_generations = self.inference_engine(
                     val_prompts, self.key(), {"params": self.params}, detokenize=True
                 )
+                val_generations = self.inference_engine(
+                    val_prompts, self.key(), {"params": self.params}, detokenize=True
+                )
                 val_batch = self.val_dataset.prepare_batch(val_generations)
 
                 val_metrics: dict[str, float] = self.val_step(self.params, val_batch)
                 metrics |= val_metrics
 
+            min_mem, max_mem = stax.get_memory()
+            metrics |= {
+                "devices/memory_min": min_mem,
+                "devices/memory_max": max_mem,
+                "train/lr": self.tx[1].hyperparams["learning_rate"],
+            }
+
             self.writer(self.global_step, metrics)
+
             self.global_step += 1
 
+            # save after you update step
             # save after you update step
             # since if you want to save every 10 steps
             # you want to save after you have done 10 steps and resume at the 11th step

@@ -19,10 +19,11 @@ class InferenceConfig:
     group_size: int = MISSING
     n_replicas: int = 1
     intial_sequence_len: int = 64
-    max_prefill_sequence_len: int = 1024
     precompile: bool = True
     kv_cache_dtype: str = "bfloat16"
     params_dtype: str = "float32"
+    reasoning_budget: Optional[int] = None
+    max_prefill_sequence_len: int = 1024
 
 
 @struct.dataclass
@@ -33,6 +34,7 @@ class InferenceState:
     seq_lens: Array
     params: PyTree
     stop_mask: Array
+    end_of_think: Array
     out_tokens: Array
     out_logprobs: Array
 

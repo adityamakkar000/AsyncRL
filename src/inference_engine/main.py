@@ -59,6 +59,7 @@ class InferenceEngine:
         assert self.config.group_size % (self.config.batch_size * self.config.n_replicas) == 0, (
             "Batch size must be divisible by group size for static batching"
         )
+
         assert self.config.max_prefill_sequence_len <= self.config.max_seq_len, (
             f"max_prefill_sequence_len {self.config.max_prefill_sequence_len} must be less than or equal to max_seq_len {self.config.max_seq_len}"
         )
@@ -66,6 +67,10 @@ class InferenceEngine:
             f"max_prefill_sequence_len must be a power of 2, got {self.config.max_prefill_sequence_len}"
         )
 
+        if self.config.reasoning_budget is not None:
+            assert self.config.reasoning_budget <= (self.config.max_seq_len - (self.config.max_seq_len // 2)), (
+                f"Reasoning budget {self.config.reasoning_budget} must be less than half of the max seq len {(self.config.max_seq_len - (self.config.max_seq_len // 2))}"
+            )
         if self.config.top_k is not None:
             assert self.config.top_k > 0, f"top_k must be positive, got {self.config.top_k}"
 
@@ -92,6 +97,7 @@ class InferenceEngine:
             seq_lens=split_sharding,  # type: ignore
             params=jax.tree.map(lambda _p: replicate_sharding, params),
             stop_mask=split_sharding,  # type: ignore
+            end_of_think=split_sharding,  # type: ignore
             out_tokens=split_sharding,  # type: ignore
             out_logprobs=split_sharding,  # type: ignore
         )
@@ -184,11 +190,13 @@ class InferenceEngine:
                 seq_lens=jnp.array([1] * self.decode_size),
                 params=self.setup_parameters(params),
                 stop_mask=jnp.zeros((self.decode_size, 1), dtype=bool),
+                end_of_think=jnp.zeros((self.decode_size, 1), dtype=bool),
                 out_tokens=jnp.ones((self.decode_size, self.model.sequence_len + 1024), dtype=jnp.int32),
                 out_logprobs=jnp.zeros(
                     (self.decode_size, self.model.sequence_len + 1024), dtype=self.model.activation_dtype
                 ),
             )
+
             return self.put_state_on_device(state)
 
         # for decode compile 2 * max len
@@ -367,6 +375,7 @@ class InferenceEngine:
         out_logprobs = jax.lax.dynamic_update_slice_in_dim(
             out_logprobs, -jnp.inf * jnp.ones_like(input_tokens, dtype=self.model.activation_dtype), 0, axis=1
         )
+
         return InferenceState(
             next_token=input_tokens[:, -1:],
             seq_lens=seq_lens,
@@ -374,6 +383,7 @@ class InferenceEngine:
             params=params,
             key=key,
             stop_mask=jnp.zeros((self.decode_size, 1), dtype=bool),
+            end_of_think=jnp.zeros((self.decode_size, 1), dtype=bool),
             out_tokens=out_tokens,
             out_logprobs=out_logprobs,
         )
@@ -398,11 +408,21 @@ class InferenceEngine:
             attention_len=attention_length,
         )
         next_token, next_log_prob = self.sample_logits(logits, sample_key)
-        stop_mask = (
-            state.stop_mask
-            | (next_token == self.tokenizer.eos_token_id)
-            | (state.seq_lens[:, None] + 1 > self.config.max_seq_len)
+
+        end_of_think = state.end_of_think | (next_token == 151668)
+        budget_exceed = (self.config.reasoning_budget is not None) & (
+            state.seq_lens[:, None] + 1 > self.config.reasoning_budget
         )
+        interrupt_mask = budget_exceed & ~end_of_think
+        end_of_think = end_of_think | interrupt_mask
+
+        # split two different masks since if we have <eos> naturally we want that logprob in the next_log_probs (eos_stop_mask)
+        length_stop_mask = state.stop_mask | (state.seq_lens[:, None] + 1 > self.config.max_seq_len)
+        eos_stop_mask = next_token == self.tokenizer.eos_token_id
+        stop_mask = eos_stop_mask | length_stop_mask
+
+        next_token = jnp.where(interrupt_mask, 151668, next_token)
+        next_log_prob = jnp.where(interrupt_mask, 0.0, next_log_prob)
 
         next_token = jnp.where(stop_mask, self.tokenizer.eos_token_id, next_token)
         next_log_prob = jnp.where(stop_mask, 0, next_log_prob)
@@ -418,6 +438,7 @@ class InferenceEngine:
             seq_lens=state.seq_lens + jnp.where(stop_mask, 0, 1)[:, 0],
             stop_mask=stop_mask,
             params=state.params,
+            end_of_think=end_of_think,
             out_tokens=out_tokens,
             out_logprobs=out_logprobs,
         )
