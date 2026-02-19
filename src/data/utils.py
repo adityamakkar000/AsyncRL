@@ -4,6 +4,13 @@ import os
 import gcsfs
 from datasets import Dataset
 
+DATASET_DICT = dict()
+
+def register_dataset(name: str):
+    def decorator(process_func):
+        DATASET_DICT[name] = process_func
+        return process_func
+    return decorator
 
 def load_jsonl_from_gcs(gs_prefix: str, prompt_column: str = "problem") -> list[dict]:
     """Load all JSONL files under gs_prefix (e.g. gs://bucket/data/omnimath/), return list of rows."""

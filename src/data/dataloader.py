@@ -24,7 +24,7 @@ class DataLoader:
             return self.data_config.gcs_path
         return f"{GS_BUCKET}/{DATA}/{self.data_config.name}"
 
-    def _load_from_gcs(self) -> tuple[list[dict], list[str]]:
+    def _load_from_gcs(self) -> tuple[list[dict], list[str], list[str]]:
         from src.data.utils import load_jsonl_from_gcs
 
         gs_path = self._resolve_gcs_path()

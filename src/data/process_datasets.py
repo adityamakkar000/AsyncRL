@@ -99,13 +99,3 @@ class ProcessDataset:
         print(f"{GREEN}Cache cleaned up.{END}")
 
 
-@hydra.main(version_base=None, config_path="../configs/process_datasets")
-def main(cfg: DictConfig) -> None:
-    """Entry point for Hydra."""
-    logger.info("ProcessDataset configuration:\n" + OmegaConf.to_yaml(cfg))
-    processor = ProcessDataset(cfg)
-    processor._process_and_upload()
-
-
-if __name__ == "__main__":
-    main()
