@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import json
 
 import jax
 from flax import struct
