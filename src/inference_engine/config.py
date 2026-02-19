@@ -22,17 +22,19 @@ class InferenceConfig:
     precompile: bool = True
     kv_cache_dtype: str = "bfloat16"
     params_dtype: str = "float32"
+    reasoning_budget: Optional[int] = None
 
 
 @struct.dataclass
 class InferenceState:
     next_token: Array
-    next_probs: Array
+    next_log_probs: Array
     kv_cache: list[KVCache]
     key: Array
     seq_lens: Array
     params: PyTree
     stop_mask: Array
+    end_of_think: Array
 
 
 @dataclass

@@ -15,9 +15,9 @@ def set_jax_cache(path: str):
     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
     jax.config.update("jax_log_compiles", True)
 
+
 cache_path = f"{GS_BUCKET}/{CACHE}"
 set_jax_cache(cache_path)
-
 
 
 model_config = ModelConfig(
@@ -44,14 +44,15 @@ config = InferenceConfig(
     temperature=0.6,
     top_p=0.95,
     top_k=50,
-    max_seq_len=1024,
-    intial_sequence_len=64,
+    max_seq_len=128,
+    intial_sequence_len=32,
     batch_size=bs,
     n_replicas=r,
     group_size=bs * r,
     kv_cache_dtype="bfloat16",
     precompile=True,
     params_dtype="float32",
+    reasoning_budget=64,
 )
 
 engine = InferenceEngine(model, params, config)

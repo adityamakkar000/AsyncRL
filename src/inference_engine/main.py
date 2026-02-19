@@ -44,6 +44,10 @@ class InferenceEngine:
             "prefill": {},
             "decode": {},
         }
+        self.interupt_phrase = jnp.array(
+            self.tokenizer.encode("</think>", add_special_tokens=False),
+            dtype=jnp.int32,
+        )
 
         if self.config.precompile:
             self.precompile_decode(params)
@@ -67,6 +71,11 @@ class InferenceEngine:
             "Batch size must be divisible by group size for static batching"
         )
 
+        if self.config.reasoning_budget is not None:
+            assert self.config.reasoning_budget <= (self.config.max_seq_len - (self.config.max_seq_len // 2)), (
+                f"Reasoning budget {self.config.reasoning_budget} must be less than half of the max seq len {(self.config.max_seq_len - (self.config.max_seq_len // 2))}"
+            )
+
         if self.config.top_k is not None:
             assert self.config.top_k > 0, f"top_k must be positive, got {self.config.top_k}"
 
@@ -88,12 +97,13 @@ class InferenceEngine:
 
         state_sharding = InferenceState(
             next_token=split_sharding,  # type: ignore
-            next_probs=split_sharding,  # type: ignore
+            next_log_probs=split_sharding,  # type: ignore
             kv_cache=[kv_sharding for _ in range(self.model.config.qwen_config.n_layers)],
             key=replicate_sharding,  # type: ignore
             seq_lens=split_sharding,  # type: ignore
             params=jax.tree.map(lambda _p: replicate_sharding, params),
             stop_mask=split_sharding,  # type: ignore
+            end_of_think=split_sharding,  # type: ignore
         )
 
         prefill_shardings = {
@@ -177,7 +187,7 @@ class InferenceEngine:
         def get_mock_state():
             state = InferenceState(
                 next_token=jnp.ones((self.decode_size, 1), dtype=jnp.int32),
-                next_probs=jnp.ones((self.decode_size, 1), dtype=self.model.activation_dtype),
+                next_log_probs=jnp.ones((self.decode_size, 1), dtype=self.model.activation_dtype),
                 kv_cache=self.model.init_kv_cache(
                     self.decode_size, dtype=self.config.kv_cache_dtype, sharding=self.shardings.kv_cache_sharding
                 ),
@@ -185,15 +195,15 @@ class InferenceEngine:
                 seq_lens=jnp.array([1] * self.decode_size),
                 params=self.setup_parameters(params),
                 stop_mask=jnp.zeros((self.decode_size, 1), dtype=bool),
+                end_of_think=jnp.zeros((self.decode_size, 1), dtype=bool),
             )
             return self.put_state_on_device(state)
 
         # params = self.setup_parameters(params)
         while curr_size <= self.config.max_seq_len:
-           
             self.precompile_dict["decode"][curr_size] = jax.jit(
-                partial(self.decode, attention_length=curr_size), 
-                donate_argnums=(0,),               
+                partial(self.decode, attention_length=curr_size),
+                donate_argnums=(0,),
                 **self.shardings.decode_shardings,
             )
             _output = self.precompile_dict["decode"][curr_size](get_mock_state())
@@ -353,12 +363,13 @@ class InferenceEngine:
         )
         return InferenceState(
             next_token=input_tokens[:, -1:],
-            next_probs=jnp.ones((self.decode_size, 1), dtype=self.model.activation_dtype),
+            next_log_probs=jnp.ones((self.decode_size, 1), dtype=self.model.activation_dtype),
             seq_lens=seq_lens,
             kv_cache=out_cache,
             params=params,
             key=key,
             stop_mask=jnp.zeros((self.decode_size, 1), dtype=bool),
+            end_of_think=jnp.zeros((self.decode_size, 1), dtype=bool),
         )
 
     def decode(self, state: InferenceState, attention_length: int) -> InferenceState:
@@ -381,19 +392,34 @@ class InferenceEngine:
             attention_len=attention_length,
         )
         next_token, next_log_prob = self.sample_logits(logits, sample_key)
-        stop_mask = (
-            state.stop_mask
-            | (next_token == self.tokenizer.eos_token_id)
-            | (state.seq_lens[:, None] + 1 > self.config.max_seq_len)
+
+        end_of_think = state.end_of_think | (next_token == 151668)
+        budget_exceed = (self.config.reasoning_budget is not None) and (
+            state.seq_lens[:, None] + 1 > (self.config.reasoning_budget - len(self.interupt_phrase))
         )
+        interrupt_mask = budget_exceed & ~end_of_think
+
+        next_token = jnp.where(interrupt_mask, self.interupt_phrase[0], next_token)
+        next_log_prob = jnp.where(interrupt_mask, 0.0, next_log_prob)
+
+        end_of_think = end_of_think | interrupt_mask[:, 0]
+
+        # split two different masks since
+        # if we have <eos> naturally we want
+        # that logprob in the next_log_probs (eos_stop_mask)
+        length_stop_mask = state.stop_mask | (state.seq_lens[:, None] + 1 > self.config.max_seq_len)
+        eos_stop_mask = next_token == self.tokenizer.eos_token_id
+        stop_mask = eos_stop_mask | length_stop_mask
+
         return InferenceState(
             next_token=jnp.where(stop_mask, self.tokenizer.eos_token_id, next_token),
-            next_probs=jnp.where(stop_mask, 0, next_log_prob),
+            next_log_probs=jnp.where(length_stop_mask, 0, next_log_prob),
             kv_cache=out_cache,
             key=key,
             seq_lens=state.seq_lens + jnp.where(stop_mask, 0, 1)[:, 0],
             stop_mask=stop_mask,
             params=state.params,
+            end_of_think=end_of_think,
         )
 
     def prefill_step(
@@ -448,7 +474,7 @@ class InferenceEngine:
             )
         new_state: InferenceState = self.precompile_dict["decode"][attention_length](inference_state)
         out_tokens = jnp.concat((out_tokens, new_state.next_token[...]), axis=-1)
-        out_logprobs = jnp.concat((out_logprobs, new_state.next_probs[...]), axis=-1)
+        out_logprobs = jnp.concat((out_logprobs, new_state.next_log_probs[...]), axis=-1)
         return new_state, out_tokens, out_logprobs
 
     def single_rollout(
@@ -472,13 +498,14 @@ class InferenceEngine:
             while not jnp.all(inference_state.stop_mask):
                 inference_state, out_tokens, out_logprobs = self.decode_step(inference_state, out_tokens, out_logprobs)
 
-                if(n_steps := n_steps + 1) % LOG_EVERY_N_STEPS == 0:
+                if (n_steps := n_steps + 1) % LOG_EVERY_N_STEPS == 0:
                     current_time = time.perf_counter() - start
-                    logger.info(f"Inferenced {n_steps} tokens | tps {self.decode_size * LOG_EVERY_N_STEPS/ current_time:.2f} | sps {LOG_EVERY_N_STEPS / current_time:.2f}")
+                    logger.info(
+                        f"Inferenced {n_steps} tokens | tps {self.decode_size * LOG_EVERY_N_STEPS / current_time:.2f} | sps {LOG_EVERY_N_STEPS / current_time:.2f}"
+                    )
                     start = time.perf_counter()
 
         out_tokens, out_logprobs = jax.tree.map(lambda x: list(jax.device_get(x)), (out_tokens, out_logprobs))
-
         return (
             out_tokens,
             out_logprobs,
