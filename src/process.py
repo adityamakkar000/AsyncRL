@@ -4,20 +4,18 @@ from omegaconf import DictConfig, OmegaConf
 from stax import staxLogger as logger
 
 from src.data.process_datasets import ProcessDataset
-from src.data.config import DataConfig
+from src.data.config import ProcessDatasetConfig
 
 
 cs = ConfigStore.instance()
-cs.store(name="base", node=DataConfig)
+cs.store(name="base", node=ProcessDatasetConfig)
 
 
 @hydra.main(version_base=None, config_path="./configs/process_datasets", config_name="main")
 def main(cfg: DictConfig) -> None:
-    """Entry point for Hydra."""
     logger.info("ProcessDataset configuration:\n" + OmegaConf.to_yaml(cfg))
     processor = ProcessDataset(cfg)
     processor._process_and_upload()
-
 
 if __name__ == "__main__":
     main()

@@ -1,77 +1,56 @@
 import os
-
-import hydra
-from datasets import Dataset, load_dataset
-from omegaconf import DictConfig, OmegaConf
-from loguru import logger
+import random
+from omegaconf import DictConfig
 
 from src.constants import DATA, GS_BUCKET
-from src.data.utils import delete_local_file, upload_local_file_to_gcs, write_dataset_to_local_jsonl
+from src.data.config import Sample
+from src.data.register import GLOBAL_DICT
+from src.data.utils import delete_local_file, samples_to_dataset, upload_local_file_to_gcs, write_dataset_to_local_jsonl
 
-CHUNK_SIZE = 50_000  # max number of rows per jsonl file for larger datasets
+CHUNK_SIZE = 100_000
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RED = "\033[91m"
 END = "\033[0m"
 
-
-def _rename_messages_to_trace_if_present(dataset: Dataset) -> Dataset:
-    """If the dataset has a 'messages' column, rename it to 'trace'. Otherwise return as-is."""
-    if "messages" in dataset.column_names:
-        print(f"{GREEN}Renaming 'messages' column to 'trace'.{END}")
-        return dataset.rename_column("messages", "trace")
-    return dataset
-
-
 class ProcessDataset:
-    """Process a HuggingFace dataset and upload to GCS."""
+    """Process a dataset (registered or HuggingFace) and upload to GCS."""
 
     def __init__(self, cfg: DictConfig) -> None:
-        self.cfg = cfg
+        self.dataset_name = cfg.name
+        self.seed = cfg.seed
         self._resolve_config()
 
     def _resolve_config(self) -> None:
-        """Resolve dataset_name vs custom hf_path/name/columns."""
-        if self.cfg.hf_path is not None:
-            if not self.cfg.name or not self.cfg.columns:
-                raise ValueError("name and columns are required when hf_path is specified")
-            self.dataset_name = self.cfg.name
-            self.hf_path = self.cfg.hf_path
-            self.columns = list(self.cfg.columns) if isinstance(self.cfg.columns, (list, tuple)) else [self.cfg.columns]
-        else:
-            if self.cfg.dataset_name is None:
-                raise ValueError("Either dataset_name or hf_path must be set")
-            if self.cfg.dataset_name not in self.cfg.datasets:
-                raise ValueError(
-                    f"Unknown dataset_name: {self.cfg.dataset_name}. Available: {list(self.cfg.datasets.keys())}"
-                )
-            preset = self.cfg.datasets[self.cfg.dataset_name]
-            self.dataset_name = self.cfg.dataset_name
-            self.hf_path = preset.hf_path
-            self.columns = list(preset.columns)
-        self.split = self.cfg.split
+        """Resolve: registered dataset (name in GLOBAL_DICT)"""
+        name = self.cfg.name
+        if name not in GLOBAL_DICT:
+            raise ValueError(
+                f"Unknown dataset: {name}. "
+                f"Use a registered name (in src/data/register.py), set hf_path+columns, or add to datasets. "
+                f"Registered: {list(GLOBAL_DICT.keys())}"
+            )
+
+    @property
+    def get_samples(self) -> list[Sample]:
+        return GLOBAL_DICT[self.dataset_name]()
+    
+    @staticmethod
+    def apply_transformations(samples: list[Sample], seed: int) -> list[Sample]:
+        random.seed(seed)
+        return random.shuffle(samples)
 
     def _process_and_upload(self) -> None:
-        """Load dataset from HuggingFace, process, and upload chunks to GCS."""
-        print(f"{YELLOW}Loading dataset from HuggingFace: {self.hf_path} (split={self.split})...{END}")
-        dataset = load_dataset(self.hf_path, split=self.split)
-        print(f"{GREEN}Loaded dataset with {len(dataset)} rows and columns: {dataset.column_names}{END}")
-
-        if self.columns is not None:
-            original_columns = dataset.column_names
-            columns_to_remove = [c for c in original_columns if c not in self.columns]
-            if columns_to_remove:
-                print(f"{YELLOW}Removing unused columns: {columns_to_remove}{END}")
-            dataset = dataset.remove_columns(columns_to_remove)
-
-        dataset = _rename_messages_to_trace_if_present(dataset)
+        """Load dataset (from registry or HuggingFace), process, and upload chunks to GCS."""
+        samples = ProcessDataset.apply_transformations(self.get_samples, seed=self.seed)
+        dataset = samples_to_dataset(samples) 
 
         base_gs = f"{GS_BUCKET}/{DATA}/{self.dataset_name}"
         cwd = os.getcwd()
         base_name = f"{self.dataset_name}.jsonl"
 
         n = len(dataset)
-        print(f"{YELLOW}Preparing to write and upload dataset ({n} rows) to GCS at: {base_gs}{END}")
+        print(f"{YELLOW}Preparing to write and upload samples ({n} rows) to GCS at: {base_gs}{END}")
 
         iteration = 0
         start_idx = 0
@@ -94,8 +73,4 @@ class ProcessDataset:
             start_idx = end_idx
 
         print(f"{GREEN}All chunks processed and uploaded.{END}")
-        print(f"{RED}Cleaning up cache files.{END}")
-        dataset.cleanup_cache_files()
-        print(f"{GREEN}Cache cleaned up.{END}")
-
-
+        
