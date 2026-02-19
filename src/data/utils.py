@@ -11,6 +11,7 @@ def samples_to_dataset(samples: list[Sample]) -> Dataset:
     """Convert a list of Sample to a HuggingFace Dataset (prompt, answer, solution columns)."""
     return Dataset.from_list([s.get_dict() for s in samples])
 
+
 def load_jsonl_from_gcs(gs_prefix: str) -> list[dict]:
     """Load all JSONL files under gs_prefix (e.g. gs://bucket/data/omnimath/), return list of rows."""
     fs = gcsfs.GCSFileSystem()
@@ -37,6 +38,7 @@ def upload_local_file_to_gcs(local_path: str, gs_path: str):
         data = src.read()
         with fs.open(gcs_path, "wb") as dst:
             dst.write(data)
+
 
 def write_dataset_to_local_jsonl(dataset: Dataset, local_path: str) -> None:
     """Write dataset to a local JSONL file (all columns)."""

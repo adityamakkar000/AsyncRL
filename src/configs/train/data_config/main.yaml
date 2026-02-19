@@ -1,8 +1,11 @@
-name: "omnimath"
-batch_size: 4
-gcs_path: gs://arl-experiments/data/omnimath
-prompt_column: "problem"
-answer_column: "answer"
-# TODO: add trace column
-# trace_column: "trace"
-split: "train"
+# note that name must be the same as registery function decorator name
+
+train_config:
+  name: omnimath
+  batch_size: 128
+  gcs_path: gs://arl-experiments/data/omnimath
+
+val_config:
+  name: omnimath
+  batch_size: 32
+  gcs_path: gs://arl-experiments/data/omnimath

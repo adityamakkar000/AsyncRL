@@ -171,14 +171,8 @@ class Trainer:
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
-        max_length = self.config.model_config.qwen_config.sequence_len
-        split = self.config.data_config.split
-        self.train_dataset = DataLoader(
-            data_config=self.config.data_config,
-            max_length=max_length,
-            split=split,
-        )
-        self.val_dataset = None  # TODO: @adityamakkar000 add val dataset when needed
+        self.train_dataset = DataLoader(self.config.data_config.train_config)
+        self.val_dataset = DataLoader(self.config.data_config.val_config)
 
     @partial(setup, component="model")
     def _setup_model(self):
@@ -358,14 +352,12 @@ class Trainer:
         if self.train_fn is None or self.val_fn is None:
             raise ValueError("Functions not initialized yet")
 
-        batch_size = self.config.data_config.batch_size
         for step in range(self.global_step, self.total_steps):
-            # might have to do something here for rl
-            batch = self.train_dataset(batch_size)
+            # might have to do something here for RL
+            batch = self.train_dataset()
             out = self.train_fn(
                 self.params,
                 self.opt_state,
-                batch,
             )
 
             # val step
