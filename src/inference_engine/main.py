@@ -447,8 +447,8 @@ class InferenceEngine:
                 **self.shardings.decode_shardings,
             )
         new_state: InferenceState = self.precompile_dict["decode"][attention_length](inference_state)
-        out_tokens = jnp.concat((out_tokens, new_state.next_token[...]), axis=-1)
-        out_logprobs = jnp.concat((out_logprobs, new_state.next_probs[...]), axis=-1)
+        out_tokens = jax.lax.dynamic_update_index_in_dim(out_tokens, new_state.next_token, new_state.kv_cache[0].length, axis=1)
+        out_logprobs = jax.lax.dynamic_update_index_in_dim(out_logprobs, new_state.next_probs, new_state.kv_cache[0].length, axis=1)
         return new_state, out_tokens, out_logprobs
 
     def single_rollout(
@@ -464,8 +464,10 @@ class InferenceEngine:
             Array: The log probabilities of the generated tokens during the rollout. Shape: [decode_size, total_seq_len].
             dict[str, float]: Metrics collected during the rollout, such as time taken and tokens per second.
         """
-        out_tokens = prompt_tokens
-        out_logprobs = jnp.zeros_like(prompt_tokens, dtype=jnp.float32)
+        B, T = prompt_tokens.shape
+        out_tokens = jnp.ones((self.decode_size, T + self.config.max_seq_len), dtype=jnp.int32) * self.tokenizer.eos_token_id
+        out_logprobs = jnp.zeros((self.decode_size, T + self.config.max_seq_len), dtype=self.model.activation_dtype)
+        out_tokens = out_tokens.at[:, :T].set(prompt_tokens)
         n_steps = 0
         start = time.perf_counter()
         with Tracker(timer=True) as t:
