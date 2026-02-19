@@ -15,13 +15,6 @@ from src.model import KVCache, Model, convert_dtype
 
 from .config import InferenceConfig, InferenceResults, InferenceRollout, InferenceShardings, InferenceState
 
-"""
-#TODO: Inference 
-- integrate into trainer 
-- fix key splitting across devices
-- multihost 
-"""
-
 AXIS_NAME = "data"
 LOG_EVERY_N_STEPS = 350
 
