@@ -1,25 +1,6 @@
 # Predefined datasets: dataset_name -> (hf_path, columns)
 # Use dataset_name for predefined, or hf_path + name + columns for custom
 defaults:
+  - base
   - _self_
 
-dataset_name: null  # one of: omnimath, acereason, openr1, numina-cot
-hf_path: null  # for custom dataset
-name: null  # for custom dataset (required if hf_path set)
-columns: null  # for custom dataset, list of column names (required if hf_path set)
-split: "train"
-
-# Predefined dataset mapping (used when dataset_name is set)
-datasets:
-  omnimath:
-    hf_path: "KbsdJames/Omni-MATH"
-    columns: ["problem", "solution", "answer"]
-  acereason:
-    hf_path: "nvidia/AceReason-Math"
-    columns: ["problem", "answer"]
-  openr1:
-    hf_path: "open-r1/OpenR1-Math-220k"
-    columns: ["problem", "solution", "answer", "messages"]
-  numina-cot:
-    hf_path: "AI-MO/NuminaMath-CoT"
-    columns: ["problem", "solution", "messages"]
