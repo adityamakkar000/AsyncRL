@@ -4,15 +4,14 @@ import os
 import gcsfs
 from datasets import Dataset
 
-DATASET_DICT = dict()
+from src.data.config import Sample
 
-def register_dataset(name: str):
-    def decorator(process_func):
-        DATASET_DICT[name] = process_func
-        return process_func
-    return decorator
 
-def load_jsonl_from_gcs(gs_prefix: str, prompt_column: str = "problem") -> list[dict]:
+def samples_to_dataset(samples: list[Sample]) -> Dataset:
+    """Convert a list of Sample to a HuggingFace Dataset (prompt, answer, solution columns)."""
+    return Dataset.from_list([s.get_dict() for s in samples])
+
+def load_jsonl_from_gcs(gs_prefix: str) -> list[dict]:
     """Load all JSONL files under gs_prefix (e.g. gs://bucket/data/omnimath/), return list of rows."""
     fs = gcsfs.GCSFileSystem()
     prefix = gs_prefix.replace("gs://", "") if gs_prefix.startswith("gs://") else gs_prefix
@@ -25,12 +24,7 @@ def load_jsonl_from_gcs(gs_prefix: str, prompt_column: str = "problem") -> list[
             continue
         with fs.open(path, "r") as f:
             for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                if row.get(prompt_column):
-                    rows.append(row)
+                rows.append(json.loads(line.strip()))
     return rows
 
 
@@ -42,8 +36,7 @@ def upload_local_file_to_gcs(local_path: str, gs_path: str):
     with open(local_path, "rb") as src:
         data = src.read()
         with fs.open(gcs_path, "wb") as dst:
-            dst.write(data)  # pyright: ignore[reportArgumentType]
-
+            dst.write(data)
 
 def write_dataset_to_local_jsonl(dataset: Dataset, local_path: str) -> None:
     """Write dataset to a local JSONL file (all columns)."""
