@@ -7,11 +7,11 @@ from src.data.config import Sample
 from src.data.register import GLOBAL_DICT
 from src.data.utils import delete_local_file, samples_to_dataset, upload_local_file_to_gcs, write_dataset_to_local_jsonl
 
-CHUNK_SIZE = 100_000
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RED = "\033[91m"
 END = "\033[0m"
+
 
 class ProcessDataset:
     """Process a dataset (registered or HuggingFace) and upload to GCS."""
@@ -19,11 +19,12 @@ class ProcessDataset:
     def __init__(self, cfg: DictConfig) -> None:
         self.dataset_name = cfg.name
         self.seed = cfg.seed
+        self.chunk_size = cfg.chunk_size
         self._resolve_config()
 
     def _resolve_config(self) -> None:
         """Resolve: registered dataset (name in GLOBAL_DICT)"""
-        name = self.cfg.name
+        name = self.dataset_name
         if name not in GLOBAL_DICT:
             raise ValueError(
                 f"Unknown dataset: {name}. "
@@ -34,16 +35,17 @@ class ProcessDataset:
     @property
     def get_samples(self) -> list[Sample]:
         return GLOBAL_DICT[self.dataset_name]()
-    
+
     @staticmethod
     def apply_transformations(samples: list[Sample], seed: int) -> list[Sample]:
         random.seed(seed)
-        return random.shuffle(samples)
+        random.shuffle(samples)
+        return samples
 
     def _process_and_upload(self) -> None:
         """Load dataset (from registry or HuggingFace), process, and upload chunks to GCS."""
         samples = ProcessDataset.apply_transformations(self.get_samples, seed=self.seed)
-        dataset = samples_to_dataset(samples) 
+        dataset = samples_to_dataset(samples)
 
         base_gs = f"{GS_BUCKET}/{DATA}/{self.dataset_name}"
         cwd = os.getcwd()
@@ -56,7 +58,7 @@ class ProcessDataset:
         start_idx = 0
 
         while start_idx < n:
-            end_idx = min(start_idx + CHUNK_SIZE, n)
+            end_idx = min(start_idx + self.chunk_size, n)
             print(f"{YELLOW}Processing chunk {iteration}: rows {start_idx} to {end_idx - 1}{END}")
             chunk = dataset.select(range(start_idx, end_idx))
             chunk_name = f"{iteration:03d}_{base_name}"
@@ -73,4 +75,3 @@ class ProcessDataset:
             start_idx = end_idx
 
         print(f"{GREEN}All chunks processed and uploaded.{END}")
-        

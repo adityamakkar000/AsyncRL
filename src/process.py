@@ -17,5 +17,6 @@ def main(cfg: DictConfig) -> None:
     processor = ProcessDataset(cfg)
     processor._process_and_upload()
 
+
 if __name__ == "__main__":
     main()

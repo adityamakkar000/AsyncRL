@@ -4,15 +4,17 @@ import json
 import jax
 from flax import struct
 
+
 @dataclass
 class Sample:
     prompt: str
     answer: str
-    solution: str | None 
+    solution: str | None
 
     @classmethod
-    def from_json(cls, data: dict):
-        prompt = data.get("prompt")
+    def from_dict(cls, data: dict):
+
+        prompt = data.get("problem")
         answer = data.get("answer")
         solution = data.get("solution")
 
@@ -21,17 +23,29 @@ class Sample:
 
         return cls(prompt=prompt, answer=answer, solution=solution)
 
-    def get_json(self) -> dict:
-        object = {"prompt": self.prompt, "answer": self.answer, "solution": self.solution}
-        return json.dumps(object)
+    def get_dict(self) -> dict:
+        return {"prompt": self.prompt, "answer": self.answer, "solution": self.solution}
+
 
 @dataclass
-class DataConfig:
+class ProcessDatasetConfig:
+    name: str
+    chunk_size: int
+    seed: int
+
+
+@dataclass
+class DatasetConfig:
     name: str
     batch_size: int
     gcs_path: str | None = None
-    split: str = "train"
-    sample: type[Sample] = Sample
+
+
+@dataclass
+class DataConfig:
+    train_config: DatasetConfig
+    val_config: DatasetConfig
+
 
 @struct.dataclass
 class RLBatch:

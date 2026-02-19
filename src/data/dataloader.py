@@ -1,70 +1,48 @@
 from typing import Any
 
-from src.data.config import DataConfig
+from src.data.config import DatasetConfig
+from src.constants import DATA, GS_BUCKET
+from src.data.utils import load_jsonl_from_gcs
+from src.data.config import Sample
 
 
 class DataLoader:
     def __init__(
         self,
-        data_config: DataConfig,
-        max_length: int,
-        split: str,
+        dataset_config: DatasetConfig,
     ) -> None:
-        self.data_config = data_config
-        self.max_length = max_length
-        self.split = split
-        self._examples, self._prompts, self._answers = self._load_from_gcs()
-        self._last_examples = []
+        self.dataset_config = dataset_config
+        self.samples = self._load_from_gcs()
+        self._last_samples = []
         self._current_idx = 0
 
     def _resolve_gcs_path(self) -> str:
-        from src.constants import DATA, GS_BUCKET
+        if self.dataset_config.gcs_path:
+            return self.dataset_config.gcs_path
+        return f"{GS_BUCKET}/{DATA}/{self.dataset_config.name}"
 
-        if self.data_config.gcs_path:
-            return self.data_config.gcs_path
-        return f"{GS_BUCKET}/{DATA}/{self.data_config.name}"
-
-    def _load_from_gcs(self) -> tuple[list[dict], list[str], list[str]]:
-        from src.data.utils import load_jsonl_from_gcs
-
+    def _load_from_gcs(self) -> list[Sample]:
         gs_path = self._resolve_gcs_path()
-        prompt_key = self.data_config.prompt_column
-        answer_key = self.data_config.answer_column
-        rows = load_jsonl_from_gcs(gs_path, prompt_column=prompt_key)
+        rows = load_jsonl_from_gcs(gs_path)
         if not rows:
-            raise ValueError(f"No rows with '{prompt_key}' found at {gs_path}")
-        prompts = [str(r[prompt_key]).strip() for r in rows]
-        answers = [str(r[answer_key]).strip() for r in rows]
-        # TODO: need a column to add thinking traces
-        return rows, prompts, answers
-
-    def get_prompt(self, batch_size: int) -> list[str]:
-        start_idx = self._current_idx
-        end_idx = self._current_idx + batch_size
-        total = len(self._prompts)
-        # so we can cycle through the dataset indefinitely
-        indices = [i % total for i in range(start_idx, end_idx)]
-        self._current_idx = end_idx % total
-        return [self._prompts[i] for i in indices]
+            raise ValueError(f"No rows found at {gs_path}")
+        samples = [Sample.from_dict(r) for r in rows]
+        return samples
 
     @property
-    def last_examples(self) -> list[dict]:
+    def last_samples(self) -> list[Sample]:
         """Return examples aligned with last batch."""
-        return self._last_examples
+        return self._last_samples
 
-    def __call__(self, batch_size: int) -> dict[str, Any]:
+    def __call__(self, batch_size: int) -> list[Sample]:
         start_idx = self._current_idx
         end_idx = self._current_idx + batch_size
-        total = len(self._prompts)
+        total = len(self.samples)
         indices = [i % total for i in range(start_idx, end_idx)]
-        prompts = [self._prompts[i] for i in indices]
-        examples = [self._examples[i] for i in indices]
-        self._last_examples = examples
+        samples = [self.samples[i] for i in indices]
+        self._last_samples = samples
         self._current_idx = end_idx % total
-        return {
-            "prompts": prompts,
-            "examples": examples,
-        }
+        return samples
 
     def save_checkpoint(self) -> dict[str, Any]:
         """Return current index for checkpointing."""

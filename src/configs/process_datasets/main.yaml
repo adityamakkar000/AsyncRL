@@ -1,6 +1,10 @@
-# Predefined datasets: dataset_name -> (hf_path, columns)
-# Use dataset_name for predefined, or hf_path + name + columns for custom
+# Dataset to process: use a name registered in src/data/register.py (e.g. omnimath),
+# or set hf_path + name + columns for a custom HuggingFace dataset,
+# or add entries under datasets for HF presets.
 defaults:
   - base
   - _self_
 
+name: omnimath
+chunk_size: 100000
+seed: 0
