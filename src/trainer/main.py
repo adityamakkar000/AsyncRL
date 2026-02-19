@@ -14,7 +14,7 @@ from stax import TrainFn
 from stax import staxLogger as logger
 
 from src.constants import CACHE, CHECKPOINTS, GS_BUCKET
-from src.data import RLBatch
+from src.data import DataLoader, RLBatch
 from src.inference_engine import InferenceEngine
 from src.model import Model
 
@@ -62,7 +62,6 @@ class Trainer:
                 config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
                 write_to_gcs(config_path, dict_config)
                 # block to ensure first checkpoint is written
-                self.block_until_checkpoints_saved()
                 self.block_until_checkpoints_saved()
 
             sync_global_devices("Trainer initialization")
@@ -203,15 +202,11 @@ class Trainer:
 
         self.train_step: TrainFn = train_step
         self.val_step = lambda params, batch: {f"val/{k}": v for k, v in compute_aux_metrics(batch).items()}
-        self.val_step = lambda params, batch: {f"val/{k}": v for k, v in compute_aux_metrics(batch).items()}
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
-        """Setup the dataset for training."""
-        # TODO: (chinmay)
-        # setup the train and the val dataset
-        self.train_dataset = None
-        self.val_dataset = None
+        self.train_dataset = DataLoader(self.config.data_config.train_config)
+        self.val_dataset = DataLoader(self.config.data_config.val_config)
 
     @partial(setup, component="model")
     def _setup_model(self):
@@ -313,14 +308,18 @@ class Trainer:
         opt_state: Optional[PyTree] = None,
         metadata_metrics: Optional[dict[str, float]] = None,
     ):
-        # TODO: (chinmay) save dataset state
-        # dataset_state = {"train": self.train_dataset.save_checkpoint(), "val": self.val_dataset.save_checkpoint()}
+        dataset_state = None
+        if self.train_dataset is not None:
+            dataset_state = {"train": self.train_dataset.save_checkpoint()}
+        if self.val_dataset is not None:
+            dataset_state = dataset_state or {}
+            dataset_state["val"] = self.val_dataset.save_checkpoint()
 
         state = {
             "params": params if params else self.params,
             "opt_state": opt_state if opt_state else self.opt_state,
-            "global_step": step,
-            "dataset": None,  # TODO: (chinmay) add dataset state here
+            "global_step": self.global_step,
+            "dataset": dataset_state,
             "key": jax.device_get(self.key.key),
         }
         metadata = {
@@ -381,30 +380,38 @@ class Trainer:
 
         self.writer_id = metadata.get("writer_id", None)
 
-        # TODO: (chinmay) restore dataset state
-        # self.train_dataset.load_from_state(state["dataset"]["train"])
-        # self.val_dataset.load_from_state(state["dataset"]["val"])
+        if "dataset" not in state:
+            raise KeyError("No 'dataset' in checkpoint state.")
+        if self.train_dataset is None:
+            raise ValueError("self.train_dataset is not set.")
+        if self.val_dataset is None:
+            raise ValueError("self.val_dataset is not set.")
+
+        train_state = state["dataset"].get("train")
+        if train_state is None:
+            raise KeyError("No 'train' dataset state in checkpoint.")
+        self.train_dataset.restore_checkpoint(train_state)
+
+        val_state = state["dataset"].get("val")
+        if val_state is None:
+            raise KeyError("No 'val' dataset state in checkpoint.")
+        self.val_dataset.restore_checkpoint(val_state)
 
     def train(self):
         assert self.train_fn is not None, "Train function not set up."
         assert self.inference_engine is not None, "Inference engine not set up."
-        # assert self.train_dataset is not None, "Train dataset not set up."
-        # assert self.val_dataset is not None, "Validation dataset not set up."
+        assert self.train_dataset is not None, "Train dataset not set up."
+        assert self.val_dataset is not None, "Validation dataset not set up."
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
             # TODO: (chinmay) get prompts
-            # prompts = self.train_dataset()
+            prompts = self.train_dataset()
             prompts = [" Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"]
             generations = self.inference_engine(prompts, self.key(), {"params": self.params}, detokenize=True)
             logger.info(generations.metrics)
-
-            import sys
-
-            sys.exit()
-            sys.exit()
 
             # TODO: (chinmay) prepare batch
             train_batch = self.train_dataset.prepare_batch(generations)
@@ -412,7 +419,6 @@ class Trainer:
             out = self.train_step(self.params, self.opt_state, train_batch)
             self.params, self.opt_state = out["params"], out["opt_state"]
             metrics = out["aux_metrics"] | generations.metrics
-
             if self.global_step % self.config.val_interval == 0:
                 val_prompts = self.val_dataset()
                 val_generations = self.inference_engine(

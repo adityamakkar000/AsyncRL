@@ -6,8 +6,6 @@ defaults:
   - loss_config: loss
   - _self_
 
-experiment_name: "test_run_divya"
-
 grad_accum_steps: 1
 seed: 0
 num_steps: 1000

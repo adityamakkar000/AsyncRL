@@ -1,15 +1,17 @@
 from functools import partial
-from typing import Optional
+from typing import Optional, Tuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
+from flax import linen as nn
 from jax.sharding import Sharding, SingleDeviceSharding
 from jaxtyping import Array, PyTree
 from omegaconf import DictConfig
 from optax import GradientTransformation
 from stax import HFModelBase
+from stax import staxLogger as logger
 
 from .config import ModelConfig
 from .qwen3 import KVCache, Qwen3
@@ -58,6 +60,9 @@ class Model(HFModelBase):
             raise ValueError(f"sharding keys do not match got {sharding.keys()} expected {out_state.keys()}")
         out_state = jax.tree.map(lambda x, s: jax.device_put(x, s), out_state, sharding)
 
+        table = nn.tabulate(self.model, rngs=jax.random.PRNGKey(0), depth=1)
+        logger.info(table(x=x_init, seq_lens=seq_lens, kv_cache=None))
+
         return out_state
 
     def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
@@ -81,7 +86,7 @@ class Model(HFModelBase):
 
         return [_init() for _ in range(self.config.qwen_config.n_layers)]
 
-    def load_from_ckpt(self, path: str, step_number: Optional[int] = None, use_best=False):
+    def load_from_ckpt(self, path: str, step_number: Optional[int] = None, use_best=False) -> Tuple[int, PyTree]:
         assert (step_number is not None) ^ use_best, "Either step_number or use_best must be set."
         path = f"{path}/checkpoints/"
         if use_best:
@@ -91,6 +96,11 @@ class Model(HFModelBase):
 
         if step_number == -1:
             step_number = None
+
+        if step_number is None:
+            step_number = checkpointer.latest_step()
+            if step_number is None:
+                raise ValueError("No checkpoints found.")
 
         save_tree = self.init_state(jax.random.PRNGKey(0), tx=None, abstract=True)
         # use np.ndarray to load on CPU from sharded arrays (https://github.com/google/orbax/issues/648)
@@ -153,7 +163,7 @@ class Model(HFModelBase):
     def sequence_len(self) -> int:
         """Max sequence length supported by the model"""
         return self.config.qwen_config.sequence_len
-    
+
     @property
     def activation_dtype(self):
         return convert_dtype(self.config.qwen_config.activation_dtype)

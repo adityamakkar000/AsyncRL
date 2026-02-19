@@ -55,21 +55,23 @@ class EvalRunner:
                 raise ValueError("If max_batched_tokens is a string, it must be 'auto'.")
 
     def setup_model(self):
-        path = f"{GS_BUCKET}/{self.model_config.model_name}"
-        config = f"{path}/config.json"
+        self.gs_path = f"{GS_BUCKET}/{self.model_config.model_name}"
+        config = f"{self.gs_path}/config.json"
 
         logger.info(f"Loading model config from {config}...")
         fs = gcsfs.GCSFileSystem()
         with fs.open(config.replace("gs://", ""), "r") as f:
             model_config = json.loads(f.read())
-        model_config = OmegaConf.create(model_config).model_config
+
+        self.train_config = OmegaConf.create(model_config)
+        model_config = self.train_config.model_config
         logger.info(f"Model config loaded: \n{OmegaConf.to_yaml(model_config)}")
-        logger.info(f"Loading model from {path}...")
+        logger.info(f"Loading model from {self.gs_path}...")
         model = Model(model_config)
-        params = model.load_from_ckpt(
-            path, step_number=self.model_config.step_number, use_best=self.model_config.use_best_ckpt
+        self.step_number, params = model.load_from_ckpt(
+            self.gs_path, step_number=self.model_config.step_number, use_best=self.model_config.use_best_ckpt
         )
-        logger.info("Checkpoint loaded successfully.")
+        logger.info(f"Checkpoint loaded successfully from step {self.step_number}")
         logger.info("Saving model to HF weights...")
 
         model.save_hf(HF_CHECKPOINT_PATH, params)
@@ -129,9 +131,9 @@ class EvalRunner:
 
     def launch_eval(self):
         log_file_template = hash_dictConfig(self.config)
-        log_path = os.path.join(os.path.abspath(EVAL_LOG_DIR), log_file_template)
+        self.log_path = os.path.join(os.path.abspath(EVAL_LOG_DIR), log_file_template)
 
-        if not os.path.exists(log_path):
+        if not os.path.exists(self.log_path):
             logger.info("launching new evaluation ...")
             # args: https://github.com/groq/openbench?tab=readme-ov-file#commands-and-options
             command = (
@@ -162,6 +164,8 @@ class EvalRunner:
                     "--display",
                     DISPLAY,
                     "--log-samples",
+                    "--log-format",
+                    "json",
                 ]
             )
             if self.config.debug:
@@ -177,7 +181,7 @@ class EvalRunner:
              2. it retries but fails with more then one task
             """
             logger.info("resuming evaluation from existing run ...")
-            log_files = [f"{log_path}/{f}" for f in os.listdir(log_path) if f.endswith(".eval")]
+            log_files = [f"{self.log_path}/{f}" for f in os.listdir(self.log_path) if f.endswith(".json")]
             command = (
                 [
                     "bench",
@@ -193,6 +197,31 @@ class EvalRunner:
         logger.info(f"Launching evaluation with command: \n{format_command(command)}")
         subprocess.run(command)
 
+    def parse_metrics(self):
+        eval_path = f"{self.gs_path}/evals"
+        fs = gcsfs.GCSFileSystem()
+        tasks = [t.replace("_", "-") for t in self.config.tasks]
+
+        def find_task(f_name: str):
+            for task in tasks:
+                if task in f_name:
+                    return task
+            raise ValueError(f"Could not find task for file name: {f_name}")
+
+        for f in os.listdir(self.log_path):
+            if f.endswith(".json"):
+                try:
+                    current_task = find_task(f)
+                except ValueError:
+                    logger.warning(f"Could not find task for file {f}, skipping upload.")
+                    continue
+                logger.info(f"Uploading metrics for task: {current_task} ...")
+                with fs.open(f"{eval_path}/{current_task}", "w") as gcs_f:
+                    with open(f"{self.log_path}/{f}", "r") as local_f:
+                        gcs_f.write(local_f.read())
+
+        # TODO: maybe wandb but not needed for now
+
     def cleanup(self):
         logger.info("Cleaning up...")
         self.vllm_process = terminate_process(self.vllm_process, "vLLM")
@@ -201,3 +230,4 @@ class EvalRunner:
         self.setup_model()
         self.launch_vllm()
         self.launch_eval()
+        self.parse_metrics()

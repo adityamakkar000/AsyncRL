@@ -23,4 +23,6 @@ Eval is only supported on a single-host TPU vm, ideally you want a tpu-v6e-8.
 1. Make eval config in `src/configs/eval/<your_eval_name>.yaml` 
 2. Run `mesh run <cluster> "python -m src.eval --config-name <your_eval_name>"` 
 
+## Dataset
 
+The dataset layer lives in `src/data/`

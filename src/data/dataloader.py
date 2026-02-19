@@ -1,0 +1,56 @@
+from typing import Any
+
+from src.constants import DATA, GS_BUCKET
+from src.data.config import DatasetConfig, Sample
+from src.data.utils import load_jsonl_from_gcs
+
+
+class DataLoader:
+    def __init__(
+        self,
+        dataset_config: DatasetConfig,
+    ) -> None:
+        self.dataset_config = dataset_config
+        self.samples = self._load_from_gcs()
+        self._last_samples = []
+        self._current_idx = 0
+
+    def _resolve_gcs_path(self) -> str:
+        if self.dataset_config.gcs_path:
+            return self.dataset_config.gcs_path
+        return f"{GS_BUCKET}/{DATA}/{self.dataset_config.name}"
+
+    def _load_from_gcs(self) -> list[Sample]:
+        gs_path = self._resolve_gcs_path()
+        rows = load_jsonl_from_gcs(gs_path)
+        if not rows:
+            raise ValueError(f"No rows found at {gs_path}")
+        samples = [Sample.from_dict(r) for r in rows]
+        return samples
+
+    @property
+    def last_samples(self) -> list[Sample]:
+        """Return examples aligned with last batch."""
+        return self._last_samples
+
+    def __call__(self, batch_size: int) -> list[Sample]:
+        start_idx = self._current_idx
+        end_idx = self._current_idx + batch_size
+        total = len(self.samples)
+        indices = [i % total for i in range(start_idx, end_idx)]
+        samples = [self.samples[i] for i in indices]
+        self._last_samples = samples
+        self._current_idx = end_idx % total
+        return samples
+
+    def save_checkpoint(self) -> dict[str, Any]:
+        """Return current index for checkpointing."""
+        return {
+            "current_idx": self._current_idx,
+        }
+
+    def restore_checkpoint(self, state: dict[str, Any]) -> None:
+        """Restore index from checkpoint."""
+        if "current_idx" not in state:
+            raise ValueError("Missing 'current_idx' in checkpoint state")
+        self._current_idx = state["current_idx"]

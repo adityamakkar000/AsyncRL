@@ -2,8 +2,8 @@ import os
 
 GS_BUCKET = "gs://arl-experiments"  # main gs bucket
 CHECKPOINTS = "checkpoints"  # checkpoints bucket
+DATA = "data"  # data bucket
 CACHE = "cache"  # cache bucket
-
 
 # eval constants
 SERVED_MODEL_NAME = "eval_model"

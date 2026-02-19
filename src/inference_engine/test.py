@@ -38,14 +38,15 @@ model_config = ModelConfig(
 model = Model(model_config)
 
 params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
-bs = 1
-r = 1
+bs = 8
+r = 4
 config = InferenceConfig(
     temperature=0.6,
     top_p=0.95,
     top_k=50,
-    max_seq_len=128,
-    intial_sequence_len=32,
+    max_seq_len=4096,
+    intial_sequence_len=64,
+    max_prefill_sequence_len=1024,
     batch_size=bs,
     n_replicas=r,
     group_size=bs * r,
@@ -62,7 +63,6 @@ params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
 
 tokenizer_inp = [" Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"]
 
-engine(tokenizer_inp, key, params, detokenize=True)
 output: InferenceResults = engine(tokenizer_inp, key, params, detokenize=True)
 print(output.metrics)
 

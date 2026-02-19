@@ -19,12 +19,22 @@ dependencies = [
     "stax",
     "torch>=2.9.0",
     "transformers>=4.57.3",
+    "datasets>=4.5.0",
 ]
 
 [project.optional-dependencies]
 eval = [        
     "openbench>=0.5.3",
     "vllm-tpu==0.12.0",
+]
+data = [
+    "datasets>=4.4.2",
+    "gcsfs>=2025.3.0",
+    "matplotlib>=3.10.8",
+    "notebook>=7.5.3",
+    "opencv-python>=4.12.0.88",
+    "orbax-checkpoint>=0.11.31",
+    "tfds-nightly>=4.9.9.dev202510250044",
 ]
 
 [tool.uv.sources]
