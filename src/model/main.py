@@ -153,7 +153,7 @@ class Model(HFModelBase):
     def sequence_len(self) -> int:
         """Max sequence length supported by the model"""
         return self.config.qwen_config.sequence_len
-    
+
     @property
     def activation_dtype(self):
         return convert_dtype(self.config.qwen_config.activation_dtype)

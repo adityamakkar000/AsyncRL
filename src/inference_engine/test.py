@@ -15,9 +15,9 @@ def set_jax_cache(path: str):
     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
     # jax.config.update("jax_log_compiles", True)
 
+
 cache_path = f"{GS_BUCKET}/{CACHE}"
 set_jax_cache(cache_path)
-
 
 
 model_config = ModelConfig(
@@ -38,20 +38,21 @@ model_config = ModelConfig(
 model = Model(model_config)
 
 params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
-bs = 1
-r = 1
+bs = 8
+r = 4
 config = InferenceConfig(
     temperature=0.6,
     top_p=0.95,
     top_k=50,
-    max_seq_len=128,
+    max_seq_len=4096,
     intial_sequence_len=64,
+    max_prefill_sequence_len=1024,
     batch_size=bs,
     n_replicas=r,
     group_size=bs * r,
     kv_cache_dtype="bfloat16",
+    params_dtype="bfloat16",
     precompile=True,
-    params_dtype="float32",
 )
 
 engine = InferenceEngine(model, params, config)
@@ -59,10 +60,9 @@ engine = InferenceEngine(model, params, config)
 key = jax.random.PRNGKey(2303)
 params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
 
-tokenizer_inp = ["What is 2 + 2?"]
+tokenizer_inp = ["Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"]
 
 output: InferenceResults = engine(tokenizer_inp, key, params, detokenize=True)
 print(output.metrics)
-print(output.output_strs)
 
 breakpoint()
