@@ -1,19 +1,21 @@
 from functools import partial
-from typing import Optional
+from typing import Optional, Tuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
+from flax import linen as nn
 from jax.sharding import Sharding, SingleDeviceSharding
 from jaxtyping import Array, PyTree
 from omegaconf import DictConfig
 from optax import GradientTransformation
 from stax import HFModelBase
+from stax import staxLogger as logger
 
 from .config import ModelConfig
 from .qwen3 import KVCache, Qwen3
-from .utils import get_qwen_3_weights, save_to_hf
+from .utils import convert_dtype, get_qwen_3_weights, save_to_hf
 
 sizes = [0.6, 1.7, 4, 8]
 model_names = [f"Qwen/Qwen3-{size}B" for size in sizes]
@@ -138,10 +140,6 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
-<<<<<<< HEAD
-    ) -> PyTree:
-        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache)
-=======
         attention_len: Optional[int] = None,
     ) -> tuple[Array, list[KVCache]]:
         """
@@ -157,4 +155,3 @@ class Model(HFModelBase):
     @property
     def activation_dtype(self):
         return convert_dtype(self.config.qwen_config.activation_dtype)
->>>>>>> 865a51b (update)

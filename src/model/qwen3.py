@@ -87,16 +87,9 @@ class GroupedQueryAttention(nn.Module):
         self.kv_group_size = self.n_heads // self.n_groups
         self.d_out = self.n_heads * self.head_dim
 
-<<<<<<< HEAD
-    @nn.compact
-    def __call__(self, x: Array, seq_lens: jax.Array, kv_cache: Optional[KVCache] = None):
-        B, T, C = x.shape
-        t_start = kv_cache.length if kv_cache else 0
-=======
     def gqa(self, q: Array, k: Array, v: Array, mask: Array, kv_cache: KVCache) -> tuple[Array, KVCache]:
         t_start = kv_cache.length
         T = q.shape[1]
->>>>>>> 403eb97 (flash attention working + added new configs)
 
         k_cache, v_cache = jax.tree.map(
             lambda cache, val: jax.lax.dynamic_update_slice_in_dim(cache, val.astype(cache.dtype), t_start, axis=1),

@@ -14,7 +14,7 @@ from stax import TrainFn
 from stax import staxLogger as logger
 
 from src.constants import CACHE, CHECKPOINTS, GS_BUCKET
-from src.data import RLBatch
+from src.data import DataLoader, RLBatch
 from src.inference_engine import InferenceEngine
 from src.model import Model
 
@@ -57,28 +57,11 @@ class Trainer:
 
             if not self.resumed:
                 logger.info("Saving intial checkpoint ...")
-<<<<<<< HEAD
-                self.save_checkpoint(step=self.global_step)
-
-                # write config to gcs
-                dict_config = json.dumps(OmegaConf.to_container(self.config))
-                config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
-                write_to_gcs(config_path, dict_config)
-
-                self.checkpointer.wait_until_finished()
-=======
                 self.save_checkpoint(step=0)
                 dict_config = json.dumps(OmegaConf.to_container(self.config))
                 config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
                 write_to_gcs(config_path, dict_config)
                 # block to ensure first checkpoint is written
-<<<<<<< HEAD
-                self.block_until_checkpoints_saved() 
->>>>>>> 55a6206 (update everything)
-=======
-                self.block_until_checkpoints_saved()
->>>>>>> 8b29434 (update inference speeds)
-
             sync_global_devices("Trainer initialization")
 
         logger.info("Training Configuration:\n" + OmegaConf.to_yaml(config))
@@ -315,13 +298,6 @@ class Trainer:
             best_mode="max" if (self.has_best_ckpt and self.config.best_metric.maximize) else "min",  # type: ignore
         )
 
-    @partial(setup, component="inference engine")
-    def _setup_inference_engine(self):
-        """Setup the inference engine for generation during training."""
-        assert self.model is not None, "Model must be set up before inference engine init."
-        # TODO: Divya
-        ...
-
     def make_save_tree(
         self,
         step: int,
@@ -340,13 +316,8 @@ class Trainer:
         state = {
             "params": params if params else self.params,
             "opt_state": opt_state if opt_state else self.opt_state,
-<<<<<<< HEAD
             "global_step": self.global_step,
             "dataset": dataset_state,
-=======
-            "global_step": step,
-            "dataset": None,  # TODO: (chinmay) add dataset state here
->>>>>>> 55a6206 (update everything)
             "key": jax.device_get(self.key.key),
         }
         metadata = {
