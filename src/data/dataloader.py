@@ -1,9 +1,8 @@
 from typing import Any
 
-from src.data.config import DatasetConfig
 from src.constants import DATA, GS_BUCKET
+from src.data.config import DatasetConfig, Sample
 from src.data.utils import load_jsonl_from_gcs
-from src.data.config import Sample
 
 
 class DataLoader:
