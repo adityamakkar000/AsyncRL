@@ -1,4 +1,5 @@
 import time
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -10,7 +11,7 @@ from stax import Tracker
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
-from src.model import KVCache, Model
+from src.model import KVCache, Model, convert_dtype
 
 from .config import InferenceConfig, InferenceResults, InferenceRollout, InferenceShardings, InferenceState
 
@@ -22,6 +23,7 @@ from .config import InferenceConfig, InferenceResults, InferenceRollout, Inferen
 """
 
 AXIS_NAME = "data"
+LOG_EVERY_N_STEPS = 100
 
 
 class InferenceEngine:
@@ -44,8 +46,8 @@ class InferenceEngine:
         }
 
         if self.config.precompile:
-            self.precompile_prefill(params)
             self.precompile_decode(params)
+            self.precompile_prefill(params)
 
     def validate_config(self):
         """Validate the inference configuration to ensure it meets the requirements for the inference engine."""
@@ -71,7 +73,7 @@ class InferenceEngine:
         if self.config.top_p is not None:
             assert 0.0 < self.config.top_p <= 1.0, f"top_p must be in the range (0, 1], got {self.config.top_p}"
 
-    def get_shardings(self, params: PyTree) -> InferenceShardings:
+    def get_shardings(self, params) -> InferenceShardings:
         """Get the shardings for the model parameters, kv cache, and inference state based on the configuration."""
         mesh = jax.make_mesh((self.config.n_replicas,), (AXIS_NAME,))
 
@@ -90,7 +92,7 @@ class InferenceEngine:
             kv_cache=[kv_sharding for _ in range(self.model.config.qwen_config.n_layers)],
             key=replicate_sharding,  # type: ignore
             seq_lens=split_sharding,  # type: ignore
-            params=jax.tree.map(lambda p: replicate_sharding, params),
+            params=jax.tree.map(lambda _p: replicate_sharding, params),
             stop_mask=split_sharding,  # type: ignore
         )
 
@@ -130,8 +132,14 @@ class InferenceEngine:
         self, batch: Array, seq_lens: Array, params: PyTree, key: Array
     ) -> tuple[Array, Array, PyTree, Array]:
         batch, seq_lens = self.split_across_axis(batch), self.split_across_axis(seq_lens)
-        params, key = self.replicate_across_axis(params), self.replicate_across_axis(key)
+        key = self.replicate_across_axis(key)
+        params = jax.tree.map(self.replicate_across_axis, params)
         return batch, seq_lens, params, key
+
+    def setup_parameters(self, params: PyTree) -> PyTree:
+        params_dtype = convert_dtype(self.config.params_dtype)
+        params_host = jax.tree.map(lambda p: process_allgather(p.astype(params_dtype), tiled=True), params)
+        return params_host
 
     def precompile_prefill(self, params: PyTree) -> None:
         """
@@ -143,6 +151,7 @@ class InferenceEngine:
 
         key = jax.random.PRNGKey(0)
         seq_lens = jnp.array([1] * self.decode_size)
+        params = self.setup_parameters(params)
 
         while curr_seq_len <= self.config.max_seq_len:
             x_init = jnp.ones((self.decode_size, curr_seq_len), dtype=jnp.int32)
@@ -153,7 +162,9 @@ class InferenceEngine:
                 **self.shardings.prefill_shardings,
             )
             _output = self.precompile_dict["prefill"][curr_seq_len](x_init, seq_lens, params, key)
+            del _output
             curr_seq_len *= 2
+        del params
         logger.info("Finished prefill precompile")
 
     def precompile_decode(self, params: PyTree) -> None:
@@ -163,25 +174,30 @@ class InferenceEngine:
         """
         curr_size = self.config.intial_sequence_len
 
-        state = InferenceState(
-            next_token=jnp.ones((self.decode_size, 1), dtype=jnp.int32),
-            next_probs=jnp.ones((self.decode_size, 1)),
-            kv_cache=self.model.init_kv_cache(
-                self.decode_size, dtype=self.config.kv_cache_dtype, sharding=self.shardings.kv_cache_sharding
-            ),
-            key=jax.random.PRNGKey(0),
-            seq_lens=jnp.array([1] * self.decode_size),
-            params=params,
-            stop_mask=jnp.zeros((self.decode_size, 1), dtype=bool),
-        )
-        state = self.put_state_on_device(state)
+        def get_mock_state():
+            state = InferenceState(
+                next_token=jnp.ones((self.decode_size, 1), dtype=jnp.int32),
+                next_probs=jnp.ones((self.decode_size, 1), dtype=self.model.activation_dtype),
+                kv_cache=self.model.init_kv_cache(
+                    self.decode_size, dtype=self.config.kv_cache_dtype, sharding=self.shardings.kv_cache_sharding
+                ),
+                key=jax.random.PRNGKey(0),
+                seq_lens=jnp.array([1] * self.decode_size),
+                params=self.setup_parameters(params),
+                stop_mask=jnp.zeros((self.decode_size, 1), dtype=bool),
+            )
+            return self.put_state_on_device(state)
 
+        # params = self.setup_parameters(params)
         while curr_size <= self.config.max_seq_len:
+           
             self.precompile_dict["decode"][curr_size] = jax.jit(
-                lambda state: self.decode(state, curr_size),
+                partial(self.decode, attention_length=curr_size), 
+                donate_argnums=(0,),               
                 **self.shardings.decode_shardings,
             )
-            _ = self.precompile_dict["decode"][curr_size](state)
+            _output = self.precompile_dict["decode"][curr_size](get_mock_state())
+            del _output
             curr_size *= 2
         logger.info("Finished decode precompile")
 
@@ -195,7 +211,7 @@ class InferenceEngine:
 
     def compute_attention_length(self, cache_length: Array) -> int:
         """Compute the attention length for the decode step based on the current cache length."""
-        return self.compute_max_power_of_two(cache_length.item(), self.model.config.qwen_config.sequence_len)
+        return self.compute_max_power_of_two(cache_length.item(), self.config.max_seq_len)
 
     def tokenize(self, texts: list[str]) -> tuple[Array, Array]:
         """
@@ -337,7 +353,7 @@ class InferenceEngine:
         )
         return InferenceState(
             next_token=input_tokens[:, -1:],
-            next_probs=jnp.ones((self.decode_size, 1)),
+            next_probs=jnp.ones((self.decode_size, 1), dtype=self.model.activation_dtype),
             seq_lens=seq_lens,
             kv_cache=out_cache,
             params=params,
@@ -455,10 +471,11 @@ class InferenceEngine:
         with Tracker(timer=True) as t:
             while not jnp.all(inference_state.stop_mask):
                 inference_state, out_tokens, out_logprobs = self.decode_step(inference_state, out_tokens, out_logprobs)
-                current_time = time.perf_counter() - start
-                logger.info(f"Inferencing ... tps {self.decode_size / current_time:.2f}, sps {1 / current_time:.2f}")
-                start = time.perf_counter()
-                n_steps += 1
+
+                if(n_steps := n_steps + 1) % LOG_EVERY_N_STEPS == 0:
+                    current_time = time.perf_counter() - start
+                    logger.info(f"Inferenced {n_steps} tokens | tps {self.decode_size * LOG_EVERY_N_STEPS/ current_time:.2f} | sps {LOG_EVERY_N_STEPS / current_time:.2f}")
+                    start = time.perf_counter()
 
         out_tokens, out_logprobs = jax.tree.map(lambda x: list(jax.device_get(x)), (out_tokens, out_logprobs))
 
@@ -569,7 +586,7 @@ class InferenceEngine:
             PyTree: The model parameters after performing an all-gather across hosts.
         """
         key = jax.random.fold_in(key, stax.get_rank())
-        params = jax.tree.map(lambda p: process_allgather(p, tiled=True), params)
+        params = self.setup_parameters(params)
         return key, params
 
     def __call__(self, prompts: list[str], key: Array, params: PyTree, detokenize: bool = False) -> InferenceResults:
