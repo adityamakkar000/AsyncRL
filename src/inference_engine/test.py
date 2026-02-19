@@ -13,7 +13,7 @@ def set_jax_cache(path: str):
     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
-    jax.config.update("jax_log_compiles", True)
+    # jax.config.update("jax_log_compiles", True)
 
 
 cache_path = f"{GS_BUCKET}/{CACHE}"
@@ -38,15 +38,15 @@ model_config = ModelConfig(
 model = Model(model_config)
 
 params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
-bs = 8
+bs = 1
 r = 4
 config = InferenceConfig(
     temperature=0.6,
     top_p=0.95,
     top_k=50,
-    max_seq_len=4096,
+    max_seq_len=256,
     intial_sequence_len=64,
-    max_prefill_sequence_len=1024,
+    max_prefill_sequence_len=256,
     batch_size=bs,
     n_replicas=r,
     group_size=bs * r,
