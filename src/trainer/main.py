@@ -354,8 +354,8 @@ class Trainer:
 
         for step in range(self.global_step, self.total_steps):
             # might have to do something here for RL
-            batch = self.train_dataset()
-            out = self.train_fn(
+            self.train_dataset()
+            self.train_fn(
                 self.params,
                 self.opt_state,
             )

@@ -3,9 +3,8 @@ from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig, OmegaConf
 from stax import staxLogger as logger
 
-from src.data.process_datasets import ProcessDataset
 from src.data.config import ProcessDatasetConfig
-
+from src.data.process_datasets import ProcessDataset
 
 cs = ConfigStore.instance()
 cs.store(name="base", node=ProcessDatasetConfig)
