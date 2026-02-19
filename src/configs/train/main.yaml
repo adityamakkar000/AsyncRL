@@ -6,14 +6,8 @@ defaults:
   - loss_config: loss
   - _self_
 
-<<<<<<< HEAD
-experiment_name: null
-grad_steps: 1
-=======
-experiment_name: "test_run_divya"
 
 grad_accum_steps: 1
->>>>>>> 1339e05 (base model working)
 seed: 0
 num_steps: 1000
 val_interval: 100
