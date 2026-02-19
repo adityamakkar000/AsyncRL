@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 from omegaconf import MISSING
 
