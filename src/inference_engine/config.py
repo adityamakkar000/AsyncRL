@@ -17,10 +17,11 @@ class InferenceConfig:
     max_seq_len: int = MISSING
     batch_size: int = MISSING
     group_size: int = MISSING
-    kv_cache_dtype: str = MISSING
     n_replicas: int = 1
     intial_sequence_len: int = 64
     precompile: bool = True
+    kv_cache_dtype: str = "bfloat16"
+    params_dtype: str = "float32"
 
 
 @struct.dataclass

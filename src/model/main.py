@@ -138,5 +138,23 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
+<<<<<<< HEAD
     ) -> PyTree:
         return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache)
+=======
+        attention_len: Optional[int] = None,
+    ) -> tuple[Array, list[KVCache]]:
+        """
+        Applies the model to the input data. This is a wrapper around __call__ that allows for additional processing if needed.
+        """
+        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, attention_len=attention_len)
+
+    @property
+    def sequence_len(self) -> int:
+        """Max sequence length supported by the model"""
+        return self.config.qwen_config.sequence_len
+    
+    @property
+    def activation_dtype(self):
+        return convert_dtype(self.config.qwen_config.activation_dtype)
+>>>>>>> 865a51b (update)
