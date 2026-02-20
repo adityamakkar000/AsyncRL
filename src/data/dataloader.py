@@ -15,16 +15,18 @@ class DataLoader:
     def __init__(
         self,
         dataset_config: DatasetConfig,
-        seq_length: int,
+        max_seq_length: int,
+        group_size: int,
         hf_model: str,
     ) -> None:
         self.dataset_config = dataset_config
-        self.seq_length = seq_length
-        self.hf_model = hf_model
+        self.prompt_size = self.dataset_config.batch_size // group_size
+        self.max_seq_length = max_seq_length
         self.samples = self._load_from_gcs()
         self._last_samples = []
         self._current_idx = 0
         self.verifier = Verifier()
+        self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
 
     def _resolve_gcs_path(self) -> str:
         if self.dataset_config.gcs_path:
@@ -44,9 +46,15 @@ class DataLoader:
         """Return examples aligned with last batch."""
         return self._last_samples
 
+<<<<<<< HEAD
     def __call__(self, num_prompts: int) -> list[Sample]:
         start_idx = self._current_idx
         end_idx = self._current_idx + num_prompts
+=======
+    def __call__(self) -> list[Sample]:
+        start_idx = self._current_idx
+        end_idx = self._current_idx + self.prompt_size
+>>>>>>> f037962 (merge)
         total = len(self.samples)
         indices = [i % total for i in range(start_idx, end_idx)]
         samples = [self.samples[i] for i in indices]
@@ -55,6 +63,8 @@ class DataLoader:
         return samples
 
     def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> RLBatch:
+
+        tokens = self.pad_tokens(generations.rollouts, 0, "rollouts")
         tokenizer = AutoTokenizer.from_pretrained(self.hf_model)
 
         tokens = jnp.array(
@@ -75,23 +85,7 @@ class DataLoader:
             dtype=jnp.int32,
         )
 
-        reference_model_logprobs = jnp.array(
-            [
-                jnp.stack(
-                    [
-                        jnp.pad(
-                            jnp.array(logprobs),
-                            (self.seq_length - logprobs.shape[0], 0),
-                            mode="constant",
-                            constant_values=-jnp.inf,
-                        )
-                        for logprobs in inference_rollout.logprobs
-                    ]
-                )
-                for inference_rollout in generations.rollouts
-            ],
-            dtype=jnp.float32,
-        )
+        reference_model_logprobs = self.pad_tokens(generations.rollouts, -jnp.inf, "logprobs")
 
         seq_lens = jnp.array(
             [[len(tokens) for tokens in inference_rollout.rollouts] for inference_rollout in generations.rollouts],
@@ -100,14 +94,14 @@ class DataLoader:
 
         rewards = jnp.array(
             [
-                [self.get_reward(tokenizer.decode(tokens), sample.answer) for tokens in inference_rollout.rollouts]
+                [self.get_reward(self.tokenizer.decode(tokens), sample.answer) for tokens in inference_rollout.rollouts]
                 for sample, inference_rollout in zip(samples, generations.rollouts)
             ],
             dtype=jnp.float32,
         )
 
-        token_mask = jnp.where(jnp.isfinite(reference_model_logprobs), 1, 0).astype(jnp.int32)
-
+        token_mask = (reference_model_logprobs == reference_model_logprobs).astype(jnp.bool_)
+    
         group_mean = rewards.mean(axis=1, keepdims=True) * jnp.ones_like(rewards)
         group_std = rewards.std(axis=1, keepdims=True) * jnp.ones_like(rewards) + 1e-8
 
@@ -120,6 +114,30 @@ class DataLoader:
         rl_batch = jax.tree.map(compress, rl_batch)
 
         return rl_batch
+    
+    def pad_tokens(self, inference_rollouts: list[InferenceRollout], constant_val, field_name: str) -> jax.Array:
+        
+        for inference_rollout in inference_rollouts:
+            for field in getattr(inference_rollout, field_name):
+                assert self.max_seq_length >= field.shape[0], \
+                    f"self.max_seq_length ({self.max_seq_length}) must be >= field length ({field.shape[0]})"
+
+        return jnp.array(
+            [
+                jnp.stack(
+                    [
+                        jnp.pad(
+                            jnp.array(field),
+                            (self.max_seq_length - field.shape[0], 0),
+                            mode="constant",
+                            constant_values=constant_val,
+                        )
+                        for field in getattr(inference_rollout, field_name)
+                    ]
+                )
+                for inference_rollout in inference_rollouts
+            ]
+        )
 
     def get_reward(self, output_str: str, answer: str) -> float:
         return self.verifier(VerifierInput(output_str, answer))
