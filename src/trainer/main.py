@@ -234,11 +234,10 @@ class Trainer:
             self.config.loss_config.inference_config.group_size * self.n_hosts
         )
 
-        max_seq_length = self.config.loss_config.inference_config.max_length
-        group_size = self.config.loss_config.inference_config.group_size
+        max_seq_length = self.config.loss_config.inference_config.max_seq_len
         hf_model = self.config.model_config.hf_model_name
-        self.train_dataset = DataLoader(self.config.data_config.train_config, max_seq_length, group_size, hf_model)
-        self.val_dataset = DataLoader(self.config.data_config.val_config, max_seq_length, group_size, hf_model)
+        self.train_dataset = DataLoader(self.config.data_config.train_config, max_seq_length, hf_model)
+        self.val_dataset = DataLoader(self.config.data_config.val_config, max_seq_length, hf_model)
 
     @partial(setup, component="model")
     def _setup_model(self):
@@ -457,9 +456,7 @@ class Trainer:
 
             self.global_step += 1
 
-            # save after you update step
-            # save after you update step
-            # since if you want to save every 10 steps
+            # save after you update state since if you want to save every 10 steps
             # you want to save after you have done 10 steps and resume at the 11th step
             if self.global_step % self.config.checkpoint_interval == 0:
                 self.save_checkpoint(step=self.global_step, metadata_metrics=metrics)
