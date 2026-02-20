@@ -4,6 +4,7 @@ from functools import partial
 from typing import Dict, Optional
 
 import jax
+import jax.numpy as jnp
 import optax
 import stax
 from dotenv import load_dotenv
@@ -54,9 +55,9 @@ class Trainer:
             self._setup_optimizer()
             self._setup_checkpointer()
             self._setup_functions()
-            self._setup_dataset()
+            # self._setup_dataset()
             self._setup_train_state()
-            self._setup_inference_engine()
+            # self._setup_inference_engine()
             self._setup_writer()
 
             if not self.resumed:
@@ -213,7 +214,13 @@ class Trainer:
                 "opt_state": opt_state,
             }
             for step in range(self.config.loss_config.grad_steps):
-                out = train_fn(out["params"], out["opt_state"], batch)
+                reshaped_batch = jax.tree.map(
+                    lambda x: x.reshape(
+                        self.config.grad_accum_steps, x.shape[0] // self.config.grad_accum_steps, *x.shape[1:]
+                    ),
+                    batch,
+                )
+                out = train_fn(out["params"], out["opt_state"], reshaped_batch)
                 aux_metrics |= {f"{k}_step_{step}": v for k, v in out["aux_metrics"].items()}
 
             return {
@@ -421,9 +428,9 @@ class Trainer:
 
     def train(self):
         assert self.train_fn is not None, "Train function not set up."
-        assert self.inference_engine is not None, "Inference engine not set up."
-        assert self.train_dataset is not None, "Train dataset not set up."
-        assert self.val_dataset is not None, "Validation dataset not set up."
+        # assert self.inference_engine is not None, "Inference engine not set up."
+        # assert self.train_dataset is not None, "Train dataset not set up."
+        # assert self.val_dataset is not None, "Validation dataset not set up."
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
@@ -435,8 +442,11 @@ class Trainer:
             train_batch = self.train_dataset.prepare_batch(samples, generations)
 
             out = self.train_step(self.params, self.opt_state, train_batch)
+            breakpoint()
+
             self.params, self.opt_state = out["params"], out["opt_state"]
-            metrics = out["aux_metrics"] | generations.metrics
+            metrics = out["aux_metrics"]  # comment this out after
+            # metrics = out["aux_metrics"] | generations.metrics
             if self.global_step % self.config.val_interval == 0:
                 val_prompts = self.val_dataset(num_prompts=self.val_n_prompts)
                 val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})

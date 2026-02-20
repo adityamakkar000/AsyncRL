@@ -4,7 +4,7 @@ defaults:
 
 sharding_type: "fsdp"
 opt_state_offload: false
-data_shard_dim: 0
+data_shard_dim: 1
 min_bytes_for_fsdp: 1048576 #  1mb
 weight_shard_dim: 0
 
