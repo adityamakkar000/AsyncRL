@@ -1,11 +1,10 @@
 # note that name must be the same as registery function decorator name
+defaults:
+  - datasets@train_config: omnimath
+  - datasets@val_config: omnimath
 
 train_config:
-  name: omnimath
   batch_size: 128
-  gcs_path: gs://arl-experiments/data/omnimath
 
 val_config:
-  name: omnimath
   batch_size: 32
-  gcs_path: gs://arl-experiments/data/omnimath

@@ -1,0 +1,9 @@
+defaults:
+  - main 
+  - _self_
+
+train_config:
+  batch_size: 8
+
+val_config:
+  batch_size: 8

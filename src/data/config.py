@@ -12,7 +12,7 @@ class Sample:
 
     @classmethod
     def from_dict(cls, data: dict):
-        prompt = data.get("problem")
+        prompt = data.get("prompt")
         answer = data.get("answer")
         solution = data.get("solution")
 
