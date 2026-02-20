@@ -47,7 +47,7 @@ class DataConfig:
 
 @struct.dataclass
 class RLBatch:
-    tokens: jax.Array  # [B, max_seq_len]
+    tokens: jax.Array  # [B, max_seq_len] where B = P * G, P = num prompts, G = group size
     reference_model_logprobs: jax.Array  # [B, max_seq_len]
     seq_lens: jax.Array  # [B] what is the length of each sequence to not include padding tokens
     rewards: jax.Array  # [B], reward at each token
