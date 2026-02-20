@@ -233,7 +233,7 @@ class Trainer:
         self.val_n_prompts: int = self.config.data_config.val_config.batch_size // (
             self.config.loss_config.inference_config.group_size * self.n_hosts
         )
-      
+
         max_seq_length = self.config.loss_config.inference_config.max_length
         group_size = self.config.loss_config.inference_config.group_size
         hf_model = self.config.model_config.hf_model_name
