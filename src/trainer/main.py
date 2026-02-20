@@ -426,7 +426,7 @@ class Trainer:
 
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
-            samples = self.train_dataset(n_prompts=self.train_n_prompts)
+            samples = self.train_dataset(num_prompts=self.train_n_prompts)
             prompts = [s.prompt for s in samples]
             generations = self.inference_engine(prompts, self.key(), {"params": self.params})
             train_batch = self.train_dataset.prepare_batch(generations)
@@ -435,7 +435,7 @@ class Trainer:
             self.params, self.opt_state = out["params"], out["opt_state"]
             metrics = out["aux_metrics"] | generations.metrics
             if self.global_step % self.config.val_interval == 0:
-                val_prompts = self.val_dataset(n_prompts=self.val_n_prompts)
+                val_prompts = self.val_dataset(num_prompts=self.val_n_prompts)
                 val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})
                 val_batch = self.val_dataset.prepare_batch(val_generations)
 

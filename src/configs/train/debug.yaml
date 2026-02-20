@@ -10,6 +10,7 @@ defaults:
 grad_accum_steps: 1
 seed: 0
 num_steps: 10
+val_steps: 1
 val_interval: 5
 
 optimizer: "adamw"
