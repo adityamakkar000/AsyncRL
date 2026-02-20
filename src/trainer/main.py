@@ -75,7 +75,7 @@ class Trainer:
     def validate_config(self):
         """Method to validate the TrainerConfig parameters."""
         # validate config here
-        cfg: TrainerConfig = self.config
+        cfg = self.config
         if cfg.grad_accum_steps < 1:
             raise ValueError("grad_accumulation must be at least 1")
         if cfg.num_steps < 1:
@@ -229,10 +229,10 @@ class Trainer:
     def _setup_dataset(self):
         self.train_dataset = DataLoader(self.config.data_config.train_config)
         self.val_dataset = DataLoader(self.config.data_config.val_config)
-        self.train_n_prompts = self.config.data_config.train_config.batch_size // (
+        self.train_n_prompts: int = self.config.data_config.train_config.batch_size // (
             self.config.loss_config.inference_config.group_size * self.n_hosts
         )
-        self.val_n_prompts = self.config.data_config.val_config.batch_size // (
+        self.val_n_prompts: int = self.config.data_config.val_config.batch_size // (
             self.config.loss_config.inference_config.group_size * self.n_hosts
         )
 
@@ -426,30 +426,17 @@ class Trainer:
 
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
-            samples = self.train_dataset(
-                batch_size=self.config.data_config.train_config.batch_size
-                // self.config.loss_config.inference_config.group_size
-            )
+            samples = self.train_dataset(n_prompts=self.train_n_prompts)
             prompts = [s.prompt for s in samples]
             generations = self.inference_engine(prompts, self.key(), {"params": self.params})
-
-            import sys
-
-            sys.exit(0)
-
             train_batch = self.train_dataset.prepare_batch(generations)
 
             out = self.train_step(self.params, self.opt_state, train_batch)
             self.params, self.opt_state = out["params"], out["opt_state"]
             metrics = out["aux_metrics"] | generations.metrics
             if self.global_step % self.config.val_interval == 0:
-                val_prompts = self.val_dataset()
-                val_generations = self.inference_engine(
-                    val_prompts, self.key(), {"params": self.params}, detokenize=True
-                )
-                val_generations = self.inference_engine(
-                    val_prompts, self.key(), {"params": self.params}, detokenize=True
-                )
+                val_prompts = self.val_dataset(n_prompts=self.val_n_prompts)
+                val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})
                 val_batch = self.val_dataset.prepare_batch(val_generations)
 
                 val_metrics: dict[str, float] = self.val_step(self.params, val_batch)
