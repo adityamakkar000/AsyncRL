@@ -12,15 +12,27 @@ from src.model import Model
 from .config import LossFunction, RLConfig
 
 
+def compute_group_stats(group_rewards: Array) -> tuple[Array, Array]:
+    """
+    Compute the mean and standard deviation of rewards for each group.
+    Args:
+        rewards (Array): Rewards for each sequence. Shape: [num_prompts, group_size].
+    Returns:
+        group_mean (Array): Mean reward for each group. Shape: [num_prompts, 1].
+        group_std (Array): Standard deviation of rewards for each group. Shape: [num_prompts, 1].
+    """
+    group_mean = group_rewards.mean(axis=1, keepdims=True) * jnp.ones_like(group_rewards)
+    group_std = group_rewards.std(axis=1, keepdims=True) * jnp.ones_like(group_rewards) + 1e-8
+    return group_mean, group_std
+
+
 def grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tuple[Array, PyTree]:
     """
     From  https://arxiv.org/pdf/2412.19437
     """
     B, T, V = token_logprobs.shape
-    G = config.group_size
-    group_rewards = batch.rewards.reshape(B // G, G)
-    group_mean = group_rewards.mean(axis=1, keepdims=True) * jnp.ones_like(group_rewards)
-    group_std = group_rewards.std(axis=1, keepdims=True) * jnp.ones_like(group_rewards) + 1e-8
+    group_mean, group_std = compute_group_stats(batch.rewards)
+
     advantages = (
         batch.rewards
         - group_mean.reshape(
@@ -55,9 +67,8 @@ def dr_grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> 
     """
 
     B, T, V = token_logprobs.shape
-    G = config.group_size
-    group_rewards = batch.rewards.reshape(B // G, G)
-    group_mean = group_rewards.mean(axis=1, keepdims=True) * jnp.ones_like(group_rewards)
+    group_mean, _ = compute_group_stats(batch.rewards)
+
     advantages = batch.rewards - group_mean.reshape(
         B,
     )
@@ -86,9 +97,8 @@ def dapo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tup
     """
 
     B, T, V = token_logprobs.shape
-    G = config.group_size
-    group_rewards = batch.rewards.reshape(B // G, G)
-    group_mean = group_rewards.mean(axis=1, keepdims=True) * jnp.ones_like(group_rewards)
+    group_mean, _ = compute_group_stats(batch.rewards)
+
     advantages = batch.rewards - group_mean.reshape(
         B,
     )
@@ -139,7 +149,7 @@ def get_single_step(config: RLConfig) -> StepFn:
     loss_fn = get_loss_fn(config)
 
     def single_step(model: Model, params: PyTree, batch: RLBatch, train: bool = True) -> tuple[Array, PyTree]:
-        x_logprobs = model.apply(params, x=batch.tokens, sequence_lens=batch.seq_lens, kv_cache=None, train=train)
+        x_logprobs = model.apply(params, x=batch.tokens, sequence_lens=batch.seq_lens, kv_cache=None)
         loss, aux_metrics = loss_fn(x_logprobs, batch)
 
         # since we are gradient descenting we want to minimize the loss
