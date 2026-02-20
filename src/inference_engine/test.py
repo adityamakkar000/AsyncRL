@@ -63,7 +63,7 @@ params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
 
 tokenizer_inp = [" Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"]
 
-output: InferenceResults = engine(tokenizer_inp, key, params, detokenize=True)
+output: InferenceResults = engine(tokenizer_inp, key, params)
 print(output)
 
 breakpoint()

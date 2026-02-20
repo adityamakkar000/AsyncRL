@@ -55,7 +55,7 @@ class DataLoader:
         return samples
 
     def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> RLBatch:
-        tokens = self.pad_tokens(generations.rollouts, 0, "rollouts")
+        tokens = self.pad_tokens(generations.rollouts, self.tokenizer.pad_token_id, "rollouts")
         reference_model_logprobs = self.pad_tokens(generations.rollouts, -jnp.inf, "logprobs")
 
         seq_lens = jnp.array(
