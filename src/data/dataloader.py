@@ -1,19 +1,29 @@
 from typing import Any
+import jax
+import jax.numpy as jnp
+from transformers import AutoTokenizer
 
 from src.constants import DATA, GS_BUCKET
-from src.data.config import DatasetConfig, Sample
+from src.data.config import DatasetConfig, Sample, RLBatch
 from src.data.utils import load_jsonl_from_gcs
+from src.inference_engine.config import InferenceResults, InferenceRollout
+from src.data.verifier import Verifier, VerifierInput
 
 
 class DataLoader:
     def __init__(
         self,
         dataset_config: DatasetConfig,
+        seq_length: int,
+        hf_model: str,
     ) -> None:
         self.dataset_config = dataset_config
+        self.seq_length = seq_length
+        self.hf_model = hf_model
         self.samples = self._load_from_gcs()
         self._last_samples = []
         self._current_idx = 0
+        self.verifier = Verifier()
 
     def _resolve_gcs_path(self) -> str:
         if self.dataset_config.gcs_path:
@@ -42,6 +52,53 @@ class DataLoader:
         self._last_samples = samples
         self._current_idx = end_idx % total
         return samples
+    
+    def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> RLBatch:
+
+        output_strs = generations.output_strs
+
+        tokens = jnp.array([
+            jnp.stack([
+                jnp.pad(
+                    jnp.array(tokens),
+                    (self.seq_length - tokens.shape[0], 0),
+                    mode='constant',
+                    constant_values=0
+                )
+                for tokens in inference_rollout.rollouts
+            ])
+            for inference_rollout in generations.rollouts], dtype=jnp.int32)
+        
+        reference_model_logprobs = jnp.array([
+            jnp.stack([
+                jnp.pad(
+                    jnp.array(logprobs),
+                    (self.seq_length - logprobs.shape[0], 0),
+                    mode='constant',
+                    constant_values=0
+                )
+                for logprobs in inference_rollout.logprobs
+            ])
+            for inference_rollout in generations.rollouts], dtype=jnp.float32)
+
+        seq_lens = jnp.array([[len(tokens) for tokens in inference_rollout.rollouts] for inference_rollout in generations.rollouts], dtype=jnp.int32)
+
+        rewards = jnp.array(
+            [
+                [self.get_reward(group_output_str, sample.answer) for group_output_str in group_output_strs]
+                for sample, group_output_strs in zip(samples, output_strs)
+            ], dtype=jnp.float32)
+
+        token_mask = jnp.where(
+            (reference_model_logprobs != 0.0) & jnp.isfinite(reference_model_logprobs),
+            1,
+            0
+        ).astype(jnp.int32)
+
+        return RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, token_mask)
+
+    def get_reward(self, output_str: str, answer: str) -> float:
+        return self.verifier(VerifierInput(output_str, answer))
 
     def save_checkpoint(self) -> dict[str, Any]:
         """Return current index for checkpointing."""
