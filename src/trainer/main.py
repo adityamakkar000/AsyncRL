@@ -374,6 +374,8 @@ class Trainer:
         assert self.checkpointer is not None, "Checkpointer not set up."
         assert self.model is not None, "Model not set up."
         assert self.tx is not None, "Optimizer not set up."
+        assert self.train_dataset is not None, "Train dataset not set up."
+        assert self.val_dataset is not None, "Validation dataset not set up."
         if use_best and not self.has_best_ckpt:
             use_best = False
             logger.warning(
@@ -408,21 +410,10 @@ class Trainer:
 
         self.writer_id = metadata.get("writer_id", None)
 
-        if "dataset" not in state:
-            raise KeyError("No 'dataset' in checkpoint state.")
-        if self.train_dataset is None:
-            raise ValueError("self.train_dataset is not set.")
-        if self.val_dataset is None:
-            raise ValueError("self.val_dataset is not set.")
-
         train_state = state["dataset"].get("train")
-        if train_state is None:
-            raise KeyError("No 'train' dataset state in checkpoint.")
         self.train_dataset.restore_checkpoint(train_state)
 
         val_state = state["dataset"].get("val")
-        if val_state is None:
-            raise KeyError("No 'val' dataset state in checkpoint.")
         self.val_dataset.restore_checkpoint(val_state)
 
     def train(self):
