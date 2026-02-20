@@ -16,11 +16,9 @@ class DataLoader:
         self,
         dataset_config: DatasetConfig,
         max_seq_length: int,
-        group_size: int,
         hf_model: str,
     ) -> None:
         self.dataset_config = dataset_config
-        self.prompt_size = self.dataset_config.batch_size // group_size
         self.max_seq_length = max_seq_length
         self.samples = self._load_from_gcs()
         self._last_samples = []
