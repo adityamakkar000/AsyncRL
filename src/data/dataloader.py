@@ -114,10 +114,8 @@ class DataLoader:
         rl_batch = RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std, token_mask)
 
         def compress(x):
-            y = x.reshape(x.shape[0] * x.shape[1], -1)
-            if y.shape[-1] == 1:
-                y = y.squeeze(-1)
-            return y
+            x = x.reshape(x.shape[0] * x.shape[1], -1)
+            return x.squeeze(-1) if x.shape[-1] == 1 else x
 
         rl_batch = jax.tree.map(compress, rl_batch)
 
