@@ -1,13 +1,14 @@
 from typing import Any
+
 import jax
 import jax.numpy as jnp
 from transformers import AutoTokenizer
 
 from src.constants import DATA, GS_BUCKET
-from src.data.config import DatasetConfig, Sample, RLBatch
+from src.data.config import DatasetConfig, RLBatch, Sample
 from src.data.utils import load_jsonl_from_gcs
-from src.inference_engine.config import InferenceResults, InferenceRollout
 from src.data.verifier import Verifier, VerifierInput
+from src.inference_engine.config import InferenceResults
 
 
 class DataLoader:
@@ -54,7 +55,6 @@ class DataLoader:
         return samples
 
     def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> RLBatch:
-
         tokenizer = AutoTokenizer.from_pretrained(self.hf_model)
 
         tokens = jnp.array(
@@ -108,7 +108,21 @@ class DataLoader:
 
         token_mask = jnp.where(jnp.isfinite(reference_model_logprobs), 1, 0).astype(jnp.int32)
 
-        return RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, token_mask)
+        group_mean = rewards.mean(axis=1, keepdims=True) * jnp.ones_like(rewards)
+        group_std = rewards.std(axis=1, keepdims=True) * jnp.ones_like(rewards) + 1e-8
+
+        tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std, token_mask = jax.tree.map(
+            lambda x: x.reshape(x.shape[0] * x.shape[1], -1),
+            tokens,
+            reference_model_logprobs,
+            seq_lens,
+            rewards,
+            group_mean,
+            group_std,
+            token_mask,
+        )
+
+        return RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std, token_mask)
 
     def get_reward(self, output_str: str, answer: str) -> float:
         return self.verifier(VerifierInput(output_str, answer))
