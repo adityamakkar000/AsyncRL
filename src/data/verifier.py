@@ -1,6 +1,5 @@
-import re
 from dataclasses import dataclass
-
+import re
 
 @dataclass
 class VerifierInput:
@@ -36,7 +35,7 @@ class Verifier:
     def _get_reward(self, solution: str, answer: str) -> float:
         parsed_answer = self.extract_boxed_content(solution)
         if parsed_answer is None:
-            return 0.0  # could this be -1.0 @adityamakkar000
+            return 0.0 # could this be -1.0 @adityamakkar000
         return 1.0 if (answer in parsed_answer) else 0.0
 
     def __call__(self, input: VerifierInput) -> float:
