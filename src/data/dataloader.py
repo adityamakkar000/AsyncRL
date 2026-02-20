@@ -61,7 +61,6 @@ class DataLoader:
         return samples
 
     def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> RLBatch:
-
         tokens = self.pad_tokens(generations.rollouts, 0, "rollouts")
         reference_model_logprobs = self.pad_tokens(generations.rollouts, -jnp.inf, "logprobs")
 
@@ -77,8 +76,7 @@ class DataLoader:
             ]
         )
 
-        token_mask = (reference_model_logprobs == reference_model_logprobs).astype(jnp.bool_)
-
+        token_mask = reference_model_logprobs != -jnp.inf
         group_mean = rewards.mean(axis=1, keepdims=True) * jnp.ones_like(rewards)
         group_std = rewards.std(axis=1, keepdims=True) * jnp.ones_like(rewards) + 1e-8
 
@@ -93,7 +91,6 @@ class DataLoader:
         return rl_batch
 
     def pad_tokens(self, inference_rollouts: list[InferenceRollout], constant_val, field_name: str) -> jax.Array:
-
         for inference_rollout in inference_rollouts:
             for field in getattr(inference_rollout, field_name):
                 assert self.max_seq_length >= field.shape[0], (
