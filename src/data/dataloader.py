@@ -119,7 +119,7 @@ class DataLoader:
                 y = y.squeeze(-1)
             return y
 
-        rl_batch = jax.tree.map(lambda x: compress(x), rl_batch)
+        rl_batch = jax.tree.map(compress, rl_batch)
 
         return rl_batch
 
