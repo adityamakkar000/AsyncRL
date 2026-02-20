@@ -80,7 +80,7 @@ class DataLoader:
         )
 
         token_mask = (reference_model_logprobs == reference_model_logprobs).astype(jnp.bool_)
-    
+
         group_mean = rewards.mean(axis=1, keepdims=True) * jnp.ones_like(rewards)
         group_std = rewards.std(axis=1, keepdims=True) * jnp.ones_like(rewards) + 1e-8
 
@@ -93,13 +93,14 @@ class DataLoader:
         rl_batch = jax.tree.map(compress, rl_batch)
 
         return rl_batch
-    
+
     def pad_tokens(self, inference_rollouts: list[InferenceRollout], constant_val, field_name: str) -> jax.Array:
-        
+
         for inference_rollout in inference_rollouts:
             for field in getattr(inference_rollout, field_name):
-                assert self.max_seq_length >= field.shape[0], \
+                assert self.max_seq_length >= field.shape[0], (
                     f"self.max_seq_length ({self.max_seq_length}) must be >= field length ({field.shape[0]})"
+                )
 
         return jnp.array(
             [
