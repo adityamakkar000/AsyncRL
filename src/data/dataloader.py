@@ -44,15 +44,9 @@ class DataLoader:
         """Return examples aligned with last batch."""
         return self._last_samples
 
-<<<<<<< HEAD
     def __call__(self, num_prompts: int) -> list[Sample]:
         start_idx = self._current_idx
         end_idx = self._current_idx + num_prompts
-=======
-    def __call__(self) -> list[Sample]:
-        start_idx = self._current_idx
-        end_idx = self._current_idx + self.prompt_size
->>>>>>> f037962 (merge)
         total = len(self.samples)
         indices = [i % total for i in range(start_idx, end_idx)]
         samples = [self.samples[i] for i in indices]
