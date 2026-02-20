@@ -55,7 +55,7 @@ class DataLoader:
 
     def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> RLBatch:
 
-        output_strs = generations.output_strs
+        tokenizer = AutoTokenizer.from_pretrained(self.hf_model)
 
         tokens = jnp.array(
             [
@@ -83,7 +83,7 @@ class DataLoader:
                             jnp.array(logprobs),
                             (self.seq_length - logprobs.shape[0], 0),
                             mode="constant",
-                            constant_values=0,
+                            constant_values=-jnp.inf,
                         )
                         for logprobs in inference_rollout.logprobs
                     ]
@@ -100,15 +100,13 @@ class DataLoader:
 
         rewards = jnp.array(
             [
-                [self.get_reward(group_output_str, sample.answer) for group_output_str in group_output_strs]
-                for sample, group_output_strs in zip(samples, output_strs)
+                [self.get_reward(tokenizer.decode(tokens), sample.answer) for tokens in inference_rollout.rollouts]
+                for sample, inference_rollout in zip(samples, generations.rollouts)
             ],
             dtype=jnp.float32,
         )
 
-        token_mask = jnp.where((reference_model_logprobs != 0.0) & jnp.isfinite(reference_model_logprobs), 1, 0).astype(
-            jnp.int32
-        )
+        token_mask = jnp.where(jnp.isfinite(reference_model_logprobs), 1, 0).astype(jnp.int32)
 
         return RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, token_mask)
 
