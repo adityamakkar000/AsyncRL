@@ -16,7 +16,7 @@ from src.model import KVCache, Model, convert_dtype
 from .config import InferenceConfig, InferenceResults, InferenceRollout, InferenceShardings, InferenceState
 
 AXIS_NAME = "data"
-LOG_EVERY_N_STEPS = 350
+LOG_EVERY_N_STEPS = 250
 
 
 class InferenceEngine:
@@ -68,8 +68,9 @@ class InferenceEngine:
         )
 
         if self.config.reasoning_budget is not None:
-            assert self.config.reasoning_budget <= (self.config.max_seq_len - (self.config.max_seq_len // 2)), (
-                f"Reasoning budget {self.config.reasoning_budget} must be less than half of the max seq len {(self.config.max_seq_len - (self.config.max_seq_len // 2))}"
+            answer_tokens = min(1024, self.config.max_seq_len // 2)
+            assert self.config.reasoning_budget <= (self.config.max_seq_len - answer_tokens), (
+                f"Reasoning budget {self.config.reasoning_budget} must be less than or equal to {self.config.max_seq_len - answer_tokens} to account answer tokens"
             )
         if self.config.top_k is not None:
             assert self.config.top_k > 0, f"top_k must be positive, got {self.config.top_k}"
@@ -289,7 +290,7 @@ class InferenceEngine:
 
         return [clean_rollout(rollout) for rollout in rollouts]
 
-    def detokenizer(self, tokens: list[InferenceRollout] | InferenceRollout) -> list[list[str]] | list[str]:
+    def detokenizer(self, tokens: list[InferenceRollout] | InferenceRollout) -> list[list[str]]:
         """
         Detokenize the output rollouts into strings.
         Args:
@@ -297,17 +298,15 @@ class InferenceEngine:
         Returns:
             list[list[str]] | list[str]: The detokenized output strings.
         """
-        return_list = True
         if isinstance(tokens, InferenceRollout):
-            return_list = False
             tokens = [tokens]
 
-        detokenized = []
+        output_strs = []
         for rollout in tokens:
             rollout_strs = self.tokenizer.batch_decode(rollout.rollouts, skip_special_tokens=False)
-            detokenized.append(rollout_strs)
+            output_strs.append(rollout_strs)
 
-        return detokenized if return_list else detokenized[0]
+        return output_strs
 
     def sample_logits(self, logits: Array, key: Array) -> tuple[Array, Array]:
         """
@@ -410,19 +409,21 @@ class InferenceEngine:
         next_token, next_log_prob = self.sample_logits(logits, sample_key)
 
         end_of_think = state.end_of_think | (next_token == 151668)
-        budget_exceed = (self.config.reasoning_budget is not None) & (
-            state.seq_lens[:, None] + 1 > self.config.reasoning_budget
-        )
+        if self.config.reasoning_budget is not None:
+            budget_exceed = (self.config.reasoning_budget is not None) & (
+                state.seq_lens[:, None] + 1 > self.config.reasoning_budget
+            )
+        else:
+            budget_exceed = jnp.zeros_like(end_of_think, dtype=bool)
         interrupt_mask = budget_exceed & ~end_of_think
         end_of_think = end_of_think | interrupt_mask
+        next_token = jnp.where(interrupt_mask, 151668, next_token)
+        next_log_prob = jnp.where(interrupt_mask, 0.0, next_log_prob)
 
         # split two different masks since if we have <eos> naturally we want that logprob in the next_log_probs (eos_stop_mask)
         length_stop_mask = state.stop_mask | (state.seq_lens[:, None] + 1 > self.config.max_seq_len)
         eos_stop_mask = next_token == self.tokenizer.eos_token_id
         stop_mask = eos_stop_mask | length_stop_mask
-
-        next_token = jnp.where(interrupt_mask, 151668, next_token)
-        next_log_prob = jnp.where(interrupt_mask, 0.0, next_log_prob)
 
         next_token = jnp.where(stop_mask, self.tokenizer.eos_token_id, next_token)
         next_log_prob = jnp.where(stop_mask, 0, next_log_prob)
@@ -624,7 +625,7 @@ class InferenceEngine:
         params = self.setup_parameters(params)
         return key, params
 
-    def __call__(self, prompts: list[str], key: Array, params: PyTree, detokenize: bool = False) -> InferenceResults:
+    def __call__(self, prompts: list[str], key: Array, params: PyTree) -> InferenceResults:
         """
         Perform inference for the given input prompts, random key, and model parameters.
         Args:
@@ -638,6 +639,6 @@ class InferenceEngine:
         key, params = self.multihost_prep(key, params)
         inp_tokens, seq_lens = self.tokenize(prompts)
         output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
-        output_strs = self.detokenizer(output_rollouts) if detokenize else None
+        output_strs = self.detokenizer(output_rollouts)
         sync_global_devices("inference_engine_sync")
         return InferenceResults(rollouts=output_rollouts, output_strs=output_strs, metrics=metrics)

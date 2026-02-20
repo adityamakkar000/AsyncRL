@@ -55,14 +55,6 @@ class Key:
         return keys if num_keys > 1 else keys[0]
 
 
-def set_jax_cache(path: str):
-    """Sets the JAX cache directory to the specified path."""
-    jax.config.update("jax_compilation_cache_dir", path)
-    jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-    jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-    jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
-
-
 def write_to_gcs(path: str, data: str):
     """Writes data to a file in Google Cloud Storage."""
     if stax.get_rank() == 0:

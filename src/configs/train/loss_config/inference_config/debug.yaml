@@ -1,13 +1,14 @@
+# short config for debugging 
 temperature: 0.6
 top_p: 0.95
 top_k: null
-max_seq_len: 1024
+max_seq_len: 512
 intial_sequence_len: 64
-max_prefill_sequence_len: 1024
-batch_size: 8
+max_prefill_sequence_len: 512
+batch_size: 2
 n_replicas: 4
-group_size: 32
+group_size: 8
 kv_cache_dtype: "bfloat16"
 precompile: true
-reasoning_budget: null
+reasoning_budget: 256
 params_dtype: "float32"

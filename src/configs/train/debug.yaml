@@ -1,31 +1,31 @@
 defaults:
   - base 
-  - data_config: main
+  - data_config: debug
   - model_config: qwen_0.6b
   - sharding_config: fsdp
   - loss_config: loss
+  - override loss_config/inference_config: debug
   - _self_
-
 
 grad_accum_steps: 1
 seed: 0
-num_steps: 1000
-val_interval: 100
+num_steps: 10
+val_interval: 5
 
 optimizer: "adamw"
 weight_decay: 0.01
 grad_clip: 1.0
 
-learning_rate_init: 0.0
+learning_rate_init: 1e-4
 learning_rate_peak: 1e-4
-learning_rate_end: 1e-5
-warmup_steps: 0.1
-decay_steps: 0.9
+learning_rate_end: 1e-4
+warmup_steps: 0.0
+decay_steps: 1.0
 
 spot_training: true 
 checkpoint_interval: 100
 best_metric: null
-max_checkpoints_to_keep: 5
+max_checkpoints_to_keep: 1
 
 wandb_config: null
 

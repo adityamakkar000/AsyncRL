@@ -58,5 +58,5 @@ class InferenceRollout:
 @dataclass
 class InferenceResults:
     rollouts: list[InferenceRollout]
-    output_strs: Optional[list[list[str]] | list[str]]
+    output_strs: list[list[str]]
     metrics: PyTree

@@ -20,9 +20,14 @@ from src.model import Model
 
 from .config import TrainerConfig
 from .loss import compute_aux_metrics, get_single_step
-from .utils import Key, set_jax_cache, setup, write_to_gcs
+from .utils import Key, setup, write_to_gcs
 
 load_dotenv()
+
+jax.config.update("jax_compilation_cache_dir", f"{GS_BUCKET}/{CACHE}")
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 
 
 class Trainer:
@@ -37,10 +42,9 @@ class Trainer:
         Args:
             config (TrainerConfig): Configuration object containing model, data, training parameters, etc.
         """
-
+        self._setup_jax()
         self.config = config
         self.validate_config()
-        self._setup_jax()
 
         logger.info(f"Starting training for {self.config.experiment_name}")
 
@@ -66,13 +70,12 @@ class Trainer:
 
             sync_global_devices("Trainer initialization")
 
-        logger.info("Training Configuration:\n" + OmegaConf.to_yaml(config))
         logger.info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds")
 
     def validate_config(self):
         """Method to validate the TrainerConfig parameters."""
         # validate config here
-        cfg = self.config
+        cfg: TrainerConfig = self.config
         if cfg.grad_accum_steps < 1:
             raise ValueError("grad_accumulation must be at least 1")
         if cfg.num_steps < 1:
@@ -89,8 +92,26 @@ class Trainer:
             raise ValueError("sharding_type must be one of 'single', 'dp', or 'fsdp'")
         if cfg.loss_config.rl_config.algorithm not in ["grpo", "dr_grpo", "dapo"]:
             raise ValueError(f"Unsupported RL algorithm: {cfg.loss_config.rl_config.algorithm}")
+        if cfg.data_config.train_config.batch_size % cfg.loss_config.inference_config.group_size != 0:
+            raise ValueError("Batch size must be divisible by group size for proper batching in inference.")
 
-        # TODO: check if group size divices batch size
+        n_hosts = jax.process_count()
+        train_batch_size = cfg.data_config.train_config.batch_size
+        val_batch_size = cfg.data_config.val_config.batch_size
+        assert train_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
+            "Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference."
+        )
+        assert val_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
+            "Validation batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference."
+        )
+
+        n_devices = jax.device_count() if cfg.sharding_config.sharding_type in ["fsdp", "dp"] else 1
+        assert train_batch_size % (n_devices * cfg.grad_accum_steps) == 0, (
+            "Train batch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation."
+        )
+        assert val_batch_size % (n_devices * cfg.val_steps) == 0, (
+            "Validation batch size must be divisible by number of devices for proper sharding during validation."
+        )
 
     @partial(setup, component="initialized state")
     def _init_state(self):
@@ -116,6 +137,9 @@ class Trainer:
         self.key = Key(self.config.seed)
         self.global_step = 0
 
+        self.n_hosts = jax.process_count()
+        self.n_devices = jax.device_count()
+
     @partial(setup, component="metric logger")
     def _setup_writer(self):
         if writer_config := self.config.wandb_config:
@@ -138,8 +162,6 @@ class Trainer:
     def _setup_jax(self):
         """Setup JAX for distributed training on TPUs."""
         stax.init_distributed_jax()
-        cache_path = f"{GS_BUCKET}/{CACHE}"
-        set_jax_cache(cache_path)
 
     @partial(setup, component="train and val functions")
     def _setup_functions(self):
@@ -207,6 +229,12 @@ class Trainer:
     def _setup_dataset(self):
         self.train_dataset = DataLoader(self.config.data_config.train_config)
         self.val_dataset = DataLoader(self.config.data_config.val_config)
+        self.train_n_prompts = self.config.data_config.train_config.batch_size // (
+            self.config.loss_config.inference_config.group_size * self.n_hosts
+        )
+        self.val_n_prompts = self.config.data_config.val_config.batch_size // (
+            self.config.loss_config.inference_config.group_size * self.n_hosts
+        )
 
     @partial(setup, component="model")
     def _setup_model(self):
@@ -407,13 +435,17 @@ class Trainer:
 
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
-            # TODO: (chinmay) get prompts
-            prompts = self.train_dataset()
-            prompts = [" Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"]
-            generations = self.inference_engine(prompts, self.key(), {"params": self.params}, detokenize=True)
-            logger.info(generations.metrics)
+            samples = self.train_dataset(
+                batch_size=self.config.data_config.train_config.batch_size
+                // self.config.loss_config.inference_config.group_size
+            )
+            prompts = [s.prompt for s in samples]
+            generations = self.inference_engine(prompts, self.key(), {"params": self.params})
 
-            # TODO: (chinmay) prepare batch
+            import sys
+
+            sys.exit(0)
+
             train_batch = self.train_dataset.prepare_batch(generations)
 
             out = self.train_step(self.params, self.opt_state, train_batch)
