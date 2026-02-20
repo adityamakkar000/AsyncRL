@@ -53,6 +53,7 @@ class RLBatch:
     rewards: jax.Array  # [P, G], reward at each token
     token_mask: jax.Array  # [P, G, max_seq_len], which tokens to train on
 
+
 # InferenceResults.rollouts where the length is P
 # [ [[1, 2, 3]]  ]
 

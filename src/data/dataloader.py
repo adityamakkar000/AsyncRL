@@ -52,48 +52,63 @@ class DataLoader:
         self._last_samples = samples
         self._current_idx = end_idx % total
         return samples
-    
+
     def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> RLBatch:
 
         output_strs = generations.output_strs
 
-        tokens = jnp.array([
-            jnp.stack([
-                jnp.pad(
-                    jnp.array(tokens),
-                    (self.seq_length - tokens.shape[0], 0),
-                    mode='constant',
-                    constant_values=0
+        tokens = jnp.array(
+            [
+                jnp.stack(
+                    [
+                        jnp.pad(
+                            jnp.array(tokens),
+                            (self.seq_length - tokens.shape[0], 0),
+                            mode="constant",
+                            constant_values=0,
+                        )
+                        for tokens in inference_rollout.rollouts
+                    ]
                 )
-                for tokens in inference_rollout.rollouts
-            ])
-            for inference_rollout in generations.rollouts], dtype=jnp.int32)
-        
-        reference_model_logprobs = jnp.array([
-            jnp.stack([
-                jnp.pad(
-                    jnp.array(logprobs),
-                    (self.seq_length - logprobs.shape[0], 0),
-                    mode='constant',
-                    constant_values=0
-                )
-                for logprobs in inference_rollout.logprobs
-            ])
-            for inference_rollout in generations.rollouts], dtype=jnp.float32)
+                for inference_rollout in generations.rollouts
+            ],
+            dtype=jnp.int32,
+        )
 
-        seq_lens = jnp.array([[len(tokens) for tokens in inference_rollout.rollouts] for inference_rollout in generations.rollouts], dtype=jnp.int32)
+        reference_model_logprobs = jnp.array(
+            [
+                jnp.stack(
+                    [
+                        jnp.pad(
+                            jnp.array(logprobs),
+                            (self.seq_length - logprobs.shape[0], 0),
+                            mode="constant",
+                            constant_values=0,
+                        )
+                        for logprobs in inference_rollout.logprobs
+                    ]
+                )
+                for inference_rollout in generations.rollouts
+            ],
+            dtype=jnp.float32,
+        )
+
+        seq_lens = jnp.array(
+            [[len(tokens) for tokens in inference_rollout.rollouts] for inference_rollout in generations.rollouts],
+            dtype=jnp.int32,
+        )
 
         rewards = jnp.array(
             [
                 [self.get_reward(group_output_str, sample.answer) for group_output_str in group_output_strs]
                 for sample, group_output_strs in zip(samples, output_strs)
-            ], dtype=jnp.float32)
+            ],
+            dtype=jnp.float32,
+        )
 
-        token_mask = jnp.where(
-            (reference_model_logprobs != 0.0) & jnp.isfinite(reference_model_logprobs),
-            1,
-            0
-        ).astype(jnp.int32)
+        token_mask = jnp.where((reference_model_logprobs != 0.0) & jnp.isfinite(reference_model_logprobs), 1, 0).astype(
+            jnp.int32
+        )
 
         return RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, token_mask)
 

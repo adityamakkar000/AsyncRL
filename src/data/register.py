@@ -39,6 +39,8 @@ def register_dataset(name: str) -> Callable[[Callable[[], list[Sample]]], Callab
 def load_omnimath() -> list[Sample]:
 
     ds = load_dataset("KbsdJames/Omni-MATH", split="test")
-    samples = [Sample(prompt=example["problem"], answer=example["answer"], solution=example["solution"]) for example in ds]
+    samples = [
+        Sample(prompt=example["problem"], answer=example["answer"], solution=example["solution"]) for example in ds
+    ]
     ds.cleanup_cache_files()
     return samples
