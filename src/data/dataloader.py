@@ -111,18 +111,11 @@ class DataLoader:
         group_mean = rewards.mean(axis=1, keepdims=True) * jnp.ones_like(rewards)
         group_std = rewards.std(axis=1, keepdims=True) * jnp.ones_like(rewards) + 1e-8
 
-        tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std, token_mask = jax.tree.map(
-            lambda x: x.reshape(x.shape[0] * x.shape[1], -1),
-            tokens,
-            reference_model_logprobs,
-            seq_lens,
-            rewards,
-            group_mean,
-            group_std,
-            token_mask,
-        )
+        rl_batch = RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std, token_mask)
 
-        return RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std, token_mask)
+        rl_batch = jax.tree.map(lambda x: x.reshape(x.shape[0] * x.shape[1], -1), rl_batch)
+
+        return rl_batch
 
     def get_reward(self, output_str: str, answer: str) -> float:
         return self.verifier(VerifierInput(output_str, answer))
