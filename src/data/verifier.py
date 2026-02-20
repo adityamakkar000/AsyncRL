@@ -12,6 +12,7 @@ class Verifier:
     def __init__(self):
         self.box_start = re.compile(r"\\boxed\{")
 
+    # TODO: when we anneal, we will need to start extraction after </think>
     def extract_boxed_content(self, solution: str) -> str:
         match = self.box_start.search(solution)
         if not match:
