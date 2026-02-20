@@ -227,14 +227,18 @@ class Trainer:
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
-        self.train_dataset = DataLoader(self.config.data_config.train_config)
-        self.val_dataset = DataLoader(self.config.data_config.val_config)
         self.train_n_prompts: int = self.config.data_config.train_config.batch_size // (
             self.config.loss_config.inference_config.group_size * self.n_hosts
         )
         self.val_n_prompts: int = self.config.data_config.val_config.batch_size // (
             self.config.loss_config.inference_config.group_size * self.n_hosts
         )
+
+        max_seq_length = self.config.loss_config.inference_config.max_length
+        group_size = self.config.loss_config.inference_config.group_size
+        hf_model = self.config.model_config.hf_model_name
+        self.train_dataset = DataLoader(self.config.data_config.train_config, max_seq_length, group_size, hf_model)
+        self.val_dataset = DataLoader(self.config.data_config.val_config, max_seq_length, group_size, hf_model)
 
     @partial(setup, component="model")
     def _setup_model(self):
@@ -429,7 +433,7 @@ class Trainer:
             samples = self.train_dataset(num_prompts=self.train_n_prompts)
             prompts = [s.prompt for s in samples]
             generations = self.inference_engine(prompts, self.key(), {"params": self.params})
-            train_batch = self.train_dataset.prepare_batch(generations)
+            train_batch = self.train_dataset.prepare_batch(samples, generations)
 
             out = self.train_step(self.params, self.opt_state, train_batch)
             self.params, self.opt_state = out["params"], out["opt_state"]

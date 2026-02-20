@@ -1,19 +1,30 @@
 from typing import Any
 
+import jax
+import jax.numpy as jnp
+from transformers import AutoTokenizer
+
 from src.constants import DATA, GS_BUCKET
-from src.data.config import DatasetConfig, Sample
+from src.data.config import DatasetConfig, RLBatch, Sample
 from src.data.utils import load_jsonl_from_gcs
+from src.data.verifier import Verifier, VerifierInput
+from src.inference_engine.config import InferenceResults, InferenceRollout
 
 
 class DataLoader:
     def __init__(
         self,
         dataset_config: DatasetConfig,
+        max_seq_length: int,
+        hf_model: str,
     ) -> None:
         self.dataset_config = dataset_config
+        self.max_seq_length = max_seq_length
         self.samples = self._load_from_gcs()
         self._last_samples = []
         self._current_idx = 0
+        self.verifier = Verifier()
+        self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
 
     def _resolve_gcs_path(self) -> str:
         if self.dataset_config.gcs_path:
@@ -42,6 +53,63 @@ class DataLoader:
         self._last_samples = samples
         self._current_idx = end_idx % total
         return samples
+
+    def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> RLBatch:
+        tokens = self.pad_tokens(generations.rollouts, 0, "rollouts")
+        reference_model_logprobs = self.pad_tokens(generations.rollouts, -jnp.inf, "logprobs")
+
+        seq_lens = jnp.array(
+            [[len(tokens) for tokens in inference_rollout.rollouts] for inference_rollout in generations.rollouts],
+            dtype=jnp.int32,
+        )
+
+        rewards = jnp.array(
+            [
+                [self.get_reward(self.tokenizer.decode(tokens), sample.answer) for tokens in inference_rollout.rollouts]
+                for sample, inference_rollout in zip(samples, generations.rollouts)
+            ]
+        )
+
+        token_mask = reference_model_logprobs != -jnp.inf
+        group_mean = rewards.mean(axis=1, keepdims=True) * jnp.ones_like(rewards)
+        group_std = rewards.std(axis=1, keepdims=True) * jnp.ones_like(rewards) + 1e-8
+
+        rl_batch = RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std, token_mask)
+
+        def compress(x):
+            x = x.reshape(x.shape[0] * x.shape[1], -1)
+            return x.squeeze(-1) if x.shape[-1] == 1 else x
+
+        rl_batch = jax.tree.map(compress, rl_batch)
+
+        return rl_batch
+
+    def pad_tokens(self, inference_rollouts: list[InferenceRollout], constant_val, field_name: str) -> jax.Array:
+        for inference_rollout in inference_rollouts:
+            for field in getattr(inference_rollout, field_name):
+                assert self.max_seq_length >= field.shape[0], (
+                    f"self.max_seq_length ({self.max_seq_length}) must be >= field length ({field.shape[0]})"
+                )
+
+        return jnp.array(
+            [
+                jnp.stack(
+                    [
+                        jnp.pad(
+                            jnp.array(field),
+                            (self.max_seq_length - field.shape[0], 0),
+                            mode="constant",
+                            constant_values=constant_val,
+                        )
+                        for field in getattr(inference_rollout, field_name)
+                    ]
+                )
+                for inference_rollout in inference_rollouts
+            ]
+        )
+
+    def get_reward(self, output_str: str, answer: str) -> float:
+        return self.verifier(VerifierInput(output_str, answer))
 
     def save_checkpoint(self) -> dict[str, Any]:
         """Return current index for checkpointing."""

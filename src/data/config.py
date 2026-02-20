@@ -47,8 +47,10 @@ class DataConfig:
 
 @struct.dataclass
 class RLBatch:
-    tokens: jax.Array  # [P, G, max_seq_len]
-    reference_model_logprobs: jax.Array  # [P, G, max_seq_len]
-    seq_lens: jax.Array  # [P, G] what is the length of each sequence
-    rewards: jax.Array  # [P, G], reward at each token
-    token_mask: jax.Array  # [P, G, max_seq_len], which tokens to train on
+    tokens: jax.Array  # [B, max_seq_len] where B = P * G, P = num prompts, G = group size
+    reference_model_logprobs: jax.Array  # [B, max_seq_len]
+    seq_lens: jax.Array  # [B] what is the length of each sequence to not include padding tokens
+    rewards: jax.Array  # [B], reward at each token
+    group_mean: jax.Array  # [B], mean reward for each group
+    group_std: jax.Array  # [B], std reward for each group
+    token_mask: jax.Array  # [B, max_seq_len], which tokens to train on
