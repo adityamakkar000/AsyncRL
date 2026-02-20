@@ -52,3 +52,9 @@ class RLBatch:
     seq_lens: jax.Array  # [P, G] what is the length of each sequence
     rewards: jax.Array  # [P, G], reward at each token
     token_mask: jax.Array  # [P, G, max_seq_len], which tokens to train on
+
+# InferenceResults.rollouts where the length is P
+# [ [[1, 2, 3]]  ]
+
+
+# get_batch -> [list[Sample], InferenceResults] - RLBatch

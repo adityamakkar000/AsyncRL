@@ -227,6 +227,7 @@ class Trainer:
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
+<<<<<<< HEAD
         self.train_dataset = DataLoader(self.config.data_config.train_config)
         self.val_dataset = DataLoader(self.config.data_config.val_config)
         self.train_n_prompts: int = self.config.data_config.train_config.batch_size // (
@@ -235,6 +236,12 @@ class Trainer:
         self.val_n_prompts: int = self.config.data_config.val_config.batch_size // (
             self.config.loss_config.inference_config.group_size * self.n_hosts
         )
+=======
+        seq_length = self.config.model_config.qwen_config.sequence_len
+        hf_model = self.config.model_config.hf_model_name
+        self.train_dataset = DataLoader(self.config.data_config.train_config, seq_length, hf_model)
+        self.val_dataset = DataLoader(self.config.data_config.val_config, seq_length, hf_model)
+>>>>>>> 0434923 (train batch)
 
     @partial(setup, component="model")
     def _setup_model(self):
