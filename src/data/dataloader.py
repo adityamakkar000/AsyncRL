@@ -8,7 +8,7 @@ from src.constants import DATA, GS_BUCKET
 from src.data.config import DatasetConfig, RLBatch, Sample
 from src.data.utils import load_jsonl_from_gcs
 from src.data.verifier import Verifier, VerifierInput
-from src.inference_engine.config import InferenceResults
+from src.inference_engine.config import InferenceResults, InferenceRollout
 
 
 class DataLoader:
@@ -65,26 +65,6 @@ class DataLoader:
     def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> RLBatch:
 
         tokens = self.pad_tokens(generations.rollouts, 0, "rollouts")
-        tokenizer = AutoTokenizer.from_pretrained(self.hf_model)
-
-        tokens = jnp.array(
-            [
-                jnp.stack(
-                    [
-                        jnp.pad(
-                            jnp.array(tokens),
-                            (self.seq_length - tokens.shape[0], 0),
-                            mode="constant",
-                            constant_values=0,
-                        )
-                        for tokens in inference_rollout.rollouts
-                    ]
-                )
-                for inference_rollout in generations.rollouts
-            ],
-            dtype=jnp.int32,
-        )
-
         reference_model_logprobs = self.pad_tokens(generations.rollouts, -jnp.inf, "logprobs")
 
         seq_lens = jnp.array(
@@ -96,8 +76,7 @@ class DataLoader:
             [
                 [self.get_reward(self.tokenizer.decode(tokens), sample.answer) for tokens in inference_rollout.rollouts]
                 for sample, inference_rollout in zip(samples, generations.rollouts)
-            ],
-            dtype=jnp.float32,
+            ]
         )
 
         token_mask = (reference_model_logprobs == reference_model_logprobs).astype(jnp.bool_)
