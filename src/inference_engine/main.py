@@ -158,12 +158,12 @@ class InferenceEngine:
 
         key = jax.random.PRNGKey(0)
         seq_lens = jnp.array([1] * self.decode_size)
-        params = self.setup_parameters(params)
+        params_host = self.setup_parameters(params)
 
         while curr_seq_len <= self.config.max_prefill_sequence_len:
             x_init = jnp.ones((self.decode_size, curr_seq_len), dtype=jnp.int32)
 
-            x_init, seq_lens, params, key = self.put_batch_on_device(x_init, seq_lens, params, key)
+            x_init, seq_lens, params, key = self.put_batch_on_device(x_init, seq_lens, params_host, key)
             self.precompile_dict["prefill"][curr_seq_len] = jax.jit(
                 self.prefill,
                 **self.shardings.prefill_shardings,
@@ -172,6 +172,7 @@ class InferenceEngine:
             del _output
             curr_seq_len *= 2
         del params
+        del params_host
         logger.info("Finished prefill precompile")
 
     def precompile_decode(self, params: PyTree) -> None:

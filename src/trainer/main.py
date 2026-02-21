@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 from jax.experimental.multihost_utils import sync_global_devices
 from jaxtyping import PyTree
 from omegaconf import DictConfig, OmegaConf
-from stax import TrainFn
 from stax import staxLogger as logger
 
 from src.constants import CACHE, CHECKPOINTS, GS_BUCKET
@@ -144,7 +143,7 @@ class Trainer:
     @partial(setup, component="metric logger")
     def _setup_writer(self):
         if writer_config := self.config.wandb_config:
-            writer_kwargs = dict()
+            writer_kwargs = {"metrics_to_print": self.config.metrics_to_log}
             if self.writer_id is not None:
                 writer_kwargs["run_id"] = self.writer_id
             else:
@@ -154,7 +153,7 @@ class Trainer:
                 entity=os.getenv("WANDB_ENTITY", ""), project=writer_config.project, **writer_kwargs
             )
         else:
-            writer = stax.TextWriter()
+            writer = stax.TextWriter(metrics_to_print=self.config.metrics_to_log)
 
         self.writer_id = writer.id
         self.writer = writer
@@ -196,11 +195,11 @@ class Trainer:
 
         self.params_sharding, self.opt_state_sharding = shardings.param_sharding, shardings.opt_state_sharding
 
-        def train_step(param: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
+        def train_step(params: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
             """
-            Takes single step and implment PPO-k loss (k steps off-policy)
+            Takes single step and implments PPO-k loss (k steps off-policy)
             Args:
-                param (PyTree): Model parameters.
+                params (PyTree): Model parameters.
                 opt_state (PyTree): Optimizer state.
                 batch (RLBatch): Batch of training data.
             Returns:
@@ -209,7 +208,7 @@ class Trainer:
 
             aux_metrics = {}
             out = {
-                "params": param,
+                "params": params,
                 "opt_state": opt_state,
             }
             reshaped_batch = jax.tree.map(
@@ -229,7 +228,7 @@ class Trainer:
                 "metrics": aux_metrics | metrics,
             }
 
-        self.train_step: TrainFn = train_step
+        self.train_step = train_step
         self.val_step = lambda params, batch: {f"val/{k}": v for k, v in compute_aux_metrics(batch).items()}
 
     @partial(setup, component="dataset")
@@ -462,7 +461,6 @@ class Trainer:
                 "train/lr": self.opt_state[1].hyperparams["learning_rate"],
             }
 
-            logger.info(metrics)
             self.writer(self.global_step, metrics)
 
             self.global_step += 1
