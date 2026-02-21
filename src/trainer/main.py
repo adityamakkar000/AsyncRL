@@ -115,7 +115,8 @@ class Trainer:
 
     @partial(setup, component="initialized state")
     def _init_state(self):
-        self.train_fn = None
+        self.train_step = None
+        self.val_step = None
 
         self.model = None
         self.tx = None
@@ -194,7 +195,6 @@ class Trainer:
         )
 
         self.params_sharding, self.opt_state_sharding = shardings.param_sharding, shardings.opt_state_sharding
-        self.train_fn = train_fn
 
         def train_step(param: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
             """
@@ -222,10 +222,11 @@ class Trainer:
                 out = train_fn(out["params"], out["opt_state"], reshaped_batch)
                 aux_metrics |= {f"{k}_step_{step}": v for k, v in out["metrics"].items()}
 
+            metrics = {f"train/{k}": v for k, v in compute_aux_metrics(batch).items()}
             return {
                 "params": out["params"],
                 "opt_state": out["opt_state"],
-                "aux_metrics": aux_metrics | compute_aux_metrics(batch),
+                "metrics": aux_metrics | metrics,
             }
 
         self.train_step: TrainFn = train_step
@@ -426,7 +427,8 @@ class Trainer:
         self.val_dataset.restore_checkpoint(val_state)
 
     def train(self):
-        assert self.train_fn is not None, "Train function not set up."
+        assert self.train_step is not None, "Train function not set up."
+        assert self.val_step is not None, "Validation function not set up."
         assert self.inference_engine is not None, "Inference engine not set up."
         assert self.train_dataset is not None, "Train dataset not set up."
         assert self.val_dataset is not None, "Validation dataset not set up."
@@ -443,11 +445,12 @@ class Trainer:
             out = self.train_step(self.params, self.opt_state, train_batch)
 
             self.params, self.opt_state = out["params"], out["opt_state"]
-            metrics = out["aux_metrics"] | generations.metrics
+            metrics = out["metrics"] | generations.metrics
             if self.global_step % self.config.val_interval == 0:
-                val_prompts = self.val_dataset(num_prompts=self.val_n_prompts)
+                val_samples = self.val_dataset(num_prompts=self.val_n_prompts)
+                val_prompts = [s.prompt for s in val_samples]
                 val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})
-                val_batch = self.val_dataset.prepare_batch(val_generations)
+                val_batch = self.val_dataset.prepare_batch(val_samples, val_generations)
 
                 val_metrics: dict[str, float] = self.val_step(self.params, val_batch)
                 metrics |= val_metrics
@@ -456,7 +459,7 @@ class Trainer:
             metrics |= {
                 "devices/memory_min": min_mem,
                 "devices/memory_max": max_mem,
-                "train/lr": self.tx[1].hyperparams["learning_rate"],
+                "train/lr": self.opt_state[1].hyperparams["learning_rate"],
             }
 
             self.writer(self.global_step, metrics)
