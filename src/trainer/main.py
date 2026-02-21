@@ -4,7 +4,6 @@ from functools import partial
 from typing import Dict, Optional
 
 import jax
-import jax.numpy as jnp
 import optax
 import stax
 from dotenv import load_dotenv
@@ -213,15 +212,15 @@ class Trainer:
                 "params": param,
                 "opt_state": opt_state,
             }
+            reshaped_batch = jax.tree.map(
+                lambda x: x.reshape(
+                    self.config.grad_accum_steps, x.shape[0] // self.config.grad_accum_steps, *x.shape[1:]
+                ),
+                batch,
+            )
             for step in range(self.config.loss_config.grad_steps):
-                reshaped_batch = jax.tree.map(
-                    lambda x: x.reshape(
-                        self.config.grad_accum_steps, x.shape[0] // self.config.grad_accum_steps, *x.shape[1:]
-                    ),
-                    batch,
-                )
                 out = train_fn(out["params"], out["opt_state"], reshaped_batch)
-                aux_metrics |= {f"{k}_step_{step}": v for k, v in out["aux_metrics"].items()}
+                aux_metrics |= {f"{k}_step_{step}": v for k, v in out["metrics"].items()}
 
             return {
                 "params": out["params"],
@@ -330,7 +329,7 @@ class Trainer:
     def _setup_checkpointer(self):
         """Setup checkpointing mechanism."""
 
-        path = f"{GS_BUCKET}/{self.config.experiment_name}/{CHECKPOINTS}/"
+        path = f"{GS_BUCKET}/runs/{self.config.experiment_name}/{CHECKPOINTS}/"
         self.checkpointer = stax.Checkpointer(
             output_dir=path,
             max_to_keep=self.config.max_checkpoints_to_keep,
@@ -442,7 +441,6 @@ class Trainer:
             train_batch = self.train_dataset.prepare_batch(samples, generations)
 
             out = self.train_step(self.params, self.opt_state, train_batch)
-            breakpoint()
 
             self.params, self.opt_state = out["params"], out["opt_state"]
             metrics = out["aux_metrics"]  # comment this out after

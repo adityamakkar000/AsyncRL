@@ -12,45 +12,28 @@ from src.model import Model
 from .config import LossFunction, RLConfig
 
 
-def compute_group_stats(group_rewards: Array) -> tuple[Array, Array]:
-    """
-    Compute the mean and standard deviation of rewards for each group.
-    Args:
-        rewards (Array): Rewards for each sequence. Shape: [num_prompts, group_size].
-    Returns:
-        group_mean (Array): Mean reward for each group. Shape: [num_prompts, 1].
-        group_std (Array): Standard deviation of rewards for each group. Shape: [num_prompts, 1].
-    """
-    group_mean = group_rewards.mean(axis=1, keepdims=True) * jnp.ones_like(group_rewards)
-    group_std = group_rewards.std(axis=1, keepdims=True) * jnp.ones_like(group_rewards) + 1e-8
-    return group_mean, group_std
+def get_ratio(token_logprobs: Array, reference_logprobs: Array, epsilon_low, epsilon_high) -> tuple[Array, Array]:
+    log_ratio = token_logprobs - reference_logprobs
+    ratio = jnp.exp(log_ratio)
+    clipped_ratio = jnp.clip(ratio, 1.0 - epsilon_low, 1.0 + epsilon_high)
+    weight_ratio = jnp.minimum(ratio, clipped_ratio)
+    return weight_ratio, ratio
 
 
 def grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tuple[Array, PyTree]:
     """
     From  https://arxiv.org/pdf/2412.19437
     """
-    B, T, V = token_logprobs.shape
-    group_mean, group_std = compute_group_stats(batch.rewards)
+    B, T = token_logprobs.shape
 
-    advantages = (
-        batch.rewards
-        - group_mean.reshape(
-            B,
-        )
-    ) / group_std.reshape(
-        B,
+    weight_ratio, ratio = get_ratio(
+        token_logprobs, batch.reference_model_logprobs, config.epsilon_low, config.epsilon_low
     )
 
-    log_ratio = token_logprobs - batch.reference_model_logprobs
-    ratio = jnp.exp(log_ratio)
+    advantages = (batch.rewards - batch.group_mean) / batch.group_std
 
-    clipped_ratio = jnp.clip(ratio, 1.0 - config.epsilon_low, 1.0 + config.epsilon_low)
-
-    weight_ratio = jnp.minimum(ratio, clipped_ratio)
     masked_loss = weight_ratio * advantages[:, None] * batch.token_mask
 
-    # TODO: maybe create a mask from lens instead of reqiuring the whole thing
     loss = jnp.sum(masked_loss, axis=1) / jnp.sum(batch.token_mask, axis=1)
     loss = jnp.mean(loss)
 
@@ -66,23 +49,18 @@ def dr_grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> 
     From https://arxiv.org/pdf/2503.20783
     """
 
-    B, T, V = token_logprobs.shape
-    group_mean, _ = compute_group_stats(batch.rewards)
+    B, T = token_logprobs.shape
 
-    advantages = batch.rewards - group_mean.reshape(
-        B,
+    weight_ratio, ratio = get_ratio(
+        token_logprobs, batch.reference_model_logprobs, config.epsilon_low, config.epsilon_low
     )
 
-    log_ratio = token_logprobs - batch.reference_model_logprobs
-    ratio = jnp.exp(log_ratio)
-
-    clipped_ratio = jnp.clip(ratio, 1.0 - config.epsilon_low, 1.0 + config.epsilon_low)
-
-    weight_ratio = jnp.minimum(ratio, clipped_ratio)
-    # TODO: maybe create a mask from lens instead of reqiuring the whole thing
+    advantages = batch.rewards - batch.group_mean
     masked_loss = weight_ratio * advantages[:, None] * batch.token_mask
 
-    loss = jnp.sum(masked_loss, axis=1).mean()
+    total_seq_len = jnp.sum(batch.token_mask)
+
+    loss = jnp.sum(masked_loss, axis=1).mean() / total_seq_len
 
     aux_metrics = {
         "loss": loss,
@@ -96,20 +74,13 @@ def dapo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tup
     From https://arxiv.org/pdf/2503.14476
     """
 
-    B, T, V = token_logprobs.shape
-    group_mean, _ = compute_group_stats(batch.rewards)
+    B, T = token_logprobs.shape
 
-    advantages = batch.rewards - group_mean.reshape(
-        B,
+    weight_ratio, ratio = get_ratio(
+        token_logprobs, batch.reference_model_logprobs, config.epsilon_low, config.epsilon_high
     )
 
-    log_ratio = token_logprobs - batch.reference_model_logprobs
-    ratio = jnp.exp(log_ratio)
-
-    clipped_ratio = jnp.clip(ratio, 1.0 - config.epsilon_low, 1.0 + config.epsilon_high)
-
-    weight_ratio = jnp.minimum(ratio, clipped_ratio)
-    # TODO: maybe create a mask from lens instead of reqiuring the whole thing
+    advantages = batch.rewards - batch.group_mean
     masked_loss = weight_ratio * advantages[:, None] * batch.token_mask
 
     loss = jnp.sum(masked_loss, axis=1).mean() / T
@@ -149,7 +120,11 @@ def get_single_step(config: RLConfig) -> StepFn:
     loss_fn = get_loss_fn(config)
 
     def single_step(model: Model, params: PyTree, batch: RLBatch, train: bool = True) -> tuple[Array, PyTree]:
-        x_logprobs = model.apply(params, x=batch.tokens, sequence_lens=batch.seq_lens, kv_cache=None)
+        x_logprobs, kv_cache = model.apply(
+            {"params": params}, x=batch.tokens, sequence_lens=batch.seq_lens, kv_cache=None
+        )
+        x_logprobs: Array = jnp.take_along_axis(x_logprobs, batch.tokens[..., None], axis=-1).squeeze(-1)
+
         loss, aux_metrics = loss_fn(x_logprobs, batch)
 
         # since we are gradient descenting we want to minimize the loss
