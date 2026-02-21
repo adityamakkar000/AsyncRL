@@ -236,9 +236,20 @@ class InferenceEngine:
             tokens (Array): The tokenized and padded input texts. Shape: [batch_size, max_seq_len].
             seq_lens (Array): The original sequence lengths before padding. Shape: [batch_size].
         """
+
+        def apply_prompt_template(text: str) -> str:
+            return f"""
+                Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
+                {text}
+                
+                Remember to put your answer inside \\boxed{{}}.
+            """
+
         inputs: list[list[int]] = [
             self.tokenizer.apply_chat_template(
-                [{"role": "user", "content": text}], add_generation_prompt=True, enable_thinking=True
+                [{"role": "user", "content": apply_prompt_template(text)}],
+                add_generation_prompt=True,
+                enable_thinking=True,
             )
             for text in texts
         ]
