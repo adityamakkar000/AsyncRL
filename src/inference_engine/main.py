@@ -238,12 +238,9 @@ class InferenceEngine:
         """
 
         def apply_prompt_template(text: str) -> str:
-            return f"""
-                Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
-                {text}
-                
-                Remember to put your answer inside \\boxed{{}}.
-            """
+            return f"""Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
+{text}
+Remember to put your answer inside \\boxed{{}}."""
 
         inputs: list[list[int]] = [
             self.tokenizer.apply_chat_template(
