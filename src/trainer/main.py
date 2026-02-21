@@ -54,9 +54,9 @@ class Trainer:
             self._setup_optimizer()
             self._setup_checkpointer()
             self._setup_functions()
-            # self._setup_dataset()
+            self._setup_dataset()
             self._setup_train_state()
-            # self._setup_inference_engine()
+            self._setup_inference_engine()
             self._setup_writer()
 
             if not self.resumed:
@@ -427,9 +427,9 @@ class Trainer:
 
     def train(self):
         assert self.train_fn is not None, "Train function not set up."
-        # assert self.inference_engine is not None, "Inference engine not set up."
-        # assert self.train_dataset is not None, "Train dataset not set up."
-        # assert self.val_dataset is not None, "Validation dataset not set up."
+        assert self.inference_engine is not None, "Inference engine not set up."
+        assert self.train_dataset is not None, "Train dataset not set up."
+        assert self.val_dataset is not None, "Validation dataset not set up."
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
@@ -443,8 +443,7 @@ class Trainer:
             out = self.train_step(self.params, self.opt_state, train_batch)
 
             self.params, self.opt_state = out["params"], out["opt_state"]
-            metrics = out["aux_metrics"]  # comment this out after
-            # metrics = out["aux_metrics"] | generations.metrics
+            metrics = out["aux_metrics"] | generations.metrics
             if self.global_step % self.config.val_interval == 0:
                 val_prompts = self.val_dataset(num_prompts=self.val_n_prompts)
                 val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})
