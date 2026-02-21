@@ -462,6 +462,7 @@ class Trainer:
                 "train/lr": self.opt_state[1].hyperparams["learning_rate"],
             }
 
+            logger.info(metrics)
             self.writer(self.global_step, metrics)
 
             self.global_step += 1

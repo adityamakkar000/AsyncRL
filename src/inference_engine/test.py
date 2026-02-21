@@ -59,7 +59,6 @@ config = InferenceConfig(
 engine = InferenceEngine(model, params, config)
 
 key = jax.random.PRNGKey(2303)
-params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
 
 tokenizer_inp = [" Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"]
 
