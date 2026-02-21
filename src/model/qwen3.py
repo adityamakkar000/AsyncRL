@@ -4,11 +4,21 @@ import einops
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
+from jax.sharding import PartitionSpec as P
 from jaxtyping import Array
 
 from .config import KVCache, QwenConfig
 from .flash_attention import SegmentIds, flash_attention
 from .utils import convert_dtype, make_attention_mask, make_prompt_mask
+
+
+def flash_attention_naive(q, k, v, mask, sm_scale):
+    return flash_attention(q, k, v, sm_scale=sm_scale, segment_ids=SegmentIds(mask, mask), causal=True)
+
+
+flash_attention_sharded = jax.shard_map(
+    flash_attention_naive, in_specs=(P("dp"), P("dp"), P("dp"), P("dp"), None), out_specs=(P("dp")), check_vma=False
+)
 
 
 class RoPEMatrixCache(nn.Module):
@@ -127,8 +137,12 @@ class GroupedQueryAttention(nn.Module):
         v = jnp.repeat(v, self.kv_group_size, axis=1)
 
         sm_scale = self.head_dim**-0.5
+        out = (
+            flash_attention_sharded(q, k, v, mask, sm_scale)
+            if not self.is_mutable_collection("params")
+            else flash_attention_naive(q, k, v, mask, sm_scale)
+        )
 
-        out = flash_attention(q, k, v, sm_scale=sm_scale, segment_ids=SegmentIds(mask, mask), causal=True)
         out = einops.rearrange(out, "b h t d -> b t (h d)")
         return out
 
