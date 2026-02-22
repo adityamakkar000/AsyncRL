@@ -434,13 +434,13 @@ class Trainer:
             samples = self.train_dataset(num_prompts=self.train_n_prompts)
             prompts = [s.prompt for s in samples]
             generations = self.inference_engine(prompts, self.key(), {"params": self.params})
-
-            train_batch, train_metrics = self.train_dataset.prepare_batch(samples, generations, train=True)
+            train_batch, num_unparsable = self.train_dataset.prepare_batch(samples, generations)
 
             out = self.train_step(self.params, self.opt_state, train_batch)
 
             self.params, self.opt_state = out["params"], out["opt_state"]
-            metrics = out["metrics"] | generations.metrics | train_metrics
+            metrics = out["metrics"] | generations.metrics
+            metrics |= {"train/num_unparsable": num_unparsable}
 
             if self.global_step % self.config.val_interval == 0:
                 val_samples = self.val_dataset(num_prompts=self.val_n_prompts)

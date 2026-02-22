@@ -35,7 +35,7 @@ class Verifier:
 
     def _get_reward(self, solution: str, answer: str) -> float | None:
         parsed_answer = self.extract_boxed_content(solution)
-        if parsed_answer is None or len(parsed_answer) == 0:
+        if parsed_answer is None:
             return None
         return 1.0 if (answer in parsed_answer) else 0.0
 
