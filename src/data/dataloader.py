@@ -54,7 +54,23 @@ class DataLoader:
         self._current_idx = end_idx % total
         return samples
 
-    def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> RLBatch:
+    def _get_rewards(self, samples: list[Sample], generations: InferenceResults) -> tuple[jax.Array, int]:
+        num_unparsable = 0
+        total_rewards = []
+        for sample, inference_rollout in zip(samples, generations.rollouts):
+            token_rewards = []
+            for tokens in inference_rollout.rollouts:
+                reward = self.get_reward(self.tokenizer.decode(tokens), sample.answer)
+                if reward is None:
+                    num_unparsable += 1
+                    reward = 0.0
+                token_rewards.append(reward)
+
+            total_rewards.append(token_rewards)
+
+        return jnp.array(total_rewards, dtype=jnp.int32), num_unparsable
+
+    def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> tuple[RLBatch, int]:
         tokens = self.pad_tokens(generations.rollouts, self.tokenizer.pad_token_id, "rollouts")
         reference_model_logprobs = self.pad_tokens(generations.rollouts, -jnp.inf, "logprobs")
 
@@ -63,12 +79,7 @@ class DataLoader:
             dtype=jnp.int32,
         )
 
-        rewards = jnp.array(
-            [
-                [self.get_reward(self.tokenizer.decode(tokens), sample.answer) for tokens in inference_rollout.rollouts]
-                for sample, inference_rollout in zip(samples, generations.rollouts)
-            ]
-        )
+        rewards, num_unparsable = self._get_rewards(samples, generations)
 
         token_mask = reference_model_logprobs != -jnp.inf
         group_mean = rewards.mean(axis=1, keepdims=True) * jnp.ones_like(rewards)
@@ -82,7 +93,7 @@ class DataLoader:
 
         rl_batch = jax.tree.map(compress, rl_batch)
 
-        return rl_batch
+        return rl_batch, num_unparsable
 
     def pad_tokens(self, inference_rollouts: list[InferenceRollout], constant_val, field_name: str) -> jax.Array:
         for inference_rollout in inference_rollouts:
@@ -108,7 +119,7 @@ class DataLoader:
             ]
         )
 
-    def get_reward(self, output_str: str, answer: str) -> float:
+    def get_reward(self, output_str: str, answer: str) -> float | None:
         return self.verifier(VerifierInput(output_str, answer))
 
     def save_checkpoint(self) -> dict[str, Any]:
