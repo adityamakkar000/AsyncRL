@@ -70,7 +70,7 @@ class DataLoader:
 
         return jnp.array(total_rewards, dtype=jnp.int32), num_unparsable
 
-    def prepare_batch(self, samples: list[Sample], generations: InferenceResults, train: bool) -> tuple[RLBatch, dict]:
+    def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> tuple[RLBatch, int]:
         tokens = self.pad_tokens(generations.rollouts, self.tokenizer.pad_token_id, "rollouts")
         reference_model_logprobs = self.pad_tokens(generations.rollouts, -jnp.inf, "logprobs")
 
@@ -93,13 +93,7 @@ class DataLoader:
 
         rl_batch = jax.tree.map(compress, rl_batch)
 
-        num_unparsable = num_unparsable / self.dataset_config.batch_size
-
-        prefix = "train" if train else "val"
-        metrics = {f"{prefix}/{k}": v for k, v in compute_aux_metrics(rl_batch).items()}
-        metrics |= {f"{prefix}/num_unparsable": num_unparsable}
-
-        return rl_batch, metrics
+        return rl_batch, num_unparsable
 
     def pad_tokens(self, inference_rollouts: list[InferenceRollout], constant_val, field_name: str) -> jax.Array:
         for inference_rollout in inference_rollouts:
