@@ -39,7 +39,7 @@ def grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tup
 
     aux_metrics = {
         "loss": loss,
-        "pi_theta_over_pi_old": jnp.mean(ratio),
+        "pi_theta_over_pi_old": jnp.sum(ratio * batch.token_mask) / jnp.sum(batch.token_mask),
     }
     return loss, aux_metrics
 
@@ -64,7 +64,7 @@ def dr_grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> 
 
     aux_metrics = {
         "loss": loss,
-        "pi_theta_over_pi_old": jnp.mean(ratio),
+        "pi_theta_over_pi_old": jnp.sum(ratio * batch.token_mask) / jnp.sum(batch.token_mask),
     }
     return loss, aux_metrics
 
@@ -87,7 +87,7 @@ def dapo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tup
 
     aux_metrics = {
         "loss": loss,
-        "pi_theta_over_pi_old": jnp.mean(ratio),
+        "pi_theta_over_pi_old": jnp.sum(ratio * batch.token_mask) / jnp.sum(batch.token_mask),
     }
     return loss, aux_metrics
 

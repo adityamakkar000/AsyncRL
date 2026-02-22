@@ -135,6 +135,27 @@ class InferenceEngine:
     def put_state_on_device(self, state: InferenceState) -> InferenceState:
         return jax.tree.map(lambda x, s: jax.device_put(x, s), state, self.shardings.state_sharding)
 
+    def _log_prefill_input_signatures(self, label: str, batch: Array, seq_lens: Array, params: PyTree, key: Array):
+        """Log type, dtype, shape, and sharding of all prefill inputs to diagnose JIT cache misses."""
+
+        def _sig(name, x):
+            typ = type(x).__name__
+            dtype = getattr(x, "dtype", "N/A")
+            shape = getattr(x, "shape", "N/A")
+            sharding = getattr(x, "sharding", "N/A")
+            logger.info(f"[{label}] {name}: type={typ}, dtype={dtype}, shape={shape}, sharding={sharding}")
+
+        _sig("batch", batch)
+        _sig("seq_lens", seq_lens)
+        _sig("key", key)
+
+        leaves = jax.tree.leaves(params)
+        logger.info(f"[{label}] params: n_leaves={len(leaves)}")
+        for i, leaf in enumerate(leaves[:5]):  # first 5 leaves
+            _sig(f"params_leaf[{i}]", leaf)
+        if len(leaves) > 5:
+            _sig(f"params_leaf[{len(leaves) - 1}]", leaves[-1])
+
     def put_batch_on_device(
         self, batch: Array, seq_lens: Array, params: PyTree, key: Array
     ) -> tuple[Array, Array, PyTree, Array]:
@@ -168,6 +189,7 @@ class InferenceEngine:
                 self.prefill,
                 **self.shardings.prefill_shardings,
             )
+            self._log_prefill_input_signatures(f"precompile_seq{curr_seq_len}", x_init, seq_lens, params, key)
             _output = self.precompile_dict["prefill"][curr_seq_len](x_init, seq_lens, params, key)
             del _output
             curr_seq_len *= 2
@@ -529,7 +551,11 @@ Remember to put your answer inside \\boxed{{}}."""
         return (
             out_tokens,
             out_logprobs,
-            {"tps": n_steps * self.decode_size / t.data["time"], "sps": n_steps / t.data["time"]},
+            {
+                "tps": n_steps * self.decode_size / t.data["time"],
+                "sps": n_steps / t.data["time"],
+                "total_tokens": n_steps * self.decode_size,
+            },
         )
 
     def rollout_group(self, x: Array, seq_lens: Array, params: PyTree, key: Array) -> tuple[InferenceRollout, PyTree]:
@@ -564,6 +590,7 @@ Remember to put your answer inside \\boxed{{}}."""
             # since then we do not need to keep a copy of a kv cache
             # prefill is very fast and so this save 2x memory
             prefill_key = jax.random.fold_in(key_sharded, step)
+
             state, prefill_metrics = self.prefill_step(x_batch_sharded, seq_lens_sharded, params_sharded, prefill_key)
             output_tokens, output_logprobs, decode_metrics = self.single_rollout(state)
 

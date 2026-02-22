@@ -62,7 +62,7 @@ class Trainer:
                 logger.info("Saving intial checkpoint ...")
                 self.save_checkpoint(step=0)
                 dict_config = json.dumps(OmegaConf.to_container(self.config))
-                config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
+                config_path = f"{self.gs_path}/config.json"
                 write_to_gcs(config_path, dict_config)
                 # block to ensure first checkpoint is written
                 self.block_until_checkpoints_saved()
@@ -139,6 +139,7 @@ class Trainer:
 
         self.n_hosts = jax.process_count()
         self.n_devices = jax.device_count()
+        self.gs_path = f"{GS_BUCKET}/runs/{self.config.experiment_name}"
 
     @partial(setup, component="metric logger")
     def _setup_writer(self):
@@ -329,7 +330,7 @@ class Trainer:
     def _setup_checkpointer(self):
         """Setup checkpointing mechanism."""
 
-        path = f"{GS_BUCKET}/runs/{self.config.experiment_name}/{CHECKPOINTS}/"
+        path = f"{self.gs_path}/{CHECKPOINTS}/"
         self.checkpointer = stax.Checkpointer(
             output_dir=path,
             max_to_keep=self.config.max_checkpoints_to_keep,
