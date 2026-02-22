@@ -255,7 +255,7 @@ class Qwen3(nn.Module):
 
         rope_cache = RoPEMatrixCache(sequence_len=self.sequence_len, model_dim=self.head_dim, rope_base=self.rope_base)
         if attention_len is None:
-            attention_len = self.sequence_len
+            attention_len = T
 
         t_start = kv_cache[0].length if kv_cache else 0
         prompt_mask = make_prompt_mask(attention_len, cache_len=t_start + T, seq_lens=sequence_lens)

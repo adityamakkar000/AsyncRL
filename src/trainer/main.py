@@ -147,6 +147,7 @@ class Trainer:
             writer_kwargs = {"metrics_to_print": self.config.metrics_to_log}
             if self.writer_id is not None:
                 writer_kwargs["run_id"] = self.writer_id
+                writer_kwargs["name"] = self.config.experiment_name
             else:
                 writer_kwargs["config"] = OmegaConf.to_object(self.config)
 

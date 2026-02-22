@@ -1,7 +1,7 @@
 qwen_config:
   vocab_size: 151936
   d_ff: 9728
-  sequence_len: 1024
+  sequence_len: 4096
   model_dim: 2560
   n_heads: 32
   n_groups: 8

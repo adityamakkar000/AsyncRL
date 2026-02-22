@@ -120,9 +120,10 @@ def get_single_step(config: RLConfig) -> StepFn:
     loss_fn = get_loss_fn(config)
 
     def single_step(model: Model, params: PyTree, batch: RLBatch, train: bool = True) -> tuple[Array, PyTree]:
-        x_logprobs, kv_cache = model.apply(
+        x_logits, kv_cache = model.apply(
             {"params": params}, x=batch.tokens, sequence_lens=batch.seq_lens, kv_cache=None
         )
+        x_logprobs = jax.nn.log_softmax(x_logits)
         x_logprobs: Array = jnp.take_along_axis(x_logprobs, batch.tokens[..., None], axis=-1).squeeze(-1)
 
         loss, aux_metrics = loss_fn(x_logprobs, batch)

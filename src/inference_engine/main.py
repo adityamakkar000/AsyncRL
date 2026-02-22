@@ -67,6 +67,10 @@ class InferenceEngine:
             f"max_prefill_sequence_len must be a power of 2, got {self.config.max_prefill_sequence_len}"
         )
 
+        assert self.model.sequence_len >= self.config.max_seq_len + self.config.intial_sequence_len, (
+            f"Model sequence length {self.model.sequence_len} must be greater than or equal to max_seq_len {self.config.max_seq_len} + initial_sequence_len {self.config.intial_sequence_len} to account for prefill and decode steps without rolling cache"
+        )
+
         if self.config.reasoning_budget is not None:
             answer_tokens = min(1024, self.config.max_seq_len // 2)
             assert self.config.reasoning_budget <= (self.config.max_seq_len - answer_tokens), (
