@@ -1,10 +1,10 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Protocol
 
-from jaxtyping import Array, PyTree
+from jaxtyping import Array
 from omegaconf import MISSING
 
-from src.data import DataConfig, RLBatch
+from src.data import DataConfig
 from src.inference_engine import InferenceConfig
 from src.model import ModelConfig
 
@@ -12,17 +12,20 @@ from src.model import ModelConfig
 class LossFunction(Protocol):
     """
     A protocol for loss functions used in reinforcement learning.
+
+    Each loss function receives pre-computed PPO-clipped objectives and a token mask,
+    and returns a scalar loss. All shared computation (ratio, clipping, advantages)
+    is done upstream in get_single_step.
     """
 
-    def __call__(self, token_logprobs: Array, batch: RLBatch) -> tuple[Array, PyTree]:
+    def __call__(self, clipped_objective: Array, token_mask: Array) -> Array:
         """
-        Compute the loss given token log probabilities, token mask, and rewards.
+        Compute the loss from the pre-computed PPO-clipped objective.
         Args:
-            token_logprobs (Array): Log probabilities of the tokens. Shape: [batch_size, seq_len, vocab_size].
-            batch (RLBatch): A batch of data containing tokens, token masks, and rewards.
+            clipped_objective (Array): min(ratio * A, clip(ratio) * A). Shape: [B, T].
+            token_mask (Array): Which tokens are real (not padding). Shape: [B, T].
         Returns:
-            loss (Array): The computed loss.
-            aux_metrics (PyTree): Auxiliary metrics for monitoring.
+            loss (Array): The computed scalar loss.
         """
         ...
 
