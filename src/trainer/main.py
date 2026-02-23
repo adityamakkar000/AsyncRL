@@ -1,7 +1,7 @@
 import json
 import os
 from functools import partial
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import jax
 import optax
@@ -142,7 +142,7 @@ class Trainer:
     @partial(setup, component="metric logger")
     def _setup_writer(self):
         if writer_config := self.config.wandb_config:
-            writer_kwargs: dict[str, any] = {"metrics_to_print": self.config.metrics_to_log}
+            writer_kwargs: dict[str, Any] = {"metrics_to_print": self.config.metrics_to_log}
             if self.writer_id is not None:
                 writer_kwargs["run_id"] = self.writer_id
                 writer_kwargs["name"] = self.config.experiment_name

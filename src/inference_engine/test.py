@@ -52,7 +52,6 @@ config = InferenceConfig(
     group_size=bs * r,
     kv_cache_dtype="bfloat16",
     precompile=True,
-    params_dtype="float32",
     reasoning_budget=64,
 )
 

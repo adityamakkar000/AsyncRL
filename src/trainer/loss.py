@@ -62,7 +62,7 @@ def grpo_loss(x_logprobs: Array, batch: RLBatch, config: RLConfig) -> Array:
     advantages = (batch.rewards - batch.group_mean) / batch.group_std
     logger.info("GRPO uses only epsilon-low for clipping ")
     clipped_objective = compute_clipped_objective(
-        x_logprobs, batch.reference_model_logprobs, advantages[:, None], config.epsilon_low, config.epsilon_low
+        x_logprobs, batch.reference_model_logprobs, advantages, config.epsilon_low, config.epsilon_low
     )
     per_seq_loss = jnp.sum(clipped_objective * batch.token_mask, axis=1) / jnp.sum(batch.token_mask, axis=1)
     return jnp.mean(per_seq_loss)
@@ -75,7 +75,7 @@ def dr_grpo_loss(x_logprobs: Array, batch: RLBatch, config: RLConfig) -> Array:
     # dr_grpo uses same clipping for positive and negative advantages, handled upstream by setting epsilon_low = epsilon_high
     logger.info("Dr GRPO uses only epsilon-low for clipping ")
     clipped_objective = compute_clipped_objective(
-        x_logprobs, batch.reference_model_logprobs, advantages[:, None], config.epsilon_low, config.epsilon_low
+        x_logprobs, batch.reference_model_logprobs, advantages, config.epsilon_low, config.epsilon_low
     )
     per_seq_loss = jnp.sum(clipped_objective * batch.token_mask, axis=1)
     return jnp.mean(per_seq_loss)
@@ -86,7 +86,7 @@ def dapo_loss(x_logprobs: Array, batch: RLBatch, config: RLConfig) -> Array:
     """DAPO loss (https://arxiv.org/pdf/2503.14476)."""
     advantages = (batch.rewards - batch.group_mean) / batch.group_std
     clipped_objective = compute_clipped_objective(
-        x_logprobs, batch.reference_model_logprobs, advantages[:, None], config.epsilon_low, config.epsilon_high
+        x_logprobs, batch.reference_model_logprobs, advantages, config.epsilon_low, config.epsilon_high
     )
     per_seq_loss = jnp.sum(clipped_objective * batch.token_mask, axis=1)
     return per_seq_loss.mean() / batch.token_mask.sum()
@@ -135,7 +135,7 @@ def get_single_step(config: RLConfig) -> StepFn:
 
         return loss, aux_metrics
 
-    return single_step
+    return single_step  # type: ignore
 
 
 @jax.jit

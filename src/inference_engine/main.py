@@ -10,7 +10,7 @@ from stax import Tracker
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
-from src.model import KVCache, Model, convert_dtype
+from src.model import KVCache, Model
 
 from .config import InferenceConfig, InferenceResults, InferenceRollout, InferenceShardings, InferenceState
 
@@ -70,10 +70,6 @@ class InferenceEngine:
         )
         assert self.config.max_prefill_sequence_len & (self.config.max_prefill_sequence_len - 1) == 0, (
             f"max_prefill_sequence_len must be a power of 2, got {self.config.max_prefill_sequence_len}"
-        )
-
-        assert self.model.sequence_len >= self.config.max_seq_len + self.config.intial_sequence_len, (
-            f"Model sequence length {self.model.sequence_len} must be greater than or equal to max_seq_len {self.config.max_seq_len} + initial_sequence_len {self.config.intial_sequence_len} to account for prefill and decode steps without rolling cache"
         )
 
         if self.config.reasoning_budget is not None:
@@ -176,8 +172,7 @@ class InferenceEngine:
         return batch, seq_lens, params, key
 
     def setup_parameters(self, params: PyTree) -> PyTree:
-        params_dtype = convert_dtype(self.config.params_dtype)
-        params_host = jax.tree.map(lambda p: process_allgather(p.astype(params_dtype), tiled=True), params)
+        params_host = jax.tree.map(lambda p: process_allgather(p, tiled=True), params)
         return params_host
 
     def precompile_prefill(self, params: PyTree) -> None:
@@ -538,16 +533,21 @@ class InferenceEngine:
         total_tokens = n_steps * self.decode_size
         total_time = t.data["time"]
 
+        decode_metrics = {
+            "total_time": total_time,
+            "total_tokens": total_tokens,
+            "n_steps": n_steps,
+            "tps": total_tokens / total_time,
+            "sps": n_steps / total_time,
+        }
+
+        logger.info(
+            f"Inferenced {decode_metrics['total_tokens']} tokens in {decode_metrics['total_time']:.2f} seconds ({decode_metrics['tps']:.2f} tps, {decode_metrics['sps']:.2f} sps)"
+        )
         return (
             out_tokens,
             out_logprobs,
-            {
-                "tps": total_tokens / total_time,
-                "sps": n_steps / total_time,
-                "total_tokens": total_tokens,
-                "steps": n_steps,
-                "decode_time": total_time,
-            },
+            decode_metrics,
         )
 
     def rollout_group(self, x: Array, seq_lens: Array, params: PyTree, key: Array) -> tuple[InferenceRollout, PyTree]:

@@ -28,10 +28,7 @@ checkpoint_interval: 100
 best_metric: null
 max_checkpoints_to_keep: 1
 
-wandb_config: 
-  project: "AnnealedRL"
-  notes: null
-  tags: null
+wandb_config: null
 
 
 metrics_to_log:

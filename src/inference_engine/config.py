@@ -21,7 +21,6 @@ class InferenceConfig:
     intial_sequence_len: int = 64
     precompile: bool = True
     kv_cache_dtype: str = "bfloat16"
-    params_dtype: str = "float32"
     reasoning_budget: Optional[int] = None
     max_prefill_sequence_len: int = 1024
 
