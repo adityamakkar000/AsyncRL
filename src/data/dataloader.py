@@ -6,7 +6,7 @@ from transformers import AutoTokenizer
 
 from src.constants import DATA, GS_BUCKET
 from src.data.config import DatasetConfig, RLBatch, Sample
-from src.data.utils import load_jsonl_from_gcs
+from src.data.utils import compute_aux_metrics, load_jsonl_from_gcs
 from src.data.verifier import Verifier, VerifierInput
 from src.inference_engine.config import InferenceResults, InferenceRollout
 
@@ -70,7 +70,7 @@ class DataLoader:
 
         return jnp.array(total_rewards, dtype=jnp.int32), num_unparsable
 
-    def prepare_batch(self, samples: list[Sample], generations: InferenceResults) -> tuple[RLBatch, int]:
+    def prepare_batch(self, samples: list[Sample], generations: InferenceResults, train: bool) -> tuple[RLBatch, dict]:
         tokens = self.pad_tokens(generations.rollouts, self.tokenizer.pad_token_id, "rollouts")
         reference_model_logprobs = self.pad_tokens(generations.rollouts, -jnp.inf, "logprobs")
 
@@ -95,7 +95,11 @@ class DataLoader:
 
         num_unparsable = num_unparsable / self.dataset_config.batch_size
 
-        return rl_batch, num_unparsable
+        prefix = "train" if train else "val"
+        metrics = {f"{prefix}/{k}": v for k, v in compute_aux_metrics(rl_batch).items()}
+        metrics |= {f"{prefix}/num_unparsable": num_unparsable}
+
+        return rl_batch, metrics
 
     def pad_tokens(self, inference_rollouts: list[InferenceRollout], constant_val, field_name: str) -> jax.Array:
         for inference_rollout in inference_rollouts:
