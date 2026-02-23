@@ -89,8 +89,6 @@ class Trainer:
             raise ValueError("warmup_steps and decay_steps must sum to at most 1.0")
         if cfg.sharding_config.sharding_type not in ["single", "dp", "fsdp"]:
             raise ValueError("sharding_type must be one of 'single', 'dp', or 'fsdp'")
-        if cfg.loss_config.rl_config.algorithm not in ["grpo", "dr_grpo", "dapo"]:
-            raise ValueError(f"Unsupported RL algorithm: {cfg.loss_config.rl_config.algorithm}")
         if cfg.data_config.train_config.batch_size % cfg.loss_config.inference_config.group_size != 0:
             raise ValueError("Batch size must be divisible by group size for proper batching in inference.")
 
@@ -144,7 +142,7 @@ class Trainer:
     @partial(setup, component="metric logger")
     def _setup_writer(self):
         if writer_config := self.config.wandb_config:
-            writer_kwargs = {"metrics_to_print": self.config.metrics_to_log}
+            writer_kwargs: dict[str, any] = {"metrics_to_print": self.config.metrics_to_log}
             if self.writer_id is not None:
                 writer_kwargs["run_id"] = self.writer_id
                 writer_kwargs["name"] = self.config.experiment_name

@@ -32,7 +32,6 @@ class InferenceState:
     kv_cache: list[KVCache]
     key: Array
     seq_lens: Array
-    params: PyTree
     stop_mask: Array
     end_of_think: Array
     out_tokens: Array
@@ -45,6 +44,7 @@ class InferenceShardings:
     replicate_sharding: jax.NamedSharding
     kv_cache_sharding: KVCache
     state_sharding: InferenceState
+    params_sharding: PyTree
     prefill_shardings: dict[str, PyTree]
     decode_shardings: dict[str, PyTree]
 

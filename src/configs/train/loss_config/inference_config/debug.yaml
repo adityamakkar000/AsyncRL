@@ -11,4 +11,4 @@ group_size: 32
 kv_cache_dtype: "bfloat16"
 precompile: true
 reasoning_budget: 6000
-params_dtype: "float32"
+params_dtype: "bfloat16"

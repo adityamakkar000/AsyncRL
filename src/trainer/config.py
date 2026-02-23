@@ -4,7 +4,7 @@ from typing import List, Optional, Protocol
 from jaxtyping import Array
 from omegaconf import MISSING
 
-from src.data import DataConfig
+from src.data import DataConfig, RLBatch
 from src.inference_engine import InferenceConfig
 from src.model import ModelConfig
 
@@ -12,18 +12,14 @@ from src.model import ModelConfig
 class LossFunction(Protocol):
     """
     A protocol for loss functions used in reinforcement learning.
-
-    Each loss function receives pre-computed PPO-clipped objectives and a token mask,
-    and returns a scalar loss. All shared computation (ratio, clipping, advantages)
-    is done upstream in get_single_step.
     """
 
-    def __call__(self, clipped_objective: Array, token_mask: Array) -> Array:
+    def __call__(self, x_logprobs: Array, batch: RLBatch) -> Array:
         """
         Compute the loss from the pre-computed PPO-clipped objective.
         Args:
-            clipped_objective (Array): min(ratio * A, clip(ratio) * A). Shape: [B, T].
-            token_mask (Array): Which tokens are real (not padding). Shape: [B, T].
+            x_logprobs (Array): Log probabilities of the current policy. Shape: [B, T].
+            batch (RLBatch): The batch of data.
         Returns:
             loss (Array): The computed scalar loss.
         """

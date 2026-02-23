@@ -25,7 +25,7 @@ model_config = ModelConfig(
     qwen_config=QwenConfig(
         vocab_size=151_936,
         d_ff=3072,
-        sequence_len=16_384,
+        sequence_len=10112,
         model_dim=1024,
         n_heads=16,
         n_groups=8,
@@ -39,12 +39,12 @@ model = Model(model_config)
 
 params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
 bs = 1
-r = 4
+r = 1
 config = InferenceConfig(
     temperature=0.6,
     top_p=0.95,
     top_k=50,
-    max_seq_len=256,
+    max_seq_len=4096,
     intial_sequence_len=64,
     max_prefill_sequence_len=256,
     batch_size=bs,
@@ -60,9 +60,12 @@ engine = InferenceEngine(model, params, config)
 
 key = jax.random.PRNGKey(2303)
 
-tokenizer_inp = [" Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$"]
+tokenizer_inp = [
+    " The parabola with equation $y = x^2 - 4$ is rotated $60^\circ$ counterclockwise around the origin. The unique point in the fourth quadrant where the original parabola and its image intersect has $y$-coordinate $\frac{a - \sqrt{b}}{c}$, where $a$, $b$, and $c$ are positive integers, and $a$ and $c$ are relatively prime. Find $a + b + c$."
+]
 
 output: InferenceResults = engine(tokenizer_inp, key, params)
-print(output)
-
+print(output.output_strs)
+for key in output.metrics:
+    print(f"{key}: {output.metrics[key]}")
 breakpoint()
