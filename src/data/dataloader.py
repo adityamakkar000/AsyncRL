@@ -93,6 +93,8 @@ class DataLoader:
 
         rl_batch = jax.tree.map(compress, rl_batch)
 
+        num_unparsable = num_unparsable / self.dataset_config.batch_size
+
         return rl_batch, num_unparsable
 
     def pad_tokens(self, inference_rollouts: list[InferenceRollout], constant_val, field_name: str) -> jax.Array:
