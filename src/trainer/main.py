@@ -450,9 +450,11 @@ class Trainer:
                 val_samples = self.val_dataset(num_prompts=self.val_n_prompts)
                 val_prompts = [s.prompt for s in val_samples]
                 val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})
-                val_batch = self.val_dataset.prepare_batch(val_samples, val_generations)
+                val_batch, val_unparsable = self.val_dataset.prepare_batch(val_samples, val_generations)
 
+                val_metrics = {"val/num_unparsable": val_unparsable}
                 val_metrics: dict[str, float] = self.val_step(self.params, val_batch)
+
                 metrics |= val_metrics
 
             min_mem, max_mem = stax.get_memory()

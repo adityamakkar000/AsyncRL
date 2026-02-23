@@ -7,11 +7,11 @@ defaults:
   - override loss_config/inference_config: debug
   - _self_
 
-grad_accum_steps: 1
+grad_accum_steps: 2
 seed: 0
 num_steps: 10
 val_steps: 1
-val_interval: 5
+val_interval: 100
 
 optimizer: "adamw"
 weight_decay: 0.01
