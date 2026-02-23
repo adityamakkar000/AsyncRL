@@ -18,7 +18,7 @@ from src.inference_engine import InferenceEngine
 from src.model import Model
 
 from .config import TrainerConfig
-from .loss import compute_aux_metrics, get_single_step
+from .loss import get_single_step
 from .utils import Key, setup, write_to_gcs
 
 load_dotenv()
@@ -113,7 +113,6 @@ class Trainer:
     @partial(setup, component="initialized state")
     def _init_state(self):
         self.train_step = None
-        self.val_step = None
 
         self.model = None
         self.tx = None
@@ -220,15 +219,13 @@ class Trainer:
                 out = train_fn(out["params"], out["opt_state"], reshaped_batch)
                 aux_metrics |= {f"{k}_step_{step}": v for k, v in out["metrics"].items()}
 
-            metrics = {f"train/{k}": v for k, v in compute_aux_metrics(batch).items()}
             return {
                 "params": out["params"],
                 "opt_state": out["opt_state"],
-                "metrics": aux_metrics | metrics,
+                "metrics": aux_metrics,
             }
 
         self.train_step = train_step
-        self.val_step = lambda params, batch: {f"val/{k}": v for k, v in compute_aux_metrics(batch).items()}
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
@@ -426,7 +423,6 @@ class Trainer:
 
     def train(self):
         assert self.train_step is not None, "Train function not set up."
-        assert self.val_step is not None, "Validation function not set up."
         assert self.inference_engine is not None, "Inference engine not set up."
         assert self.train_dataset is not None, "Train dataset not set up."
         assert self.val_dataset is not None, "Validation dataset not set up."
@@ -438,22 +434,19 @@ class Trainer:
             samples = self.train_dataset(num_prompts=self.train_n_prompts)
             prompts = [s.prompt for s in samples]
             generations = self.inference_engine(prompts, self.key(), {"params": self.params})
-            train_batch, num_unparsable = self.train_dataset.prepare_batch(samples, generations)
+
+            train_batch, train_metrics = self.train_dataset.prepare_batch(samples, generations, train=True)
 
             out = self.train_step(self.params, self.opt_state, train_batch)
 
             self.params, self.opt_state = out["params"], out["opt_state"]
-            metrics = out["metrics"] | generations.metrics
-            metrics |= {"train/num_unparsable": num_unparsable}
+            metrics = out["metrics"] | generations.metrics | train_metrics
 
             if self.global_step % self.config.val_interval == 0:
                 val_samples = self.val_dataset(num_prompts=self.val_n_prompts)
                 val_prompts = [s.prompt for s in val_samples]
                 val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})
-                val_batch, val_unparsable = self.val_dataset.prepare_batch(val_samples, val_generations)
-
-                val_metrics = {"val/num_unparsable": val_unparsable}
-                val_metrics: dict[str, float] = self.val_step(self.params, val_batch)
+                val_batch, val_metrics = self.val_dataset.prepare_batch(val_samples, val_generations, train=False)
 
                 metrics |= val_metrics
 

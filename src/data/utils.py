@@ -1,10 +1,13 @@
 import json
 import os
+from typing import Dict
 
 import gcsfs
+import jax
+import jax.numpy as jnp
 from datasets import Dataset
 
-from src.data.config import Sample
+from src.data.config import RLBatch, Sample
 
 
 def samples_to_dataset(samples: list[Sample]) -> Dataset:
@@ -50,3 +53,15 @@ def delete_local_file(local_path: str) -> None:
     """Remove the local file to free disk. Make sure to only remove .jsonl files"""
     if os.path.isfile(local_path) and local_path.endswith(".jsonl"):
         os.remove(local_path)
+
+
+@jax.jit
+def compute_aux_metrics(batch: RLBatch) -> Dict[str, jnp.ndarray]:
+    return {
+        "mean_reward": jnp.mean(batch.rewards),
+        "std_reward": jnp.std(batch.rewards),
+        "max_reward": jnp.max(batch.rewards),
+        "min_reward": jnp.min(batch.rewards),
+        "mean_length": jnp.mean(batch.token_mask.sum(axis=1)),
+        "median_length": jnp.median(batch.token_mask.sum(axis=1)),
+    }

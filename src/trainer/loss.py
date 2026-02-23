@@ -1,5 +1,5 @@
 import functools
-from typing import Callable, Dict
+from typing import Callable
 
 import jax
 import jax.numpy as jnp
@@ -135,16 +135,4 @@ def get_single_step(config: RLConfig) -> StepFn:
 
         return loss, aux_metrics
 
-    return single_step  # type: ignore
-
-
-@jax.jit
-def compute_aux_metrics(batch: RLBatch) -> Dict[str, jnp.ndarray]:
-    return {
-        "mean_reward": jnp.mean(batch.rewards),
-        "std_reward": jnp.std(batch.rewards),
-        "max_reward": jnp.max(batch.rewards),
-        "min_reward": jnp.min(batch.rewards),
-        "mean_length": jnp.mean(batch.token_mask.sum(axis=1)),
-        "median_length": jnp.median(batch.token_mask.sum(axis=1)),
-    }
+    return single_step
