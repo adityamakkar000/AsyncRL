@@ -3,6 +3,7 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 from transformers import AutoTokenizer
+import stax
 
 from src.constants import DATA, GS_BUCKET
 from src.data.config import DatasetConfig, RLBatch, Sample
@@ -25,6 +26,7 @@ class DataLoader:
         self._current_idx = 0
         self.verifier = Verifier()
         self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
+        self.rank = stax.get_rank()
 
     def _resolve_gcs_path(self) -> str:
         if self.dataset_config.gcs_path:
@@ -45,8 +47,11 @@ class DataLoader:
         return self._last_samples
 
     def __call__(self, num_prompts: int) -> list[Sample]:
-        start_idx = self._current_idx
-        end_idx = self._current_idx + num_prompts
+        # start_idx = self._current_idx # we need to make sure that each device gets a unique start index, kind of like slicing it
+        total_per_device = len(self.samples) // self.rank
+        start_idx = start_idx + self.rank * total_per_device
+        # end_idx = self._current_idx + num_prompts
+        end_idx = start_idx + total_per_device
         total = len(self.samples)
         indices = [i % total for i in range(start_idx, end_idx)]
         samples = [self.samples[i] for i in indices]
