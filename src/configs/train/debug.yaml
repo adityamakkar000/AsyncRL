@@ -7,11 +7,11 @@ defaults:
   - override loss_config/inference_config: debug
   - _self_
 
-grad_accum_steps: 2
+grad_accum_steps: 1
 seed: 0
-num_steps: 1000
+num_steps: 10
 val_steps: 1
-val_interval: 100
+val_interval: 5
 
 optimizer: "adamw"
 weight_decay: 0.01
@@ -20,16 +20,15 @@ grad_clip: 1.0
 learning_rate_init: 1e-4
 learning_rate_peak: 1e-5
 learning_rate_end: 1e-5
-warmup_steps: 0.1
-decay_steps: 0.9
+warmup_steps: 0.0
+decay_steps: 1.0
 
 spot_training: true 
-checkpoint_interval: 100
+checkpoint_interval: 5
 best_metric: null
 max_checkpoints_to_keep: 1
 
 wandb_config: null
-
 
 metrics_to_log:
   - "train/loss"

@@ -58,7 +58,6 @@ class RLConfig:
     algorithm: str = "grpo"  # "grpo", "dr_grpo", "dapo"
     epsilon_high: float = 1.0
     epsilon_low: float = 0.1
-    group_size: int = 16
 
 
 @dataclass
