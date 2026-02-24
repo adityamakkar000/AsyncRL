@@ -219,6 +219,9 @@ class Block(nn.Module):
         return x, out_layer_cache
 
 
+RematBlock = nn.remat(Block)
+
+
 class Qwen3(nn.Module):
     vocab_size: int
     d_ff: int
@@ -277,7 +280,7 @@ class Qwen3(nn.Module):
 
         for i in range(self.n_layers):
             in_layer_cache = kv_cache[i] if kv_cache else None
-            x, out_layer_cache = Block(
+            x, out_layer_cache = RematBlock(
                 d_ff=self.d_ff,
                 model_dim=self.model_dim,
                 n_heads=self.n_heads,
@@ -285,6 +288,7 @@ class Qwen3(nn.Module):
                 head_dim=self.head_dim,
                 rope_base=self.rope_base,
                 activation_dtype=self.activation_dtype,
+                name=f"Block_{i}",
             )(x, sequence_lens, attention_mask, (sin, cos), in_layer_cache)
             out_cache.append(out_layer_cache)
 
