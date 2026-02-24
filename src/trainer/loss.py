@@ -135,4 +135,4 @@ def get_single_step(config: RLConfig) -> StepFn:
 
         return loss, aux_metrics
 
-    return single_step
+    return single_step  # type: ignore
