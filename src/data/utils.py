@@ -57,11 +57,12 @@ def delete_local_file(local_path: str) -> None:
 
 @jax.jit
 def compute_aux_metrics(batch: RLBatch) -> Dict[str, jnp.ndarray]:
+    token_mask = batch.reference_model_logprobs != -jnp.inf
     return {
         "mean_reward": jnp.mean(batch.rewards),
         "std_reward": jnp.std(batch.rewards),
         "max_reward": jnp.max(batch.rewards),
         "min_reward": jnp.min(batch.rewards),
-        "mean_length": jnp.mean(batch.token_mask.sum(axis=1)),
-        "median_length": jnp.median(batch.token_mask.sum(axis=1)),
+        "mean_length": jnp.mean(token_mask.sum(axis=1)),
+        "median_length": jnp.median(token_mask.sum(axis=1)),
     }

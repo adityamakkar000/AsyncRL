@@ -53,4 +53,3 @@ class RLBatch:
     rewards: jax.Array  # [B], reward at each token
     group_mean: jax.Array  # [B], mean reward for each group
     group_std: jax.Array  # [B], std reward for each group
-    token_mask: jax.Array  # [B, max_seq_len], which tokens to train on

@@ -3,6 +3,7 @@ commands:
   - curl -LsSf https://astral.sh/uv/install.sh | sh
   - rm -rf ~/job
   - rm -rf ~/.cache/uv
+  - sudo chown -R $USER:$USER /tmp/tpu_logs
 
 ignore:
   - "*.pyc"

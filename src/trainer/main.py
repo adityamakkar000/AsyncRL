@@ -8,7 +8,7 @@ import optax
 import stax
 from dotenv import load_dotenv
 from jax.experimental.multihost_utils import sync_global_devices
-from jaxtyping import PyTree
+from jaxtyping import Array, PyTree
 from omegaconf import DictConfig, OmegaConf
 from stax import staxLogger as logger
 
@@ -358,7 +358,12 @@ class Trainer:
         metadata = {
             "writer_id": self.writer_id,
         }
+
+        def convert_metric(x):
+            return x.item() if isinstance(x, Array) else x
+
         if metadata_metrics is not None:
+            metadata_metrics = jax.tree.map(convert_metric, metadata_metrics)
             metadata |= metadata_metrics
 
         return state, metadata
@@ -435,6 +440,8 @@ class Trainer:
             prompts = [s.prompt for s in samples]
             generations = self.inference_engine(prompts, self.key(), {"params": self.params})
             train_batch, train_data_metrics = self.train_dataset.prepare_batch(samples, generations, train=True)
+
+            logger.info(train_data_metrics)
 
             out = self.train_step(self.params, self.opt_state, train_batch)
 

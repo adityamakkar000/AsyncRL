@@ -14,11 +14,12 @@ class LossFunction(Protocol):
     A protocol for loss functions used in reinforcement learning.
     """
 
-    def __call__(self, x_logprobs: Array, batch: RLBatch) -> Array:
+    def __call__(self, x_logprobs: Array, token_mask: Array, batch: RLBatch) -> Array:
         """
         Compute the loss from the pre-computed PPO-clipped objective.
         Args:
             x_logprobs (Array): Log probabilities of the current policy. Shape: [B, T].
+            token_mask (Array): Mask for valid tokens. Shape: [B, T].
             batch (RLBatch): The batch of data.
         Returns:
             loss (Array): The computed scalar loss.

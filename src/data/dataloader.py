@@ -81,11 +81,10 @@ class DataLoader:
 
         rewards, num_unparsable = self._get_rewards(samples, generations)
 
-        token_mask = reference_model_logprobs != -jnp.inf
         group_mean = rewards.mean(axis=1, keepdims=True) * jnp.ones_like(rewards)
         group_std = rewards.std(axis=1, keepdims=True) * jnp.ones_like(rewards) + 1e-8
 
-        rl_batch = RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std, token_mask)
+        rl_batch = RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std)
 
         def compress(x):
             x = x.reshape(x.shape[0] * x.shape[1], -1)
