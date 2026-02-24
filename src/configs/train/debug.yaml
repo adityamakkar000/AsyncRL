@@ -28,9 +28,13 @@ checkpoint_interval: 5
 best_metric: null
 max_checkpoints_to_keep: 1
 
-wandb_config: null
+wandb_config: 
+  project: "Debug"
+  notes: null
+  tags: null
 
 metrics_to_log:
   - "train/loss"
+  - "train/is_ratio_step_0"
   - "train/mean_reward"
   - "val/mean_reward"
