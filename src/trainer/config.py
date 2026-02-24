@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Protocol
 
-from jaxtyping import Array, PyTree
+from jaxtyping import Array
 from omegaconf import MISSING
 
 from src.data import DataConfig, RLBatch
@@ -14,15 +14,14 @@ class LossFunction(Protocol):
     A protocol for loss functions used in reinforcement learning.
     """
 
-    def __call__(self, token_logprobs: Array, batch: RLBatch) -> tuple[Array, PyTree]:
+    def __call__(self, x_logprobs: Array, batch: RLBatch) -> Array:
         """
-        Compute the loss given token log probabilities, token mask, and rewards.
+        Compute the loss from the pre-computed PPO-clipped objective.
         Args:
-            token_logprobs (Array): Log probabilities of the tokens. Shape: [batch_size, seq_len, vocab_size].
-            batch (RLBatch): A batch of data containing tokens, token masks, and rewards.
+            x_logprobs (Array): Log probabilities of the current policy. Shape: [B, T].
+            batch (RLBatch): The batch of data.
         Returns:
-            loss (Array): The computed loss.
-            aux_metrics (PyTree): Auxiliary metrics for monitoring.
+            loss (Array): The computed scalar loss.
         """
         ...
 
@@ -59,7 +58,6 @@ class RLConfig:
     algorithm: str = "grpo"  # "grpo", "dr_grpo", "dapo"
     epsilon_high: float = 1.0
     epsilon_low: float = 0.1
-    group_size: int = 16
 
 
 @dataclass

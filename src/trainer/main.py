@@ -1,7 +1,7 @@
 import json
 import os
 from functools import partial
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import jax
 import optax
@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 from jax.experimental.multihost_utils import sync_global_devices
 from jaxtyping import PyTree
 from omegaconf import DictConfig, OmegaConf
-from stax import TrainFn
 from stax import staxLogger as logger
 
 from src.constants import CACHE, CHECKPOINTS, GS_BUCKET
@@ -63,7 +62,7 @@ class Trainer:
                 logger.info("Saving intial checkpoint ...")
                 self.save_checkpoint(step=0)
                 dict_config = json.dumps(OmegaConf.to_container(self.config))
-                config_path = f"{GS_BUCKET}/{self.config.experiment_name}/config.json"
+                config_path = f"{self.gs_path}/config.json"
                 write_to_gcs(config_path, dict_config)
                 # block to ensure first checkpoint is written
                 self.block_until_checkpoints_saved()
@@ -90,8 +89,6 @@ class Trainer:
             raise ValueError("warmup_steps and decay_steps must sum to at most 1.0")
         if cfg.sharding_config.sharding_type not in ["single", "dp", "fsdp"]:
             raise ValueError("sharding_type must be one of 'single', 'dp', or 'fsdp'")
-        if cfg.loss_config.rl_config.algorithm not in ["grpo", "dr_grpo", "dapo"]:
-            raise ValueError(f"Unsupported RL algorithm: {cfg.loss_config.rl_config.algorithm}")
         if cfg.data_config.train_config.batch_size % cfg.loss_config.inference_config.group_size != 0:
             raise ValueError("Batch size must be divisible by group size for proper batching in inference.")
 
@@ -115,7 +112,8 @@ class Trainer:
 
     @partial(setup, component="initialized state")
     def _init_state(self):
-        self.train_fn = None
+        self.train_step = None
+        self.val_step = None
 
         self.model = None
         self.tx = None
@@ -139,11 +137,12 @@ class Trainer:
 
         self.n_hosts = jax.process_count()
         self.n_devices = jax.device_count()
+        self.gs_path = f"{GS_BUCKET}/runs/{self.config.experiment_name}"
 
     @partial(setup, component="metric logger")
     def _setup_writer(self):
         if writer_config := self.config.wandb_config:
-            writer_kwargs = dict()
+            writer_kwargs: dict[str, Any] = {"metrics_to_print": self.config.metrics_to_log}
             if self.writer_id is not None:
                 writer_kwargs["run_id"] = self.writer_id
             else:
@@ -153,7 +152,7 @@ class Trainer:
                 entity=os.getenv("WANDB_ENTITY", ""), project=writer_config.project, **writer_kwargs
             )
         else:
-            writer = stax.TextWriter()
+            writer = stax.TextWriter(metrics_to_print=self.config.metrics_to_log)
 
         self.writer_id = writer.id
         self.writer = writer
@@ -194,13 +193,12 @@ class Trainer:
         )
 
         self.params_sharding, self.opt_state_sharding = shardings.param_sharding, shardings.opt_state_sharding
-        self.train_fn = train_fn
 
-        def train_step(param: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
+        def train_step(params: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
             """
-            Takes single step and implment PPO-k loss (k steps off-policy)
+            Takes single step and implments PPO-k loss (k steps off-policy)
             Args:
-                param (PyTree): Model parameters.
+                params (PyTree): Model parameters.
                 opt_state (PyTree): Optimizer state.
                 batch (RLBatch): Batch of training data.
             Returns:
@@ -209,7 +207,7 @@ class Trainer:
 
             aux_metrics = {}
             out = {
-                "params": param,
+                "params": params,
                 "opt_state": opt_state,
             }
             reshaped_batch = jax.tree.map(
@@ -222,13 +220,14 @@ class Trainer:
                 out = train_fn(out["params"], out["opt_state"], reshaped_batch)
                 aux_metrics |= {f"{k}_step_{step}": v for k, v in out["metrics"].items()}
 
+            metrics = {f"train/{k}": v for k, v in compute_aux_metrics(batch).items()}
             return {
                 "params": out["params"],
                 "opt_state": out["opt_state"],
-                "aux_metrics": aux_metrics | compute_aux_metrics(batch),
+                "metrics": aux_metrics | metrics,
             }
 
-        self.train_step: TrainFn = train_step
+        self.train_step = train_step
         self.val_step = lambda params, batch: {f"val/{k}": v for k, v in compute_aux_metrics(batch).items()}
 
     @partial(setup, component="dataset")
@@ -329,7 +328,7 @@ class Trainer:
     def _setup_checkpointer(self):
         """Setup checkpointing mechanism."""
 
-        path = f"{GS_BUCKET}/runs/{self.config.experiment_name}/{CHECKPOINTS}/"
+        path = f"{self.gs_path}/{CHECKPOINTS}/"
         self.checkpointer = stax.Checkpointer(
             output_dir=path,
             max_to_keep=self.config.max_checkpoints_to_keep,
@@ -426,7 +425,8 @@ class Trainer:
         self.val_dataset.restore_checkpoint(val_state)
 
     def train(self):
-        assert self.train_fn is not None, "Train function not set up."
+        assert self.train_step is not None, "Train function not set up."
+        assert self.val_step is not None, "Validation function not set up."
         assert self.inference_engine is not None, "Inference engine not set up."
         assert self.train_dataset is not None, "Train dataset not set up."
         assert self.val_dataset is not None, "Validation dataset not set up."
@@ -443,11 +443,12 @@ class Trainer:
             out = self.train_step(self.params, self.opt_state, train_batch)
 
             self.params, self.opt_state = out["params"], out["opt_state"]
-            metrics = out["aux_metrics"] | generations.metrics
+            metrics = out["metrics"] | generations.metrics
             if self.global_step % self.config.val_interval == 0:
-                val_prompts = self.val_dataset(num_prompts=self.val_n_prompts)
+                val_samples = self.val_dataset(num_prompts=self.val_n_prompts)
+                val_prompts = [s.prompt for s in val_samples]
                 val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})
-                val_batch = self.val_dataset.prepare_batch(val_generations)
+                val_batch = self.val_dataset.prepare_batch(val_samples, val_generations)
 
                 val_metrics: dict[str, float] = self.val_step(self.params, val_batch)
                 metrics |= val_metrics
@@ -456,7 +457,7 @@ class Trainer:
             metrics |= {
                 "devices/memory_min": min_mem,
                 "devices/memory_max": max_mem,
-                "train/lr": self.tx[1].hyperparams["learning_rate"],
+                "train/lr": self.opt_state[1].hyperparams["learning_rate"],
             }
 
             self.writer(self.global_step, metrics)

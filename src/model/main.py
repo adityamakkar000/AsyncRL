@@ -68,14 +68,19 @@ class Model(HFModelBase):
     def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
         return get_qwen_3_weights(params, name=model_name)
 
-    def init_kv_cache(self, batch_size: int, sharding: KVCache, dtype: str = "bfloat16") -> list[KVCache]:
+    def init_kv_cache(self, batch_size: int, length: int, sharding: KVCache, dtype: str = "bfloat16") -> list[KVCache]:
+        if length > self.config.qwen_config.sequence_len + 1024:
+            raise ValueError(
+                f"Requested KV cache length {length} exceeds maximum of {self.config.qwen_config.sequence_len + 1024}"
+            )
+
         @partial(jax.jit, out_shardings=sharding)
         def _init():
             def zeros():
                 return jnp.zeros(
                     (
                         batch_size,
-                        self.config.qwen_config.sequence_len + 1024,  # buffer for prompt input + padding
+                        length,
                         self.config.qwen_config.n_groups,
                         self.config.qwen_config.head_dim,
                     ),
@@ -128,7 +133,6 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
-        attention_len: Optional[int] = None,
     ) -> tuple[Array, list[KVCache]]:
         """
         Forward pass of the model. This is a wrapper around the model's __call__ that allows for additional processing if needed.
@@ -141,7 +145,7 @@ class Model(HFModelBase):
             logits: Output logits of shape (B, T, vocab_size).
             out_cache: Optional list of KVCache for each layer if kv_cache was provided.
         """
-        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, attention_len)
+        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache)
 
         return logits, cache
 
@@ -152,12 +156,11 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
-        attention_len: Optional[int] = None,
     ) -> tuple[Array, list[KVCache]]:
         """
         Applies the model to the input data. This is a wrapper around __call__ that allows for additional processing if needed.
         """
-        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, attention_len=attention_len)
+        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache)
 
     @property
     def sequence_len(self) -> int:

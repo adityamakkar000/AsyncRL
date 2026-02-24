@@ -101,14 +101,12 @@ class GroupedQueryAttention(nn.Module):
         t_start = kv_cache.length
         T = q.shape[1]
 
-        k_cache, v_cache = jax.tree.map(
+        k, v = jax.tree.map(
             lambda cache, val: jax.lax.dynamic_update_slice_in_dim(cache, val.astype(cache.dtype), t_start, axis=1),
             (kv_cache.k, kv_cache.v),
             (k, v),
         )
-        kv_cache = KVCache(k=k_cache, v=v_cache, length=t_start + T)
-
-        k, v = k_cache[:, : mask.shape[-1], ...], v_cache[:, : mask.shape[-1], ...]
+        kv_cache = KVCache(k=k, v=v, length=t_start + T)
 
         q = einops.rearrange(q, pattern="b t (g r) d -> b t g r d", g=k.shape[-2])
 
@@ -239,7 +237,6 @@ class Qwen3(nn.Module):
         x: Array,
         sequence_lens: jax.Array,
         kv_cache: Optional[list[KVCache]] = None,
-        attention_len: Optional[int] = None,
     ) -> tuple[Array, list[KVCache]]:
         B, T = x.shape
         embed_layer = nn.Embed(
@@ -254,10 +251,11 @@ class Qwen3(nn.Module):
         out_cache: list[KVCache] = []
 
         rope_cache = RoPEMatrixCache(sequence_len=self.sequence_len, model_dim=self.head_dim, rope_base=self.rope_base)
-        if attention_len is None:
-            attention_len = self.sequence_len
 
         t_start = kv_cache[0].length if kv_cache else 0
+
+        attention_len = kv_cache[0].k.shape[1] if kv_cache else T
+
         prompt_mask = make_prompt_mask(attention_len, cache_len=t_start + T, seq_lens=sequence_lens)
         index_map = jnp.cumsum(prompt_mask, axis=-1)
         index_map_with_offset = jnp.where(index_map > 0, index_map - 1, 0)

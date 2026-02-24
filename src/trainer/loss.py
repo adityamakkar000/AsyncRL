@@ -1,10 +1,11 @@
-from functools import partial
-from typing import Dict
+import functools
+from typing import Callable, Dict
 
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, PyTree
 from stax import StepFn
+from stax import staxLogger as logger
 
 from src.data import RLBatch
 from src.model import Model
@@ -12,101 +13,98 @@ from src.model import Model
 from .config import LossFunction, RLConfig
 
 
-def get_ratio(token_logprobs: Array, reference_logprobs: Array, epsilon_low, epsilon_high) -> tuple[Array, Array]:
-    log_ratio = token_logprobs - reference_logprobs
-    ratio = jnp.exp(log_ratio)
+def compute_clipped_objective(
+    token_logprobs: Array,
+    reference_logprobs: Array,
+    advantages: Array,
+    epsilon_low: float,
+    epsilon_high: float,
+) -> Array:
+    """Compute the PPO-clipped surrogate objective.
+
+    Args:
+        token_logprobs: Log probabilities of the current policy. Shape: [B, T].
+        reference_logprobs: Log probabilities of the reference policy. Shape: [B, T].
+        advantages: Advantage estimates for each sequence. Shape: [B].
+        epsilon_low: Clipping parameter for negative advantages.
+        epsilon_high: Clipping parameter for positive advantages.
+    Returns:
+        clipped_objective: min(ratio * A, clip(ratio) * A). Shape [B, T].
+        ratio:             π_θ / π_ref (unclipped) Shape [B, T].
+
+    """
+    ratio = jnp.exp(token_logprobs - reference_logprobs)
     clipped_ratio = jnp.clip(ratio, 1.0 - epsilon_low, 1.0 + epsilon_high)
-    weight_ratio = jnp.minimum(ratio, clipped_ratio)
-    return weight_ratio, ratio
+
+    adv = advantages[:, None]
+    clipped_objective = jnp.minimum(ratio * adv, clipped_ratio * adv)
+
+    return clipped_objective
 
 
-def grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tuple[Array, PyTree]:
-    """
-    From  https://arxiv.org/pdf/2412.19437
-    """
-    B, T = token_logprobs.shape
+ALGO_FN = Callable[[Array, RLBatch, RLConfig], Array]
+GLOBAL_DICT: dict[str, ALGO_FN] = {}
 
-    weight_ratio, ratio = get_ratio(
-        token_logprobs, batch.reference_model_logprobs, config.epsilon_low, config.epsilon_low
-    )
 
+def register_algorithim(name: str) -> Callable[[ALGO_FN], ALGO_FN]:
+    """Decorator to register an algorithm function. The function should take (x_logprobs, batch, config) and return a scalar loss."""
+
+    def decorator(fn: ALGO_FN) -> ALGO_FN:
+        GLOBAL_DICT[name] = fn
+        return fn
+
+    return decorator
+
+
+@register_algorithim("grpo")
+def grpo_loss(x_logprobs: Array, batch: RLBatch, config: RLConfig) -> Array:
+    """GRPO loss (https://arxiv.org/pdf/2412.19437)."""
     advantages = (batch.rewards - batch.group_mean) / batch.group_std
-
-    masked_loss = weight_ratio * advantages[:, None] * batch.token_mask
-
-    loss = jnp.sum(masked_loss, axis=1) / jnp.sum(batch.token_mask, axis=1)
-    loss = jnp.mean(loss)
-
-    aux_metrics = {
-        "loss": loss,
-        "pi_theta_over_pi_old": jnp.mean(ratio),
-    }
-    return loss, aux_metrics
-
-
-def dr_grpo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tuple[Array, PyTree]:
-    """
-    From https://arxiv.org/pdf/2503.20783
-    """
-
-    B, T = token_logprobs.shape
-
-    weight_ratio, ratio = get_ratio(
-        token_logprobs, batch.reference_model_logprobs, config.epsilon_low, config.epsilon_low
+    logger.info("GRPO uses only epsilon-low for clipping ")
+    clipped_objective = compute_clipped_objective(
+        x_logprobs, batch.reference_model_logprobs, advantages, config.epsilon_low, config.epsilon_low
     )
+    per_seq_loss = jnp.sum(clipped_objective * batch.token_mask, axis=1) / jnp.sum(batch.token_mask, axis=1)
+    return jnp.mean(per_seq_loss)
 
+
+@register_algorithim("dr_grpo")
+def dr_grpo_loss(x_logprobs: Array, batch: RLBatch, config: RLConfig) -> Array:
+    """DR-GRPO loss (https://arxiv.org/pdf/2503.20783)."""
     advantages = batch.rewards - batch.group_mean
-    masked_loss = weight_ratio * advantages[:, None] * batch.token_mask
-
-    total_seq_len = jnp.sum(batch.token_mask)
-
-    loss = jnp.sum(masked_loss, axis=1).mean() / total_seq_len
-
-    aux_metrics = {
-        "loss": loss,
-        "pi_theta_over_pi_old": jnp.mean(ratio),
-    }
-    return loss, aux_metrics
-
-
-def dapo_loss(token_logprobs: Array, batch: RLBatch, *, config: RLConfig) -> tuple[Array, PyTree]:
-    """
-    From https://arxiv.org/pdf/2503.14476
-    """
-
-    B, T = token_logprobs.shape
-
-    weight_ratio, ratio = get_ratio(
-        token_logprobs, batch.reference_model_logprobs, config.epsilon_low, config.epsilon_high
+    # dr_grpo uses same clipping for positive and negative advantages, handled upstream by setting epsilon_low = epsilon_high
+    logger.info("Dr GRPO uses only epsilon-low for clipping ")
+    clipped_objective = compute_clipped_objective(
+        x_logprobs, batch.reference_model_logprobs, advantages, config.epsilon_low, config.epsilon_low
     )
-
-    advantages = batch.rewards - batch.group_mean
-    masked_loss = weight_ratio * advantages[:, None] * batch.token_mask
-
-    loss = jnp.sum(masked_loss, axis=1).mean() / T
-
-    aux_metrics = {
-        "loss": loss,
-        "pi_theta_over_pi_old": jnp.mean(ratio),
-    }
-    return loss, aux_metrics
+    per_seq_loss = jnp.sum(clipped_objective * batch.token_mask, axis=1)
+    return jnp.mean(per_seq_loss)
 
 
-# TODO: implment RLOO
+@register_algorithim("dapo")
+def dapo_loss(x_logprobs: Array, batch: RLBatch, config: RLConfig) -> Array:
+    """DAPO loss (https://arxiv.org/pdf/2503.14476)."""
+    advantages = (batch.rewards - batch.group_mean) / batch.group_std
+    clipped_objective = compute_clipped_objective(
+        x_logprobs, batch.reference_model_logprobs, advantages, config.epsilon_low, config.epsilon_high
+    )
+    per_seq_loss = jnp.sum(clipped_objective * batch.token_mask, axis=1)
+    return per_seq_loss.mean() / batch.token_mask.sum()
 
 
-def get_loss_fn(RLConfig) -> LossFunction:
-    match RLConfig.algorithm:
-        case "grpo":
-            loss = grpo_loss
-        case "dr_grpo":
-            loss = dr_grpo_loss
-        case "dapo":
-            loss = dapo_loss
-        case _:
-            raise ValueError(f"Unknown loss type: {RLConfig.algorithm}")
+@register_algorithim("rloo")
+def rloo_loss(x_logprobs: Array, batch: RLBatch, config: RLConfig) -> Array:
+    """RLOO loss (https://arxiv.org/pdf/2402.14740)."""
+    # @TODO: implment RLOO
+    return jnp.array(0.0)
 
-    return partial(loss, config=RLConfig)
+
+def get_loss_fn(config: RLConfig) -> LossFunction:
+    """Return (loss_fn, normalize_adv_by_std, epsilon_low, epsilon_high) for the algorithm."""
+    if config.algorithm not in GLOBAL_DICT:
+        raise ValueError(f"Got algorithm {config.algorithm}, expected one of {list(GLOBAL_DICT.keys())}")
+
+    return functools.partial(GLOBAL_DICT[config.algorithm], config=config)
 
 
 def get_single_step(config: RLConfig) -> StepFn:
@@ -120,20 +118,24 @@ def get_single_step(config: RLConfig) -> StepFn:
     loss_fn = get_loss_fn(config)
 
     def single_step(model: Model, params: PyTree, batch: RLBatch, train: bool = True) -> tuple[Array, PyTree]:
-        x_logprobs, kv_cache = model.apply(
+        x_logits, kv_cache = model.apply(
             {"params": params}, x=batch.tokens, sequence_lens=batch.seq_lens, kv_cache=None
         )
+        x_logprobs = jax.nn.log_softmax(x_logits)
         x_logprobs: Array = jnp.take_along_axis(x_logprobs, batch.tokens[..., None], axis=-1).squeeze(-1)
 
-        loss, aux_metrics = loss_fn(x_logprobs, batch)
+        # negate loss since gradient descent and we want to maximize
+        loss = -1 * loss_fn(x_logprobs, batch)
 
-        # since we are gradient descenting we want to minimize the loss
-        # hence negate the loss you want to maximize
-        loss *= -1.0
+        ratio = jnp.exp(x_logprobs - batch.reference_model_logprobs)
+        aux_metrics = {
+            "loss": loss,
+            "is_ratio": jnp.sum(ratio * batch.token_mask) / jnp.sum(batch.token_mask),
+        }
 
         return loss, aux_metrics
 
-    return single_step
+    return single_step  # type: ignore
 
 
 @jax.jit
