@@ -112,7 +112,7 @@ def rloo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: Loss
     loo_mean = (G * batch.group_mean - batch.rewards) / (G - 1)
     advantages = batch.rewards - loo_mean
 
-    per_seq_logprobs = jnp.sum(x_logprobs * token_mask, axis=1) / jnp.sum(token_mask, axis=1)
+    per_seq_logprobs = jnp.sum(x_logprobs * token_mask, axis=0) / jnp.sum(token_mask, axis=1)
     return jnp.mean(advantages * per_seq_logprobs)
 
 
