@@ -441,8 +441,6 @@ class Trainer:
             generations = self.inference_engine(prompts, self.key(), {"params": self.params})
             train_batch, train_data_metrics = self.train_dataset.prepare_batch(samples, generations, train=True)
 
-            logger.info(train_data_metrics)
-
             out = self.train_step(self.params, self.opt_state, train_batch)
 
             self.params, self.opt_state = out["params"], out["opt_state"]
