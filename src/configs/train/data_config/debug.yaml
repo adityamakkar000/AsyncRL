@@ -1,5 +1,6 @@
 defaults:
-  - main 
+  - datasets@train_config: omnimath_debug_1k
+  - datasets@val_config: omnimath_debug_1k
   - _self_
 
 train_config:

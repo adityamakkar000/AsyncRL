@@ -77,13 +77,9 @@ def dr_grpo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: L
     """DR-GRPO loss (https://arxiv.org/pdf/2503.20783)."""
     advantages = batch.rewards - batch.group_mean
     # dr_grpo uses same clipping for positive and negative advantages, handled upstream by setting epsilon_low = epsilon_high
-    logger.info("Dr GRPO uses only epsilon-low for clipping ")
+    # logger.info("Dr GRPO uses only epsilon-low for clipping ")
     clipped_objective = compute_clipped_objective(
-        x_logprobs,
-        batch.reference_model_logprobs,
-        advantages,
-        config.rl_config.epsilon_low,
-        config.rl_config.epsilon_low,
+        x_logprobs, batch.reference_model_logprobs, advantages, config.epsilon_low, config.epsilon_high
     )
     per_seq_loss = jnp.sum(clipped_objective * token_mask, axis=1)
     return jnp.mean(per_seq_loss)

@@ -45,6 +45,49 @@ def load_omnimath() -> list[Sample]:
     return samples
 
 
+@register_dataset("omnimath_debug_1k")
+def load_omnimath_debug_1k() -> list[Sample]:
+    ds = load_dataset("KbsdJames/Omni-MATH", split="test")
+    ds_sorted = ds.sort("difficulty")[2000:3000]
+
+    samples = [
+        Sample(prompt=ds_sorted["problem"][i], answer=ds_sorted["answer"][i], solution=ds_sorted["solution"][i])
+        for i in range(1000)
+    ]
+    ds.cleanup_cache_files()
+    return samples
+
+
+@register_dataset("omnimath_debug_250_500")
+def load_omnimath_debug_250_500() -> list[Sample]:
+    """omnimath with the 250-500 problems sorted by difficulty"""
+
+    ds = load_dataset("KbsdJames/Omni-MATH", split="test")
+    ds_sorted = ds.sort("difficulty")[250:500]
+
+    samples = [
+        Sample(prompt=ds_sorted["problem"][i], answer=ds_sorted["answer"][i], solution=ds_sorted["solution"][i])
+        for i in range(250)
+    ]
+    ds.cleanup_cache_files()
+    return samples
+
+
+@register_dataset("omnimath_debug_500_750")
+def load_omnimath_debug_500_750() -> list[Sample]:
+    """omnimath with the 500-750 problems sorted by difficulty"""
+
+    ds = load_dataset("KbsdJames/Omni-MATH", split="test")
+    ds_sorted = ds.sort("difficulty")[500:750]
+
+    samples = [
+        Sample(prompt=ds_sorted["problem"][i], answer=ds_sorted["answer"][i], solution=ds_sorted["solution"][i])
+        for i in range(250)
+    ]
+    ds.cleanup_cache_files()
+    return samples
+
+
 @register_dataset("gsm8k")
 def load_gsm8k() -> list[Sample]:
     ds = load_dataset("openai/gsm8k", "main", split="test")
@@ -61,6 +104,7 @@ def load_gsm8k() -> list[Sample]:
         for example in ds
     ]
 
+    ds.cleanup_cache_files()
     return samples
 
 
@@ -68,8 +112,10 @@ def load_gsm8k() -> list[Sample]:
 def load_aime() -> list[Sample]:
     ds_2024 = load_dataset("Maxwell-Jia/AIME_2024")["train"]
     aime_2024 = [
-        Sample(prompt=example["Problem"], answer=example["Answer"], solution=example["Solution"]) for example in ds_2024
+        Sample(prompt=example["Problem"], answer=str(example["Answer"]), solution=example["Solution"])
+        for example in ds_2024
     ]
     ds_2025 = load_dataset("MathArena/aime_2025")["train"]
-    aime_2025 = [Sample(prompt=example["problem"], answer=example["answer"], solution=None) for example in ds_2025]
+    aime_2025 = [Sample(prompt=example["problem"], answer=str(example["answer"]), solution=None) for example in ds_2025]
+    ds_2025.cleanup_cache_files()
     return aime_2024 + aime_2025
