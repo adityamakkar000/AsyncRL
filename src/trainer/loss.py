@@ -10,7 +10,7 @@ from stax import staxLogger as logger
 from src.data import RLBatch
 from src.model import Model
 
-from .config import LossFunction, RLConfig
+from .config import LossConfig, LossFunction
 
 
 def compute_clipped_objective(
@@ -42,7 +42,7 @@ def compute_clipped_objective(
     return clipped_objective
 
 
-ALGO_FN = Callable[[Array, Array, RLBatch, RLConfig], Array]
+ALGO_FN = Callable[[Array, Array, RLBatch, LossConfig], Array]
 GLOBAL_DICT: dict[str, ALGO_FN] = {}
 
 
@@ -57,57 +57,74 @@ def register_algorithim(name: str) -> Callable[[ALGO_FN], ALGO_FN]:
 
 
 @register_algorithim("grpo")
-def grpo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: RLConfig) -> Array:
+def grpo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: LossConfig) -> Array:
     """GRPO loss (https://arxiv.org/pdf/2412.19437)."""
     advantages = (batch.rewards - batch.group_mean) / batch.group_std
     logger.info("GRPO uses only epsilon-low for clipping ")
     clipped_objective = compute_clipped_objective(
-        x_logprobs, batch.reference_model_logprobs, advantages, config.epsilon_low, config.epsilon_low
+        x_logprobs,
+        batch.reference_model_logprobs,
+        advantages,
+        config.rl_config.epsilon_low,
+        config.rl_config.epsilon_low,
     )
     per_seq_loss = jnp.sum(clipped_objective * token_mask, axis=1) / jnp.sum(token_mask, axis=1)
     return jnp.mean(per_seq_loss)
 
 
 @register_algorithim("dr_grpo")
-def dr_grpo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: RLConfig) -> Array:
+def dr_grpo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: LossConfig) -> Array:
     """DR-GRPO loss (https://arxiv.org/pdf/2503.20783)."""
     advantages = batch.rewards - batch.group_mean
     # dr_grpo uses same clipping for positive and negative advantages, handled upstream by setting epsilon_low = epsilon_high
     logger.info("Dr GRPO uses only epsilon-low for clipping ")
     clipped_objective = compute_clipped_objective(
-        x_logprobs, batch.reference_model_logprobs, advantages, config.epsilon_low, config.epsilon_low
+        x_logprobs,
+        batch.reference_model_logprobs,
+        advantages,
+        config.rl_config.epsilon_low,
+        config.rl_config.epsilon_low,
     )
     per_seq_loss = jnp.sum(clipped_objective * token_mask, axis=1)
     return jnp.mean(per_seq_loss)
 
 
 @register_algorithim("dapo")
-def dapo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: RLConfig) -> Array:
+def dapo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: LossConfig) -> Array:
     """DAPO loss (https://arxiv.org/pdf/2503.14476)."""
     advantages = (batch.rewards - batch.group_mean) / batch.group_std
     clipped_objective = compute_clipped_objective(
-        x_logprobs, batch.reference_model_logprobs, advantages, config.epsilon_low, config.epsilon_high
+        x_logprobs,
+        batch.reference_model_logprobs,
+        advantages,
+        config.rl_config.epsilon_low,
+        config.rl_config.epsilon_high,
     )
     per_seq_loss = jnp.sum(clipped_objective * token_mask, axis=1)
     return per_seq_loss.mean() / token_mask.sum()
 
 
 @register_algorithim("rloo")
-def rloo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: RLConfig) -> Array:
+def rloo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: LossConfig) -> Array:
     """RLOO loss (https://arxiv.org/pdf/2402.14740)."""
-    # @TODO: implment RLOO
-    return jnp.array(0.0)
+    G = config.inference_config.group_size
+
+    loo_mean = (G * batch.group_mean - batch.rewards) / (G - 1)
+    advantages = batch.rewards - loo_mean
+
+    per_seq_logprobs = jnp.sum(x_logprobs * token_mask, axis=1)
+    return jnp.mean(advantages * per_seq_logprobs)
 
 
-def get_loss_fn(config: RLConfig) -> LossFunction:
+def get_loss_fn(config: LossConfig) -> LossFunction:
     """Return (loss_fn, normalize_adv_by_std, epsilon_low, epsilon_high) for the algorithm."""
-    if config.algorithm not in GLOBAL_DICT:
-        raise ValueError(f"Got algorithm {config.algorithm}, expected one of {list(GLOBAL_DICT.keys())}")
+    if config.rl_config.algorithm not in GLOBAL_DICT:
+        raise ValueError(f"Got algorithm {config.rl_config.algorithm}, expected one of {list(GLOBAL_DICT.keys())}")
 
-    return functools.partial(GLOBAL_DICT[config.algorithm], config=config)
+    return functools.partial(GLOBAL_DICT[config.rl_config.algorithm], config=config)
 
 
-def get_single_step(config: RLConfig) -> StepFn:
+def get_single_step(config: LossConfig) -> StepFn:
     """
     Get the RL step function based on the provided configuration.
     Args:
