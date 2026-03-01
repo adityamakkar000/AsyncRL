@@ -35,7 +35,7 @@ class EvalRunner:
             raise ValueError("Must set either use_best_ckpt or step_number.")
 
     def setup_model(self):
-        self.gs_path = f"{GS_BUCKET}/{self.model_config.model_name}"
+        self.gs_path = f"{GS_BUCKET}/runs/{self.model_config.model_name}"
         config = f"{self.gs_path}/config.json"
 
         logger.info(f"Loading model config from {config}...")
