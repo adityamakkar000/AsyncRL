@@ -120,7 +120,7 @@ class Model(HFModelBase):
         assert hasattr(restored, "state"), "Restored object has no attribute 'state'"
         assert restored.state, "Restored has no state"
 
-        return step_number,restored.state["params"]  # type: ignore
+        return step_number, restored.state["params"]  # type: ignore
 
     def save_hf(self, path: str, params: PyTree) -> None:
         """Saves the model parameters in a local safetensors file. Inverse of load_from_hf."""
