@@ -3,6 +3,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import numpy as np
+import stax
 from jax.experimental.multihost_utils import process_allgather, sync_global_devices
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, PyTree
@@ -50,7 +51,7 @@ class InferenceEngine:
 
     def validate_config(self):
         """Validate the inference configuration to ensure it meets the requirements for the inference engine."""
-        assert self.config.n_replicas <= jax.device_count(), (
+        assert self.config.n_replicas <= jax.local_device_count(), (
             f"Number of replicas {self.config.n_replicas} must be less than or equal to number of devices {jax.device_count()}"
         )
         assert self.config.max_seq_len <= self.model.sequence_len, (
@@ -145,27 +146,6 @@ class InferenceEngine:
     def put_state_on_device(self, state: InferenceState) -> InferenceState:
         return jax.tree.map(lambda x, s: jax.device_put(x, s), state, self.shardings.state_sharding)
 
-    def _log_prefill_input_signatures(self, label: str, batch: Array, seq_lens: Array, params: PyTree, key: Array):
-        """Log type, dtype, shape, and sharding of all prefill inputs to diagnose JIT cache misses."""
-
-        def _sig(name, x):
-            typ = type(x).__name__
-            dtype = getattr(x, "dtype", "N/A")
-            shape = getattr(x, "shape", "N/A")
-            sharding = getattr(x, "sharding", "N/A")
-            logger.info(f"[{label}] {name}: type={typ}, dtype={dtype}, shape={shape}, sharding={sharding}")
-
-        _sig("batch", batch)
-        _sig("seq_lens", seq_lens)
-        _sig("key", key)
-
-        leaves = jax.tree.leaves(params)
-        logger.info(f"[{label}] params: n_leaves={len(leaves)}")
-        for i, leaf in enumerate(leaves[:5]):  # first 5 leaves
-            _sig(f"params_leaf[{i}]", leaf)
-        if len(leaves) > 5:
-            _sig(f"params_leaf[{len(leaves) - 1}]", leaves[-1])
-
     def put_batch_on_device(
         self, batch: np.ndarray, seq_lens: np.ndarray, params: PyTree, key: Array
     ) -> tuple[Array, Array, PyTree, Array]:
@@ -213,7 +193,6 @@ class InferenceEngine:
                     **self.shardings.prefill_shardings,
                 )
 
-                # self._log_prefill_input_signatures(f"precompile_seq{curr_seq_len}", x_init, seq_lens, params_sharded, key_sharded)
                 _output = self.precompile_dict["prefill"][curr_seq_len](x_init, seq_lens, params_sharded, key_sharded)
 
                 curr_seq_len *= 2
@@ -251,8 +230,6 @@ class InferenceEngine:
                 return state
 
             state = create_initial_state()
-            sync_global_devices("precompile_decode_sync_3")
-            logger.info("created intial state")
 
             self.precompile_dict["decode"][self.max_attention_length] = jax.jit(
                 self._decode_loop,
@@ -339,9 +316,9 @@ class InferenceEngine:
         """
         Detokenize the output rollouts into strings.
         Args:
-            tokens (list[InferenceRollout] | InferenceRollout): The list of rollouts to detokenize.
+            tokens list[InferenceRollout]: The list of rollouts to detokenize.
         Returns:
-            list[list[str]] | list[str]: The detokenized output strings.
+            list[list[str]]: The detokenized output strings.
         """
         if isinstance(tokens, InferenceRollout):
             tokens = [tokens]
@@ -355,7 +332,7 @@ class InferenceEngine:
 
     def prefill(self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array) -> InferenceState:
         """
-        Perform the prefill step of the inference, which runs the model on the input tokens to fill the kv cache.
+        Run model forward pass for prefill
         Args:
             input_tokens (Array): The input tokens for the prefill step. Shape: [decode_size, seq_len].
             seq_lens (Array): The sequence lengths of the input tokens. Shape: [decode_size].
@@ -429,20 +406,6 @@ class InferenceEngine:
             jax.tree.map(lambda x: x.block_until_ready(), out)
         return out, {"ttft": t.data["time"]}
 
-    def _log_decode_input_signatures(self, label: str, state: InferenceState, params: PyTree):
-        """Log type, dtype, shape, and sharding of all decode inputs to diagnose JIT cache misses."""
-
-        def _sig(name, x):
-            typ = type(x).__name__
-            dtype = getattr(x, "dtype", "N/A")
-            shape = getattr(x, "shape", "N/A")
-            sharding = getattr(x, "sharding", "N/A")
-            logger.info(f"[{label}] {name}: type={typ}, dtype={dtype}, shape={shape}, sharding={sharding}")
-
-        _sig("next_token", state.next_token)
-        _sig("seq_lens", state.seq_lens)
-        _sig("key", state.key)
-
     def decode(self, state: InferenceState, params: PyTree) -> InferenceState:
         """
         Perform the decode step of the inference, which runs the model for one step to get the next token and update the kv cache.
@@ -453,7 +416,6 @@ class InferenceEngine:
             InferenceState: The updated state after the decode step, containing the next token, updated kv cache, and other necessary information for the next step.
         """
         logger.info(f"Compiling decode step for attention length {state.kv_cache[0].k.shape[1]}")
-        # for some reason we are recompiling so lets print out shape, sharding, dtype to debug recompilation
         key, sample_key = jax.random.split(state.key)
 
         with jax.named_scope("fwd_pass"):
@@ -537,18 +499,13 @@ class InferenceEngine:
                 **self.shardings.decode_shardings,
             )
         with Tracker(timer=True) as t:
-            logger.info("before")
             state = self.precompile_dict["decode"][self.max_attention_length](state, params)
-            logger.info("after")
-            sync_global_devices("single_rollout_sync_4")
-
             out_tokens, out_logprobs = jax.tree.map(
                 lambda x: list(jax.device_get(x)), (state.out_tokens, state.out_logprobs)
             )
-            logger.info("after 2")
 
         n_steps = (state.kv_cache[0].length - initial_cache_length).item()
-        total_tokens = n_steps * self.decode_size
+        total_tokens = n_steps * self.decode_size * jax.process_count()
         total_time = t.data["time"]
 
         decode_metrics = {
@@ -586,8 +543,8 @@ class InferenceEngine:
         prefill_metrics_collected = []
 
         for step in range(self.config.group_size // self.decode_size):
-            # prefill_key = jax.random.fold_in(key, step)
-            prefill_key = key
+            prefill_key = jax.random.fold_in(key, step)
+            # prefill_key = key
 
             # NOTE:
             # we manually do prefill on each step instead of reusing
@@ -640,8 +597,8 @@ class InferenceEngine:
 
         with Tracker(timer=True) as t:
             for i in range(B):
-                # batch_key= jax.random.fold_in(key_sharded, i)
-                batch_key = key_sharded
+                batch_key = jax.random.fold_in(key_sharded, i)
+                # batch_key = key_sharded
                 batch_output, batch_metrics = self.rollout_group(
                     jax.lax.dynamic_index_in_dim(x_batch_sharded, i, axis=0),
                     jax.lax.dynamic_index_in_dim(seq_lens_sharded, i, axis=0),
@@ -665,9 +622,7 @@ class InferenceEngine:
             Array: The updated random key after folding in the host index.
             PyTree: The model parameters after performing an all-gather across hosts.
         """
-        # replicated_key= jax.device_put(key,P())
-        # key = jax.device_get(jax.random.fold_in(key, stax.get_rank()))
-        key = jax.device_get(key)
+        key = jax.device_get(jax.random.fold_in(key, stax.get_rank()))
         params = self.setup_parameters(params)
         return key, params
 
