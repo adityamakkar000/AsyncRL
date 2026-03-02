@@ -12,7 +12,7 @@ from jaxtyping import Array, PyTree
 from omegaconf import DictConfig, OmegaConf
 from stax import staxLogger as logger
 
-from src.constants import CACHE, CHECKPOINTS, GS_BUCKET
+from src.constants import CHECKPOINTS, GS_BUCKET
 from src.data import DataLoader, RLBatch
 from src.inference_engine import InferenceEngine
 from src.model import Model
@@ -23,10 +23,10 @@ from .utils import Key, setup, write_to_gcs
 
 load_dotenv()
 
-jax.config.update("jax_compilation_cache_dir", f"{GS_BUCKET}/{CACHE}")
-jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+# jax.config.update("jax_compilation_cache_dir", f"{GS_BUCKET}/{CACHE}")
+# jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+# jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+# jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 
 
 class Trainer:
@@ -90,24 +90,26 @@ class Trainer:
         if cfg.sharding_config.sharding_type not in ["single", "dp", "fsdp"]:
             raise ValueError("sharding_type must be one of 'single', 'dp', or 'fsdp'")
         if cfg.data_config.train_config.batch_size % cfg.loss_config.inference_config.group_size != 0:
-            raise ValueError("Batch size must be divisible by group size for proper batching in inference.")
+            raise ValueError(
+                f"Batch size must be divisible by group size for proper batching in inference, got {cfg.data_config.train_config.batch_size} batch size and {cfg.loss_config.inference_config.group_size} group size."
+            )
 
         n_hosts = jax.process_count()
         train_batch_size = cfg.data_config.train_config.batch_size
         val_batch_size = cfg.data_config.val_config.batch_size
         assert train_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
-            "Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference."
+            f"Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {train_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
         )
         assert val_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
-            "Validation batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference."
+            f"Validation batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {val_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
         )
 
         n_devices = jax.device_count() if cfg.sharding_config.sharding_type in ["fsdp", "dp"] else 1
         assert train_batch_size % (n_devices * cfg.grad_accum_steps) == 0, (
-            "Train batch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation."
+            f"Train batch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation, got {train_batch_size} batch size, {n_devices} devices, and {cfg.grad_accum_steps} grad_accum_steps."
         )
         assert val_batch_size % (n_devices * cfg.val_steps) == 0, (
-            "Validation batch size must be divisible by number of devices for proper sharding during validation."
+            f"Validation batch size must be divisible by number of devices for proper sharding during validation, got {val_batch_size} batch size, {n_devices} devices, and {cfg.val_steps} val_steps."
         )
 
     @partial(setup, component="initialized state")
@@ -441,6 +443,14 @@ class Trainer:
             generations = self.inference_engine(prompts, self.key(), {"params": self.params})
             train_batch, train_data_metrics = self.train_dataset.prepare_batch(samples, generations, train=True)
 
+            for key in generations.metrics:
+                logger.info(f"{key}: {generations.metrics[key]}")
+            for key in train_data_metrics:
+                logger.info(f"{key}: {train_data_metrics[key]}")
+
+            import sys
+
+            sys.exit(0)
             out = self.train_step(self.params, self.opt_state, train_batch)
 
             self.params, self.opt_state = out["params"], out["opt_state"]

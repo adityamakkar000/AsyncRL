@@ -21,6 +21,12 @@ dependencies = [
     "transformers>=4.57.3",
     "datasets>=4.5.0",
     "openai>=2.21.0",
+    "tensorboard>=2.20.0",
+    "tensorboard-plugin-profile>=2.21.6",
+]
+
+[project.optional-dependencies]
+eval = [        
     "openbench>=0.5.3",
     "vllm-tpu==0.12.0",
 ]

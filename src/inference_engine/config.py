@@ -39,6 +39,7 @@ class InferenceState:
 
 @dataclass
 class InferenceShardings:
+    mesh: jax.sharding.Mesh
     split_sharding: jax.NamedSharding
     replicate_sharding: jax.NamedSharding
     kv_cache_sharding: KVCache

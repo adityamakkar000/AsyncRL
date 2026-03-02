@@ -28,3 +28,4 @@ wandb/
 **/inference_trace/*
 src/data/README.md
 **/hf_params/*
+profile/*

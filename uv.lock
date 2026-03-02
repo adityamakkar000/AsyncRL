@@ -157,6 +157,8 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "ruff" },
     { name = "stax" },
+    { name = "tensorboard" },
+    { name = "tensorboard-plugin-profile" },
     { name = "torch" },
     { name = "transformers" },
 ]
@@ -198,6 +200,8 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "ruff", specifier = ">=0.14.10" },
     { name = "stax", git = "https://github.com/adityamakkar000/stax.git" },
+    { name = "tensorboard", specifier = ">=2.20.0" },
+    { name = "tensorboard-plugin-profile", specifier = ">=2.21.6" },
     { name = "tfds-nightly", marker = "extra == 'data'", specifier = ">=4.9.9.dev202510250044" },
     { name = "torch", specifier = ">=2.9.0" },
     { name = "transformers", specifier = ">=4.57.3" },

@@ -10,6 +10,7 @@ ignore:
   - "*/__pycache__/*"
   - ".git/*"
   - ".venv/*"
+  - "profile/*"
 
 prerun:
   - uv venv --clear
