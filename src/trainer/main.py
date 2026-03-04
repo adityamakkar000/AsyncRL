@@ -100,11 +100,24 @@ class Trainer:
         )
 
         n_devices = jax.device_count() if cfg.sharding_config.sharding_type in ["fsdp", "dp"] else 1
+
+        if cfg.sharding_config.sharding_type == "single":
+            assert jax.process_count() == 1, (
+                "Single sharding type does not support distributed training across multiple hosts."
+            )
+
         assert train_batch_size % (n_devices * cfg.grad_accum_steps) == 0, (
             f"Train batch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation, got {train_batch_size} batch size, {n_devices} devices, and {cfg.grad_accum_steps} grad_accum_steps."
         )
         assert val_batch_size % (n_devices * cfg.val_steps) == 0, (
             f"Validation batch size must be divisible by number of devices for proper sharding during validation, got {val_batch_size} batch size, {n_devices} devices, and {cfg.val_steps} val_steps."
+        )
+
+        assert (train_batch_size // cfg.loss_config.inference_config.group_size) % jax.process_count() == 0, (
+            f"Number of groups per step must be divisible by number of hosts for proper distribution of groups, got {train_batch_size} train batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
+        )
+        assert (val_batch_size // cfg.loss_config.inference_config.group_size) % jax.process_count() == 0, (
+            f"Number of groups per validation step must be divisible by number of hosts for proper distribution of groups, got {val_batch_size} val batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
         )
 
     @partial(setup, component="initialized state")
@@ -167,7 +180,7 @@ class Trainer:
         abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx, abstract=True)
         params_shape, opt_state_shape = abstract_state["params"], abstract_state["opt_state"]
 
-        step_fn = get_single_step(self.config.loss_config.rl_config)
+        step_fn = get_single_step(self.config.loss_config)
 
         # val fn not needed since we just care about val reward, not loss
         train_fn, _val_fn, shardings = stax.fn.get_steps_fn(
@@ -227,10 +240,10 @@ class Trainer:
     @partial(setup, component="dataset")
     def _setup_dataset(self):
         self.train_n_prompts: int = self.config.data_config.train_config.batch_size // (
-            self.config.loss_config.inference_config.group_size * self.n_hosts
+            self.config.loss_config.inference_config.group_size
         )
         self.val_n_prompts: int = self.config.data_config.val_config.batch_size // (
-            self.config.loss_config.inference_config.group_size * self.n_hosts
+            self.config.loss_config.inference_config.group_size
         )
 
         max_seq_length = self.config.loss_config.inference_config.max_seq_len
@@ -438,14 +451,6 @@ class Trainer:
             generations = self.inference_engine(prompts, self.key(), {"params": self.params})
             train_batch, train_data_metrics = self.train_dataset.prepare_batch(samples, generations, train=True)
 
-            for key in generations.metrics:
-                logger.info(f"{key}: {generations.metrics[key]}")
-            for key in train_data_metrics:
-                logger.info(f"{key}: {train_data_metrics[key]}")
-
-            import sys
-
-            sys.exit(0)
             out = self.train_step(self.params, self.opt_state, train_batch)
 
             self.params, self.opt_state = out["params"], out["opt_state"]
@@ -465,14 +470,12 @@ class Trainer:
                 "devices/memory_max": max_mem,
                 "train/lr": self.opt_state[1].hyperparams["learning_rate"],
             }
-
             self.writer(self.global_step, metrics)
-
             self.global_step += 1
 
             # save after you update state since if you want to save every 10 steps
             # you want to save after you have done 10 steps and resume at the 11th step
-            if self.global_step % self.config.checkpoint_interval == 0:
+            if self.global_step % self.config.checkpoint_interval == 0 or self.global_step == self.total_steps:
                 self.save_checkpoint(step=self.global_step, metadata_metrics=metrics)
 
         logger.info("Training complete.")

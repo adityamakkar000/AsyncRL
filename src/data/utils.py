@@ -3,8 +3,7 @@ import os
 from typing import Dict
 
 import gcsfs
-import jax
-import jax.numpy as jnp
+import numpy as np
 from datasets import Dataset
 
 from src.data.config import RLBatch, Sample
@@ -55,16 +54,15 @@ def delete_local_file(local_path: str) -> None:
         os.remove(local_path)
 
 
-@jax.jit
-def compute_aux_metrics(batch: RLBatch) -> Dict[str, jnp.ndarray]:
-    token_mask = batch.reference_model_logprobs != -jnp.inf
+def compute_aux_metrics(batch: RLBatch) -> Dict[str, float]:
+    token_mask = batch.reference_model_logprobs != -np.inf
     return {
-        "mean_reward": jnp.mean(batch.rewards),
-        "std_reward": jnp.std(batch.rewards),
-        "max_reward": jnp.max(batch.rewards),
-        "min_reward": jnp.min(batch.rewards),
-        "mean_length": jnp.mean(token_mask.sum(axis=1)),
-        "median_length": jnp.median(token_mask.sum(axis=1)),
+        "mean_reward": np.mean(batch.rewards).item(),
+        "std_reward": np.std(batch.rewards).item(),
+        "max_reward": np.max(batch.rewards).item(),
+        "min_reward": np.min(batch.rewards).item(),
+        "mean_length": np.mean(token_mask.sum(axis=1)).item(),
+        "median_length": np.median(token_mask.sum(axis=1)).item(),
     }
 
 
