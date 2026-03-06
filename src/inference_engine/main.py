@@ -23,6 +23,9 @@ def apply_prompt_template(text: str) -> str:
 {text}
 Remember to put your answer inside \\boxed{{}}."""
 
+def apply_annealing(text: str, percent: int) -> str:
+    return text[:int(len(text) * percent)]
+
 
 class InferenceEngine:
     """
@@ -250,7 +253,18 @@ class InferenceEngine:
         """Compute the maximum padding length for the input batch based on the sequence lengths and the maximum sequence length."""
         return self.compute_max_power_of_two(jnp.max(seq_lens).item(), self.config.max_seq_len)
 
-    def tokenize(self, texts: list[str]) -> tuple[Array, Array]:
+    def prepare_prompt(self, text: str, annealing_trace: str, annealing_percentage: float) -> str:
+        
+        chat_template = self.tokenizer.apply_chat_template(
+                        [{"role": "user", "content": apply_prompt_template(text)}, {"role": "assistant", "content": ""}],
+                        add_generation_prompt=True,
+                        tokenize=False,
+                        enable_thinking=True)
+
+        annealed_template = apply_annealing(chat_template.split("\n</think>\n")[0], annealing_percentage) + annealing_trace
+        return self.tokenizer.encode(annealed_template, add_special_tokens=False)
+
+    def tokenize(self, texts: list[str], annealing_traces: list[str], annealing_percentages: list[float]) -> tuple[Array, Array]:
         """
         Tokenize the input texts and pad them to the maximum sequence length in the batch.
         Args:
@@ -260,14 +274,8 @@ class InferenceEngine:
             seq_lens (Array): The original sequence lengths before padding. Shape: [batch_size].
         """
 
-        inputs: list[list[int]] = [
-            self.tokenizer.apply_chat_template(
-                [{"role": "user", "content": apply_prompt_template(text)}],
-                add_generation_prompt=True,
-                enable_thinking=True,
-            )
-            for text in texts
-        ]
+        inputs: list[list[int]] = [self.prepare_prompt(text, annealing_trace, annealing_percentage) for text, annealing_trace, annealing_percentage in zip(texts, annealing_traces, annealing_percentages)]
+
         seq_lens = jnp.array([len(x) for x in inputs], dtype=jnp.int32)
         padding_length = max(self.compute_max_padding_length(seq_lens), self.config.intial_sequence_len)
         assert padding_length <= self.config.max_prefill_sequence_len, (
@@ -665,7 +673,8 @@ class InferenceEngine:
             InferenceResults: The results of the inference, containing the output rollouts, optionally the detokenized output strings, and any collected metrics.
         """
         key, params = self.multihost_prep(key, params)
-        inp_tokens, seq_lens = self.tokenize(prompts)
+        # TODO: add annleaing directly when the inference engine is called in the trainer
+        inp_tokens, seq_lens = self.tokenize(prompts, annealing_traces=["test_trace" * len(prompts)], annealing_percentages=[0.5] * len(prompts))
         output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
         output_strs = self.detokenizer(output_rollouts)
         sync_global_devices("inference_engine_sync")
