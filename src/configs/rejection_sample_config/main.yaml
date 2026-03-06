@@ -6,3 +6,5 @@ defaults:
 datasets:
   - "aime_2025"
 num_samples: 10
+pass_at: 10
+hf_model_name: "hf"
