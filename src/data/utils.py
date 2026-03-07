@@ -66,3 +66,20 @@ def compute_aux_metrics(batch: RLBatch) -> Dict[str, jnp.ndarray]:
         "mean_length": jnp.mean(token_mask.sum(axis=1)),
         "median_length": jnp.median(token_mask.sum(axis=1)),
     }
+
+
+def filter_rejection_sampled_data(
+    gcs_path: str, lower_bound: float | None = None, upper_bound: float | None = None
+) -> list[dict]:
+    assert lower_bound is not None or upper_bound is not None, (
+        "At least one of lower_bound or upper_bound must be provided"
+    )
+
+    rows = load_jsonl_from_gcs(gcs_path)
+    if lower_bound is not None:
+        rows = [row for row in rows if row.get("pass_score", 0) >= lower_bound]
+    if upper_bound is not None:
+        rows = [row for row in rows if row.get("pass_score", 0) <= upper_bound]
+
+    rows = sorted(rows, key=lambda x: x.get("pass_score", 0), reverse=True)
+    return rows

@@ -1,4 +1,5 @@
 import asyncio
+from threading import Semaphore
 
 from loguru import logger
 
@@ -9,12 +10,15 @@ from src.data.verifier import Verifier, VerifierInput
 from src.rejection_sampling.config import RejectionSingleSample
 from src.vllm_engine.main import vLLMEngine
 
+MAX_CONNECTIONS = 200
+
 
 class RejectionSample:
     def __init__(self, config):
         self.config = config
         self.vllm_engine = vLLMEngine(config.vllm_config)
         self.verifier = Verifier()
+        self.rejection_semaphore = Semaphore(MAX_CONNECTIONS)
 
         self.check_config()
         self.num_samples = config.num_samples
@@ -48,14 +52,15 @@ class RejectionSample:
 
     async def generate_completions(self, prompt: str) -> list[str]:
         """Calls the vLLM server to generate completions for a given prompt."""
-        response = await self.vllm_engine.client.completions.create(
-            model=self.config.model_name,
-            prompt=prompt,
-            max_tokens=self.config.vllm_config.max_tokens,
-            temperature=self.config.temperature,
-            n=self.config.pass_at,
-        )
-        return [choice.text for choice in response.choices]
+        with self.rejection_semaphore:
+            response = await self.vllm_engine.client.completions.create(
+                model=self.config.model_name,
+                prompt=prompt,
+                max_tokens=self.config.vllm_config.max_tokens,
+                temperature=self.config.temperature,
+                n=self.config.pass_at,
+            )
+            return [choice.text for choice in response.choices]
 
     async def pass_at_k(self, sample: Sample) -> RejectionSingleSample:
         """Generates num_samples completions for the given sample and returns a RejectionSingleSample with the pass score."""
