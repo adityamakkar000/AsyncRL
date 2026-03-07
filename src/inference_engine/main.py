@@ -223,9 +223,7 @@ class InferenceEngine:
                     stop_mask=jnp.zeros((self.decode_size, 1), dtype=bool),
                     end_of_think=jnp.zeros((self.decode_size, 1), dtype=bool),
                     out_tokens=jnp.ones((self.decode_size, self.max_attention_length), dtype=jnp.int32),
-                    out_logprobs=jnp.zeros(
-                        (self.decode_size, self.max_attention_length), dtype=self.model.activation_dtype
-                    ),
+                    out_logprobs=jnp.zeros((self.decode_size, self.max_attention_length), dtype=jnp.float32),
                 )
                 return state
 
@@ -349,19 +347,19 @@ class InferenceEngine:
                 length=self.max_attention_length,
                 dtype=self.config.kv_cache_dtype,
                 sharding=KVCache(
-                    k=self.shardings.replicate_sharding,
-                    v=self.shardings.replicate_sharding,
-                    length=self.shardings.replicate_sharding,
+                    k=self.shardings.replicate_sharding,  # type: ignore
+                    v=self.shardings.replicate_sharding,  # type: ignore
+                    length=self.shardings.replicate_sharding,  # type: ignore
                 ),
             )
             logits, out_cache = self.model.apply(
                 params, x=input_tokens[:, :-1], sequence_lens=seq_lens - 1, kv_cache=kv_cache
             )
             out_tokens = jnp.ones((1, self.max_attention_length), dtype=jnp.int32) * self.tokenizer.eos_token_id
-            out_logprobs = jnp.zeros((1, self.max_attention_length), dtype=self.model.activation_dtype)
+            out_logprobs = jnp.zeros((1, self.max_attention_length), dtype=jnp.float32)
             out_tokens = jax.lax.dynamic_update_slice_in_dim(out_tokens, input_tokens, 0, axis=1)
             out_logprobs = jax.lax.dynamic_update_slice_in_dim(
-                out_logprobs, -jnp.inf * jnp.ones_like(input_tokens, dtype=self.model.activation_dtype), 0, axis=1
+                out_logprobs, -jnp.inf * jnp.ones_like(input_tokens, dtype=jnp.float32), 0, axis=1
             )
 
         def bc_to_decode(x: Array) -> Array:
@@ -550,7 +548,6 @@ class InferenceEngine:
             # we manually do prefill on each step instead of reusing
             # since then we do not need to keep a copy of a kv cache
             # prefill is very fast and so this save 2x memory
-            # self._log_prefill_input_signatures(f"rollout_group_step{step}", x, seq_lens, params, prefill_key)
             state, prefill_metrics = self.prefill_step(x, seq_lens, params, prefill_key)
             output_tokens, output_logprobs, decode_metrics = self.single_rollout(state, params)
 

@@ -63,6 +63,3 @@ def top_k_sampling_kernel(logits: Array, key: Array, *, temperature: float, top_
     next_tokens = jax.random.categorical(key, logits, axis=-1)[:, None]
     next_logprobbs = jnp.take_along_axis(logits, next_tokens, axis=-1)
     return next_tokens, next_logprobbs
-
-
-def top_p_sampling_kernel(): ...

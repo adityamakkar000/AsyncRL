@@ -7,10 +7,12 @@ import jax
 import optax
 import stax
 from dotenv import load_dotenv
+from einops import rearrange
 from jax.experimental.multihost_utils import sync_global_devices
 from jaxtyping import Array, PyTree
 from omegaconf import DictConfig, OmegaConf
 from stax import staxLogger as logger
+from stax.utils import metrics_all_reduce
 
 from src.constants import CHECKPOINTS, GS_BUCKET
 from src.data import DataLoader, RLBatch
@@ -106,11 +108,12 @@ class Trainer:
                 "Single sharding type does not support distributed training across multiple hosts."
             )
 
-        assert train_batch_size % (n_devices * cfg.grad_accum_steps) == 0, (
-            f"Train batch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation, got {train_batch_size} batch size, {n_devices} devices, and {cfg.grad_accum_steps} grad_accum_steps."
+        ppo_minibatch_size = cfg.loss_config.rl_config.ppo_minibatch_size
+        assert train_batch_size % ppo_minibatch_size == 0, (
+            f"Train batch size must be divisible by PPO minibatch size for proper PPO updates, got {train_batch_size} batch size and {ppo_minibatch_size} PPO minibatch size."
         )
-        assert val_batch_size % (n_devices * cfg.val_steps) == 0, (
-            f"Validation batch size must be divisible by number of devices for proper sharding during validation, got {val_batch_size} batch size, {n_devices} devices, and {cfg.val_steps} val_steps."
+        assert ppo_minibatch_size % (n_devices * cfg.grad_accum_steps) == 0, (
+            f"PPO minibatch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation, got {ppo_minibatch_size} PPO minibatch size, {n_devices} devices, and {cfg.grad_accum_steps} grad_accum_steps."
         )
 
         assert (train_batch_size // cfg.loss_config.inference_config.group_size) % jax.process_count() == 0, (
@@ -203,6 +206,11 @@ class Trainer:
 
         self.params_sharding, self.opt_state_sharding = shardings.param_sharding, shardings.opt_state_sharding
 
+        train_batch_size = self.config.data_config.train_config.batch_size
+        ppo_minibatch_size = self.config.loss_config.rl_config.ppo_minibatch_size
+        ppo_k_steps = train_batch_size // ppo_minibatch_size
+        grad_accum_steps = self.config.grad_accum_steps
+
         def train_step(params: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
             """
             Takes single step and implments PPO-k loss (k steps off-policy)
@@ -219,14 +227,28 @@ class Trainer:
                 "params": params,
                 "opt_state": opt_state,
             }
-            reshaped_batch = jax.tree.map(
-                lambda x: x.reshape(
-                    self.config.grad_accum_steps, x.shape[0] // self.config.grad_accum_steps, *x.shape[1:]
-                ),
-                batch,
+
+            global_batch = shardings.shard_data(batch)  # [train_batch_size, T]
+            perm = jax.random.permutation(self.key(), train_batch_size)
+            global_batch_shuffled = jax.tree.map(lambda x: x[perm], global_batch)
+
+            ppo_global_batch = jax.tree.map(
+                lambda x: rearrange(
+                    x,
+                    "(b g k) ... -> k g b ...",
+                    b=ppo_minibatch_size // grad_accum_steps,
+                    g=grad_accum_steps,
+                    k=ppo_k_steps,
+                ),  # [ppo_steps, grad_accum_steps, ppo_minibatch_size // grad_accum_steps, T]
+                global_batch_shuffled,
             )
-            for step in range(self.config.loss_config.grad_steps):
-                out = train_fn(out["params"], out["opt_state"], reshaped_batch)
+
+            for step in range(ppo_k_steps):
+                current_batch = jax.tree.map(
+                    lambda x: x[step],  # [grad_accum_steps, ppo_minibatch_size // grad_accum_steps, T]
+                    ppo_global_batch,
+                )
+                out = train_fn(out["params"], out["opt_state"], current_batch)
                 aux_metrics |= {f"{k}_step_{step}": v for k, v in out["metrics"].items()}
 
             return {
@@ -324,6 +346,8 @@ class Trainer:
         }
         if self.config.weight_decay is not None and self.config.optimizer == "adamw":
             optimizer_args["weight_decay"] = self.config.weight_decay
+        if self.config.optimizer == "adam" or self.config.optimizer == "adamw":
+            optimizer_args["mu_dtype"] = "float32"
         self.tx = optax.chain(
             clip,
             optax.inject_hyperparams(optimizer)(
@@ -454,7 +478,7 @@ class Trainer:
             out = self.train_step(self.params, self.opt_state, train_batch)
 
             self.params, self.opt_state = out["params"], out["opt_state"]
-            metrics = out["metrics"] | generations.metrics | train_data_metrics
+            metrics = out["metrics"] | metrics_all_reduce(generations.metrics) | metrics_all_reduce(train_data_metrics)
 
             if self.global_step % self.config.val_interval == 0:
                 val_samples = self.val_dataset(num_prompts=self.val_n_prompts)

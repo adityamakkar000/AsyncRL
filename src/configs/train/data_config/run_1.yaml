@@ -1,5 +1,5 @@
 defaults:
-  - datasets@train_config: omnimath_debug_250_500
+  - datasets@train_config: omnimath_debug_1500_1750
   - datasets@val_config: aime
   - _self_
 

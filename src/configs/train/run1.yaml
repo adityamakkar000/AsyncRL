@@ -6,7 +6,7 @@ defaults:
   - loss_config: loss
   - _self_
 
-grad_accum_steps: 4
+grad_accum_steps: 1
 val_steps: 1
 seed: 0
 num_steps: 1000
@@ -35,16 +35,21 @@ wandb_config:
 # prompts = 64 / 8 = 8
 data_config:
   train_config:
-    batch_size: 64
+    batch_size: 512
   val_config:
-    batch_size: 64 
+    batch_size: 512
 loss_config:
   inference_config:
     max_seq_len: 16384
     batch_size: 2
+    n_replicas: 4
     group_size: 8
-    temperature: 0.7
-
+    temperature: 1.0
+  rl_config:
+    algorithm: cispo
+    epsilon_high: 0.25
+    epsilon_low: 0.18
+  grad_steps: 4
 
 metrics_to_log:
   - "train/loss"

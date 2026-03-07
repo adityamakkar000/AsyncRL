@@ -28,10 +28,23 @@ checkpoint_interval: 5
 best_metric: null
 max_checkpoints_to_keep: 1
 
-wandb_config: 
-  project: "Debug"
-  notes: null
-  tags: null
+wandb_config: null
+
+data_config:
+  train_config:
+    batch_size: 8
+  val_config:
+    batch_size: 8
+loss_config:
+  inference_config:
+    max_seq_len: 1024
+    batch_size: 2
+    n_replicas: 4
+    group_size: 8
+    temperature: 0.7
+    precompile: false
+  rl_config:
+    ppo_minibatch_size: 8
 
 metrics_to_log:
   - "train/loss"

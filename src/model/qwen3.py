@@ -295,7 +295,7 @@ class Qwen3(nn.Module):
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)
 
         # logits = embed_layer.attend(x)
-        logits = nn.Dense(features=self.vocab_size, use_bias=False, dtype=self.activation_dtype)(x)
+        logits = nn.Dense(features=self.vocab_size, use_bias=False, dtype=jnp.float32)(x)
         return logits, out_cache
 
     @classmethod

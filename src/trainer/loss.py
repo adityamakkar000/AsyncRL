@@ -12,36 +12,6 @@ from src.model import Model
 
 from .config import LossConfig, LossFunction
 
-
-def compute_clipped_objective(
-    token_logprobs: Array,
-    reference_logprobs: Array,
-    advantages: Array,
-    epsilon_low: float,
-    epsilon_high: float,
-) -> Array:
-    """Compute the PPO-clipped surrogate objective.
-
-    Args:
-        token_logprobs: Log probabilities of the current policy. Shape: [B, T-1].
-        reference_logprobs: Log probabilities of the reference policy. Shape: [B, T].
-        advantages: Advantage estimates for each sequence. Shape: [B].
-        epsilon_low: Clipping parameter for negative advantages.
-        epsilon_high: Clipping parameter for positive advantages.
-    Returns:
-        clipped_objective: min(ratio * A, clip(ratio) * A). Shape [B, T-1].
-    """
-    reference_logprobs = reference_logprobs[:, 1:]
-    safe_reference_logprobs = jnp.where(jnp.isfinite(reference_logprobs), reference_logprobs, 0.0)
-    ratio = jnp.exp(token_logprobs - safe_reference_logprobs)
-    clipped_ratio = jnp.clip(ratio, 1.0 - epsilon_low, 1.0 + epsilon_high)
-
-    adv = advantages[:, None]
-    clipped_objective = jnp.minimum(ratio * adv, clipped_ratio * adv)
-
-    return clipped_objective
-
-
 ALGO_FN = Callable[[Array, Array, RLBatch, LossConfig], Array]
 GLOBAL_DICT: dict[str, ALGO_FN] = {}
 
@@ -56,48 +26,23 @@ def register_algorithim(name: str) -> Callable[[ALGO_FN], ALGO_FN]:
     return decorator
 
 
-@register_algorithim("grpo")
-def grpo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: LossConfig) -> Array:
-    """GRPO loss (https://arxiv.org/pdf/2412.19437)."""
-    advantages = (batch.rewards - batch.group_mean) / batch.group_std
-    logger.info("GRPO uses only epsilon-low for clipping ")
-    clipped_objective = compute_clipped_objective(
-        x_logprobs,
-        batch.reference_model_logprobs,
-        advantages,
-        config.rl_config.epsilon_low,
-        config.rl_config.epsilon_low,
-    )
-    per_seq_loss = jnp.sum(clipped_objective * token_mask, axis=1) / jnp.sum(token_mask, axis=1)
-    return jnp.mean(per_seq_loss)
+@register_algorithim("cispo")
+def cispo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: LossConfig) -> Array:
+    """CISPO loss (https://arxiv.org/pdf/2506.13585)"""
 
-
-@register_algorithim("dr_grpo")
-def dr_grpo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: LossConfig) -> Array:
-    """DR-GRPO loss (https://arxiv.org/pdf/2503.20783)."""
     advantages = batch.rewards - batch.group_mean
-    # dr_grpo uses same clipping for positive and negative advantages, handled upstream by setting epsilon_low = epsilon_high
-    # logger.info("Dr GRPO uses only epsilon-low for clipping ")
-    clipped_objective = compute_clipped_objective(
-        x_logprobs, batch.reference_model_logprobs, advantages, config.epsilon_low, config.epsilon_high
-    )
-    per_seq_loss = jnp.sum(clipped_objective * token_mask, axis=1)
-    return jnp.mean(per_seq_loss)
 
+    reference_logprobs = batch.reference_model_logprobs[:, 1:]
+    reference_logprobs = jnp.where(jnp.isfinite(reference_logprobs), reference_logprobs, 0.0)
+    ratio = jnp.exp(x_logprobs - reference_logprobs)
+    logger.info("CISPO uses only epsilon-high for clipping ")
+    min_ratio = jax.lax.stop_gradient(jnp.minimum(ratio, config.rl_config.epsilon_high))
 
-@register_algorithim("dapo")
-def dapo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: LossConfig) -> Array:
-    """DAPO loss (https://arxiv.org/pdf/2503.14476)."""
-    advantages = (batch.rewards - batch.group_mean) / batch.group_std
-    clipped_objective = compute_clipped_objective(
-        x_logprobs,
-        batch.reference_model_logprobs,
-        advantages,
-        config.rl_config.epsilon_low,
-        config.rl_config.epsilon_high,
-    )
-    per_seq_loss = jnp.sum(clipped_objective * token_mask, axis=1)
-    return per_seq_loss.mean() / token_mask.sum()
+    token_loss = advantages[:, None] * min_ratio * x_logprobs * token_mask
+    total_tokens = jnp.sum(token_mask)
+    token_loss = jnp.sum(token_loss) / total_tokens
+
+    return token_loss
 
 
 @register_algorithim("rloo")
@@ -108,8 +53,10 @@ def rloo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: Loss
     loo_mean = (G * batch.group_mean - batch.rewards) / (G - 1)
     advantages = batch.rewards - loo_mean
 
-    per_seq_logprobs = jnp.sum(x_logprobs * token_mask, axis=1)
-    return jnp.mean(advantages * per_seq_logprobs)
+    token_sum = jnp.sum(x_logprobs * token_mask * advantages[:, None], axis=1)
+    seq_mean = token_sum.mean()
+
+    return seq_mean
 
 
 def get_loss_fn(config: LossConfig) -> LossFunction:
@@ -134,6 +81,7 @@ def get_single_step(config: LossConfig) -> StepFn:
         x_logits, kv_cache = model.apply(
             {"params": params}, x=batch.tokens, sequence_lens=batch.seq_lens, kv_cache=None
         )
+
         x_logprobs = jax.nn.log_softmax(x_logits)
         x_logprobs: Array = jnp.take_along_axis(x_logprobs[:, :-1, :], batch.tokens[:, 1:, None], axis=-1).squeeze(-1)
         token_mask = batch.reference_model_logprobs[:, 1:] != -jnp.inf

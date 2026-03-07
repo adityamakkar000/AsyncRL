@@ -88,6 +88,21 @@ def load_omnimath_debug_500_750() -> list[Sample]:
     return samples
 
 
+@register_dataset("omnimath_debug_1500_1750")
+def load_omnimath_debug_1500_1750() -> list[Sample]:
+    """omnimath with the 1500-1750 problems sorted by difficulty"""
+
+    ds = load_dataset("KbsdJames/Omni-MATH", split="test")
+    ds_sorted = ds.sort("difficulty")[1500:1750]
+
+    samples = [
+        Sample(prompt=ds_sorted["problem"][i], answer=ds_sorted["answer"][i], solution=ds_sorted["solution"][i])
+        for i in range(250)
+    ]
+    ds.cleanup_cache_files()
+    return samples
+
+
 @register_dataset("gsm8k")
 def load_gsm8k() -> list[Sample]:
     ds = load_dataset("openai/gsm8k", "main", split="test")

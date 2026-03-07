@@ -1,5 +1,5 @@
 defaults:
-  - rl_config: dr_grpo
+  - rl_config: cispo
   - inference_config: main
   - _self_
 
