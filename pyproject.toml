@@ -20,6 +20,7 @@ dependencies = [
     "torch>=2.9.0",
     "transformers>=4.57.3",
     "datasets>=4.5.0",
+    "openai>=2.21.0",
 ]
 
 [project.optional-dependencies]

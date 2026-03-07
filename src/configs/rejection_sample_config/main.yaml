@@ -5,6 +5,8 @@ defaults:
 
 datasets:
   - "aime_2025"
+gcs_paths:
+  - "gs://arl-experiments/data/rejection_samples/aime_2025_10_samples"
 num_samples: 10
 pass_at: 10
 hf_model_name: "hf"

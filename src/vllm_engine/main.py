@@ -3,6 +3,7 @@ import subprocess
 import time
 
 from loguru import logger
+from openai import AsyncOpenAI
 
 from src.constants import GPU_MEMORY_UTILIZATION, IP, PORT, SERVED_MODEL_NAME, VLLM_SERVER_TIMEOUT
 
@@ -15,6 +16,9 @@ class vLLMEngine:
         self.config = config
         self.debug = debug
         self.vllm_process = None
+        self.client = AsyncOpenAI(
+            base_url=f"http://{IP}:{PORT}/v1",
+        )
         self.check_config()
 
     def check_config(self):

@@ -23,11 +23,16 @@ class RejectionSingleSample:
 
         return cls(prompt=prompt, answer=answer, solution=solution, pass_score=pass_score)
 
+    def get_dict(self) -> dict:
+        return {"prompt": self.prompt, "answer": self.answer, "solution": self.solution, "pass_score": self.pass_score}
+
 
 @dataclass
 class rejectionSamplingConfig:
     datasets: list[str] = MISSING
+    gcs_paths: list[str] = MISSING
     vllm_config: vLLMConfig = field(default_factory=vLLMConfig)
     num_samples: int = MISSING
     pass_at: int = MISSING
     hf_model_name: str = MISSING
+    temperature: float = MISSING
