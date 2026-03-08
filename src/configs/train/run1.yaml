@@ -10,7 +10,7 @@ grad_accum_steps: 1
 val_steps: 1
 seed: 0
 num_steps: 1000
-val_interval: 50
+val_interval: 25
 
 optimizer: "adamw"
 weight_decay: 0.01
@@ -23,7 +23,7 @@ warmup_steps: 0.1
 decay_steps: 0.9
 
 spot_training: true 
-checkpoint_interval: 50
+checkpoint_interval: 25
 best_metric: null
 max_checkpoints_to_keep: 5
 
@@ -44,12 +44,13 @@ loss_config:
     batch_size: 2
     n_replicas: 4
     group_size: 8
-    temperature: 1.0
+    temperature: 0.6
+    reasoning_budget: 14336
   rl_config:
     algorithm: cispo
-    epsilon_high: 0.25
-    epsilon_low: 0.18
-  grad_steps: 4
+    epsilon_high: 4
+    epsilon_low: 4
+  grad_steps: 1
 
 metrics_to_log:
   - "train/loss"

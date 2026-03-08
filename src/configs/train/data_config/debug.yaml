@@ -1,6 +1,6 @@
 defaults:
-  - datasets@train_config: omnimath_debug_1k
-  - datasets@val_config: omnimath_debug_1k
+  - datasets@train_config: gsm8k_hard_256
+  - datasets@val_config: gsm8k_hard_256
   - _self_
 
 train_config:

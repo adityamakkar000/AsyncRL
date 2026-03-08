@@ -261,7 +261,7 @@ class InferenceEngine:
             self.tokenizer.apply_chat_template(
                 [{"role": "user", "content": apply_prompt_template(text)}],
                 add_generation_prompt=True,
-                enable_thinking=True,
+                enable_thinking=False,
             )
             for text in texts
         ]
@@ -515,7 +515,7 @@ class InferenceEngine:
         }
 
         logger.info(
-            f"Inferenced {decode_metrics['total_decode_tokens']} tokens in {decode_metrics['total_time']:.2f} seconds ({decode_metrics['tps']:.2f} tps, {decode_metrics['sps']:.2f} sps)"
+            f"Inferenced {decode_metrics['decode_steps']} tokens in {decode_metrics['total_time']:.2f} seconds ({decode_metrics['tps']:.2f} tps, {decode_metrics['sps']:.2f} sps)"
         )
         return (
             out_tokens,
@@ -592,21 +592,20 @@ class InferenceEngine:
             batch_tokens, seq_lens, params, key
         )
 
-        with Tracker(timer=True) as t:
-            for i in range(B):
-                batch_key = jax.random.fold_in(key_sharded, i)
-                # batch_key = key_sharded
-                batch_output, batch_metrics = self.rollout_group(
-                    jax.lax.dynamic_index_in_dim(x_batch_sharded, i, axis=0),
-                    jax.lax.dynamic_index_in_dim(seq_lens_sharded, i, axis=0),
-                    params_sharded,
-                    batch_key,
-                )
-                output.append(batch_output)
-                metrics.append(batch_metrics)
+        for i in range(B):
+            batch_key = jax.random.fold_in(key_sharded, i)
+            # batch_key = key_sharded
+            batch_output, batch_metrics = self.rollout_group(
+                jax.lax.dynamic_index_in_dim(x_batch_sharded, i, axis=0),
+                jax.lax.dynamic_index_in_dim(seq_lens_sharded, i, axis=0),
+                params_sharded,
+                batch_key,
+            )
+            output.append(batch_output)
+            metrics.append(batch_metrics)
 
-        metrics: dict[str, float] = jax.tree.map(lambda *x: sum(x) / len(x), *metrics) | {"total_time": t.data["time"]}
-        metrics = {f"inference_metrics/{k}": v for k, v in metrics.items()}
+        metrics: dict[str, float] = jax.tree.map(lambda *x: sum(x) / len(x), *metrics)
+
         return self.cleanup_rollouts(output), metrics
 
     def multihost_prep(self, key: Array, params: PyTree) -> tuple[Array, PyTree]:
@@ -634,14 +633,16 @@ class InferenceEngine:
         Returns:
             InferenceResults: The results of the inference, containing the output rollouts, optionally the detokenized output strings, and any collected metrics.
         """
-
-        key, params = self.multihost_prep(key, params)
-        inp_tokens, seq_lens = self.tokenize(prompts)
-        # use inference engine mesh context not STAX context
-        with jax.set_mesh(self.shardings.mesh):
-            output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
-        output_strs = self.detokenizer(output_rollouts)
-        sync_global_devices("inference_engine_sync")
+        with Tracker(timer=True) as t:
+            key, params = self.multihost_prep(key, params)
+            inp_tokens, seq_lens = self.tokenize(prompts)
+            # use inference engine mesh context not STAX context
+            with jax.set_mesh(self.shardings.mesh):
+                output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
+            output_strs = self.detokenizer(output_rollouts)
+            sync_global_devices("inference_engine_sync")
+        metrics |= {"total_inference_time": t.data["time"]}
+        metrics = {f"inference_metrics/{k}": v for k, v in metrics.items()}
         return InferenceResults(rollouts=output_rollouts, output_strs=output_strs, metrics=metrics)
 
     @property

@@ -123,6 +123,29 @@ def load_gsm8k() -> list[Sample]:
     return samples
 
 
+@register_dataset("gsm8k_hard_256")
+def load_gsm8k_hard_256() -> list[Sample]:
+    ds = load_dataset("openai/gsm8k", "main", split="test")
+    ds = ds.add_column("len_solution", [len(solution) for solution in ds["answer"]])
+    ds_sorted = ds.sort("len_solution", reverse=True)
+
+    def get_answer(answer: str) -> str:
+        """
+        Answers are of the form '... #### 15'
+        So we seperate, take the last part after the # and strip whitespace to get the answer.
+        """
+        return answer.split("#")[-1].strip()
+
+    samples = [
+        Sample(
+            prompt=ds_sorted["question"][i], answer=get_answer(ds_sorted["answer"][i]), solution=ds_sorted["answer"][i]
+        )
+        for i in range(256)
+    ]
+    ds.cleanup_cache_files()
+    return samples
+
+
 @register_dataset("aime")
 def load_aime() -> list[Sample]:
     ds_2024 = load_dataset("Maxwell-Jia/AIME_2024")["train"]

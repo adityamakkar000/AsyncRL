@@ -346,6 +346,7 @@ class Trainer:
         }
         if self.config.weight_decay is not None and self.config.optimizer == "adamw":
             optimizer_args["weight_decay"] = self.config.weight_decay
+            optimizer_args["eps"] = 1e-15
         if self.config.optimizer == "adam" or self.config.optimizer == "adamw":
             optimizer_args["mu_dtype"] = "float32"
         self.tx = optax.chain(

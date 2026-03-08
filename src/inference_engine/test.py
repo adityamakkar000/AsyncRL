@@ -44,14 +44,14 @@ config = InferenceConfig(
     temperature=0.7,
     top_p=None,
     top_k=None,
-    max_seq_len=512,
+    max_seq_len=8192,
     intial_sequence_len=64,
     max_prefill_sequence_len=512,
     batch_size=bs,
     n_replicas=r,
     group_size=bs * r,
     kv_cache_dtype="bfloat16",
-    precompile=True,
+    precompile=False,
     reasoning_budget=None,
 )
 

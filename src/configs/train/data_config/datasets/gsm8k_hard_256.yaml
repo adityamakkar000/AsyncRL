@@ -1,0 +1,2 @@
+name: gsm8k_hard_256
+gcs_path: gs://arl-experiments/data/gsm8k_hard_256

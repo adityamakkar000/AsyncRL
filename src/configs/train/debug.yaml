@@ -9,15 +9,15 @@ defaults:
 
 grad_accum_steps: 1
 seed: 0
-num_steps: 10
+num_steps: 250
 val_steps: 1
-val_interval: 5
+val_interval: 10
 
 optimizer: "adamw"
 weight_decay: 0.01
 grad_clip: 1.0
 
-learning_rate_init: 1e-4
+learning_rate_init: 1e-5
 learning_rate_peak: 1e-5
 learning_rate_end: 1e-5
 warmup_steps: 0.0
@@ -28,23 +28,27 @@ checkpoint_interval: 5
 best_metric: null
 max_checkpoints_to_keep: 1
 
-wandb_config: null
+wandb_config: 
+  project: "Debug"
+  notes: null
+  tags: null
 
 data_config:
   train_config:
-    batch_size: 8
+    batch_size: 128
   val_config:
-    batch_size: 8
+    batch_size: 128
 loss_config:
   inference_config:
-    max_seq_len: 1024
+    max_seq_len: 16384
     batch_size: 2
     n_replicas: 4
     group_size: 8
     temperature: 0.7
+    reasoning_budget: 6144
     precompile: false
   rl_config:
-    ppo_minibatch_size: 8
+    ppo_minibatch_size: 128
 
 metrics_to_log:
   - "train/loss"
