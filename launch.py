@@ -70,41 +70,21 @@ class Zip:
 # Configuration
 # ---------------------------------------------------------------------------
 
-TPU_CLUSTERS: list[str] = [
-    "node6",
-    "node62",
-    "node40",
-    "node43",
-    "node42",
-    "node45",
-    "node44",
-    "node46",
-    "node34",
-    "node35",
-    "node36",
-    "node32",
-    "node38",
-    "node39",
-    "node20",
-    "node18",
-    "node19",
-    "node16",
-]
+TPU_CLUSTERS: list[str] = ["node27", "node26", "node25", "node24"]
 
 BASE_CONFIG: str = "run1"
-EXPERIMENT_PREFIX: str = "day3"
+EXPERIMENT_PREFIX: str = "nothink"
 
-lrs = [3e-6, 1e-6, 5e-7]
-minbatch_size = [512, 128, 64]
-grad_steps = [8, 2, 1]
-dataset = ["omnimath_debug_250_500", "omnimath_debug_1500_1750"]
-algo = ["cispo"]
+lrs = [3e-6, 3e-7]
+minbatch_size = [512]
+grad_steps = [8]
+dataset = ["omnimath_debug_1500_1750"]
+algo = ["rloo", "cispo"]
 
 SWEEP: Cross | Zip | Vals = Cross(
     [
         Zip(
             [
-                Vals("learning_rate_init", lrs),
                 Vals("learning_rate_peak", lrs),
                 Vals("learning_rate_end", lrs),
             ]
@@ -138,9 +118,7 @@ def make_name(combo: dict[str, Any]) -> str:
     for path, val in combo.items():
         short = path.split(".")[-1][:10]
         parts.append(f"{short}{val:g}" if isinstance(val, float) else f"{short}{val}")
-    name_str = "_".join(parts)
-    final_name = str(abs(hash(name_str)))
-    return final_name
+    return "_".join(parts)
 
 
 def mesh_cmd(cluster: str, combo: dict[str, Any]) -> list[str]:

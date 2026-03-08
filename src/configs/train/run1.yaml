@@ -1,7 +1,7 @@
 defaults:
   - base 
   - data_config: run_1
-  - model_config: qwen_1.7b
+  - model_config: qwen_4b
   - sharding_config: fsdp
   - loss_config: loss
   - _self_
@@ -16,10 +16,10 @@ optimizer: "adamw"
 weight_decay: 0.01
 grad_clip: 1.0
 
-learning_rate_init: 1e-5
+learning_rate_init: 0
 learning_rate_peak: 1e-5
 learning_rate_end: 1e-5
-warmup_steps: 0.1
+warmup_steps: 0.01
 decay_steps: 0.9
 
 spot_training: true 
@@ -32,7 +32,7 @@ wandb_config:
   notes: null
   tags: null
 
-# prompts = 64 / 8 = 8
+# prompts = 512 / 16 = 32
 data_config:
   train_config:
     batch_size: 512
@@ -41,11 +41,12 @@ data_config:
 loss_config:
   inference_config:
     max_seq_len: 16384
-    batch_size: 2
+    batch_size: 4
     n_replicas: 4
-    group_size: 8
-    temperature: 0.6
-    reasoning_budget: 14336
+    group_size: 16
+    temperature: 1.0
+    reasoning_budget: null
+    think_mode: false
   rl_config:
     algorithm: cispo
     epsilon_high: 4
