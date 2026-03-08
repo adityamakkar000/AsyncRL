@@ -79,6 +79,10 @@ class InferenceEngine:
             assert self.config.reasoning_budget <= (self.config.max_seq_len - answer_tokens), (
                 f"Reasoning budget {self.config.reasoning_budget} must be less than or equal to {self.config.max_seq_len - answer_tokens} to account answer tokens"
             )
+
+        if not self.config.think_mode:
+            assert self.config.reasoning_budget is None, "Reasoning budget should be None when think_mode is disabled"
+
         if self.config.top_k is not None:
             assert self.config.top_k > 0, f"top_k must be positive, got {self.config.top_k}"
 
@@ -261,7 +265,7 @@ class InferenceEngine:
             self.tokenizer.apply_chat_template(
                 [{"role": "user", "content": apply_prompt_template(text)}],
                 add_generation_prompt=True,
-                enable_thinking=False,
+                enable_thinking=self.config.think_mode,
             )
             for text in texts
         ]

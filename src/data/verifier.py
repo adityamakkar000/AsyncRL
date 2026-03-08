@@ -1,6 +1,8 @@
 import re
 from dataclasses import dataclass
 
+from .math_utils import grade_answer_verl
+
 
 @dataclass
 class VerifierInput:
@@ -45,17 +47,25 @@ class Verifier:
 
         return None
 
+    def verl_score(self, solution: str, answer: str) -> float | None:
+        verl_score = grade_answer_verl(solution, answer)
+        if verl_score is None:
+            return None
+        return 1.0 if verl_score else 0.0
+
     def _get_reward(self, solution: str, answer: str) -> float | None:
         solution = self._remove_think(solution)
 
-        parsed_answer = self.extract_boxed_content(solution)
-        if parsed_answer is None:
-            return None
+        return self.verl_score(solution, answer)
 
-        parsed_answer = parsed_answer.strip()
-        answer = answer.strip()
+        # parsed_answer = self.extract_boxed_content(solution)
+        # if parsed_answer is None:
+        #     return None
 
-        return 1.0 if parsed_answer == answer else 0.0
+        # parsed_answer = parsed_answer.strip()
+        # answer = answer.strip()
+
+        # return 1.0 if parsed_answer == answer else 0.0
 
     def __call__(self, input: VerifierInput) -> float | None:
         return self._get_reward(input.solution, input.answer)

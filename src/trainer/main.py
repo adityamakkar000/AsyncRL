@@ -495,7 +495,9 @@ class Trainer:
                 "devices/memory_max": max_mem,
                 "train/lr": self.opt_state[1].hyperparams["learning_rate"],
             }
-            self.writer(self.global_step, metrics)
+
+            generations_to_log = [(g, s.answer) for g, s in zip(generations.output_strs, samples)]
+            self.writer(self.global_step, metrics, generations=generations_to_log)
             self.global_step += 1
 
             # save after you update state since if you want to save every 10 steps

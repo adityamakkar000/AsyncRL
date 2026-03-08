@@ -35,23 +35,25 @@ wandb_config:
 
 data_config:
   train_config:
-    batch_size: 128
+    batch_size: 8
   val_config:
-    batch_size: 128
+    batch_size: 8
 loss_config:
   inference_config:
-    max_seq_len: 16384
+    max_seq_len: 8192
     batch_size: 2
     n_replicas: 4
     group_size: 8
     temperature: 0.7
-    reasoning_budget: 6144
+    reasoning_budget: null
+    think_mode: false
     precompile: false
   rl_config:
-    ppo_minibatch_size: 128
+    ppo_minibatch_size: 8
 
 metrics_to_log:
   - "train/loss"
   - "train/is_ratio_step_0"
   - "train/mean_reward"
   - "val/mean_reward"
+  - "train/num_unparsable"
