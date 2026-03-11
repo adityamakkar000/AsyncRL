@@ -24,8 +24,8 @@ def apply_prompt_template(text: str) -> str:
 Remember to put your answer inside \\boxed{{}}."""
 
 
-def apply_annealing(text: str, percent: int) -> str:
-    return text[: int(len(text) * percent)]
+def apply_annealing(tokens: list[int], percent: float) -> list[int]:
+    return tokens[: int(len(tokens) * percent)]
 
 
 class InferenceEngine:
@@ -254,18 +254,23 @@ class InferenceEngine:
         """Compute the maximum padding length for the input batch based on the sequence lengths and the maximum sequence length."""
         return self.compute_max_power_of_two(jnp.max(seq_lens).item(), self.config.max_seq_len)
 
-    def prepare_prompt(self, text: str, annealing_trace: str, annealing_percentage: float) -> str:
-
+    def prepare_prompt(self, text: str, annealing_trace: str, annealing_percentage: float) -> list[int]:
         chat_template = self.tokenizer.apply_chat_template(
             [{"role": "user", "content": apply_prompt_template(text)}, {"role": "assistant", "content": ""}],
             add_generation_prompt=True,
             tokenize=False,
             enable_thinking=True,
         )
+        template_prefix = chat_template.split("\n</think>\n")[0]
 
-        annealed_template = (
-            apply_annealing(chat_template.split("\n</think>\n")[0], annealing_percentage) + annealing_trace
-        )
+        if not annealing_trace or annealing_percentage <= 0:
+            annealed_trace_str = ""
+        else:
+            trace_tokens = self.tokenizer.encode(annealing_trace, add_special_tokens=False)
+            annealed_trace_tokens = apply_annealing(trace_tokens, annealing_percentage)
+            annealed_trace_str = self.tokenizer.decode(annealed_trace_tokens)
+
+        annealed_template = template_prefix + annealed_trace_str
         return self.tokenizer.encode(annealed_template, add_special_tokens=False)
 
     def tokenize(
@@ -670,21 +675,33 @@ class InferenceEngine:
         params = self.setup_parameters(params)
         return key, params
 
-    def __call__(self, prompts: list[str], key: Array, params: PyTree) -> InferenceResults:
+    def __call__(
+        self,
+        prompts: list[str],
+        key: Array,
+        params: PyTree,
+        *,
+        annealing_rate: float = 0.0,
+        solutions: list[str] | None = None,
+    ) -> InferenceResults:
         """
         Perform inference for the given input prompts, random key, and model parameters.
         Args:
             prompts (list[str]): The list of input prompts to perform inference on.
             key (Array): The random key for any stochastic operations during inference.
             params (PyTree): The model parameters to use for inference.
-            detokenize (bool): Whether to detokenize the output rollouts into strings. Default is False.
+            annealing_rate (float): Fraction of reasoning trace to inject (0 = none, 1 = full). Same for whole batch.
+            solutions (list[str] | None): Per-prompt reasoning traces (e.g. reference solutions). If None, no trace is injected.
         Returns:
             InferenceResults: The results of the inference, containing the output rollouts, optionally the detokenized output strings, and any collected metrics.
         """
         key, params = self.multihost_prep(key, params)
-        # TODO: add annleaing directly when the inference engine is called in the trainer
+        if solutions is None:
+            solutions = [""] * len(prompts)
         inp_tokens, seq_lens = self.tokenize(
-            prompts, annealing_traces=["test_trace" * len(prompts)], annealing_percentages=[0.5] * len(prompts)
+            prompts,
+            annealing_traces=solutions,
+            annealing_percentages=[annealing_rate] * len(prompts),
         )
         output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
         output_strs = self.detokenizer(output_rollouts)
