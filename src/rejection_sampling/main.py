@@ -1,6 +1,3 @@
-import asyncio
-from threading import Semaphore
-
 from loguru import logger
 
 from src.data.config import Sample
@@ -8,9 +5,7 @@ from src.data.register import GLOBAL_DICT
 from src.data.utils import upload_local_file_to_gcs
 from src.data.verifier import Verifier, VerifierInput
 from src.rejection_sampling.config import RejectionSingleSample
-from src.vllm_engine.main import vLLMEngine
-
-MAX_CONNECTIONS = 200
+from src.vllm_engine.main import vLLMEngine, vLLMOutput
 
 
 class RejectionSample:
@@ -18,7 +13,6 @@ class RejectionSample:
         self.config = config
         self.vllm_engine = vLLMEngine(config.vllm_config)
         self.verifier = Verifier()
-        self.rejection_semaphore = Semaphore(MAX_CONNECTIONS)
 
         self.check_config()
         self.num_samples = config.num_samples
@@ -50,32 +44,26 @@ class RejectionSample:
         """Calls the verifier to get the reward for a given prompt and completion."""
         return self.verifier(VerifierInput(completion, reference_answer))
 
-    async def generate_completions(self, prompt: str) -> list[str]:
-        """Calls the vLLM server to generate completions for a given prompt."""
-        with self.rejection_semaphore:
-            response = await self.vllm_engine.client.completions.create(
-                model=self.config.model_name,
-                prompt=prompt,
-                max_tokens=self.config.vllm_config.max_tokens,
-                temperature=self.config.temperature,
-                n=self.config.pass_at,
-            )
-            return [choice.text for choice in response.choices]
-
-    async def pass_at_k(self, sample: Sample) -> RejectionSingleSample:
-        """Generates num_samples completions for the given sample and returns a RejectionSingleSample with the pass score."""
-        completions = await self.generate_completions(sample.prompt)
-
+    def convert_to_rejection_sample(self, sample: Sample, completions: list[str]) -> RejectionSingleSample:
         rewards = [self.get_reward(sample.prompt, c, sample.answer) for c in completions]
         valid_rewards = [r for r in rewards if r is not None]
-        pass_score = sum(r for r in valid_rewards) / len(valid_rewards) if valid_rewards else 0
+        pass_score = sum(valid_rewards) / len(valid_rewards) if valid_rewards else 0
+
         return RejectionSingleSample(
             prompt=sample.prompt, answer=sample.answer, solution=sample.solution, pass_score=pass_score
         )
 
     async def get_samples(self, samples: list[Sample]) -> list[RejectionSingleSample]:
-        rejection_samples = await asyncio.gather(*[self.pass_at_k(sample) for sample in samples])
-        return rejection_samples
+        """Generates num_samples completions for the given sample and returns a RejectionSingleSample with the pass score."""
+        prompts = [sample.prompt for sample in samples]
+        vllm_output: vLLMOutput = await self.vllm_engine.generate_completions(prompts, self.config.max_sequence_len)
+
+        output_samples = []
+
+        for sample, completions in zip(samples, vllm_output.completions):
+            output_samples.append(self.convert_to_rejection_sample(sample, completions))
+
+        return output_samples
 
     def cleanup(self):
         logger.info("Clearning up vLLM engine...")

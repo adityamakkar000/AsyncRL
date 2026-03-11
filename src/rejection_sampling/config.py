@@ -35,4 +35,4 @@ class rejectionSamplingConfig:
     num_samples: int = MISSING
     pass_at: int = MISSING
     hf_model_name: str = MISSING
-    temperature: float = MISSING
+    max_sequence_len: int = MISSING
