@@ -13,7 +13,7 @@ from .utils import format_command, ping_server, terminate_process
 
 
 class vLLMEngine:
-    def __init__(self, config: vLLMConfig, debug: bool = False):
+    def __init__(self, config: vLLMConfig, max_workers: int, debug: bool = False):
         self.config = config
         self.debug = debug
         self.vllm_process = None
@@ -21,7 +21,7 @@ class vLLMEngine:
             base_url=f"http://{IP}:{PORT}/v1",
         )
         self.check_config()
-        self.rejection_semaphore = asyncio.Semaphore(self.config.max_workers)
+        self.rejection_semaphore = asyncio.Semaphore(max_workers)
 
     def check_config(self):
         if isinstance(self.config.max_batched_tokens, str):
@@ -75,20 +75,22 @@ class vLLMEngine:
         end = time.perf_counter()
         logger.info(f"vLLM server is ready in {end - start:.2f} seconds.")
 
-    async def call_vllm(self, prompt: str, max_sequence_len: int) -> list[str]:
+    async def call_vllm(self, prompt: str, max_sequence_len: int, pass_at: int, temperature: float) -> list[str]:
         """Calls the vLLM server to generate completions for a given prompt."""
         async with self.rejection_semaphore:
             response = await self.client.completions.create(
                 model=SERVED_MODEL_NAME,
                 prompt=prompt,
                 max_tokens=max_sequence_len,
-                temperature=self.config.temperature,
-                n=self.config.pass_at,
+                temperature=temperature,
+                n=pass_at,
             )
             return [choice.text for choice in response.choices]
 
-    async def generate_completions(self, prompts: list[str], max_sequence_len: int) -> vLLMOutput:
-        tasks = [self.call_vllm(prompt, max_sequence_len) for prompt in prompts]
+    async def generate_completions(
+        self, prompts: list[str], max_sequence_len: int, pass_at: int, temperature: float
+    ) -> vLLMOutput:
+        tasks = [self.call_vllm(prompt, max_sequence_len, pass_at, temperature) for prompt in prompts]
 
         completion_outputs = await asyncio.gather(*tasks)
 

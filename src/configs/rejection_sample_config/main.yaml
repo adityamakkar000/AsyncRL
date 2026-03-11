@@ -4,9 +4,12 @@ defaults:
   - _self_
 
 datasets:
-  - "aime_2025"
+  - "gs://arl-experiments/data/aime"
 gcs_paths:
   - "gs://arl-experiments/data/rejection_samples/aime_2025_10_samples"
 num_samples: 10
 pass_at: 10
-hf_model_name: "hf"
+max_workers: 200
+temperature: 0.6
+hf_model_name: "Qwen/Qwen3-0.6B"
+max_sequence_len: 2048

@@ -34,5 +34,7 @@ class rejectionSamplingConfig:
     vllm_config: vLLMConfig = field(default_factory=vLLMConfig)
     num_samples: int = MISSING
     pass_at: int = MISSING
+    max_workers: int = MISSING
+    temperature: float = MISSING
     hf_model_name: str = MISSING
     max_sequence_len: int = MISSING

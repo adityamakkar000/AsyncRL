@@ -11,10 +11,11 @@ from src.vllm_engine.main import vLLMEngine, vLLMOutput
 class RejectionSample:
     def __init__(self, config):
         self.config = config
-        self.vllm_engine = vLLMEngine(config.vllm_config)
         self.verifier = Verifier()
 
         self.check_config()
+        self.vllm_engine = vLLMEngine(config.vllm_config, self.config.max_workers)
+
         self.num_samples = config.num_samples
 
     def check_config(self):
@@ -56,7 +57,9 @@ class RejectionSample:
     async def get_samples(self, samples: list[Sample]) -> list[RejectionSingleSample]:
         """Generates num_samples completions for the given sample and returns a RejectionSingleSample with the pass score."""
         prompts = [sample.prompt for sample in samples]
-        vllm_output: vLLMOutput = await self.vllm_engine.generate_completions(prompts, self.config.max_sequence_len)
+        vllm_output: vLLMOutput = await self.vllm_engine.generate_completions(
+            prompts, self.config.max_sequence_len, self.config.pass_at, self.config.temperature
+        )
 
         output_samples = []
 
@@ -71,11 +74,11 @@ class RejectionSample:
 
     async def run(self):
         self.vllm_engine.launch_vllm(self.config.model_name)
-        for dataset, gcs_path in zip(self.config.datasets, self.config.gcs_paths):
-            samples = self.get_dataset(dataset)
-            logger.info(f"Running rejection sampling on {len(samples)} samples from {dataset}...")
+        for dataset_gcs, gcs_path in zip(self.config.datasets, self.config.gcs_paths):
+            samples = self.get_dataset(dataset_gcs)
+            logger.info(f"Running rejection sampling on {len(samples)} samples from {dataset_gcs}...")
 
             rejection_samples = await self.get_samples(samples)
-            self.upload_dataset(rejection_samples, dataset, gcs_path)
+            self.upload_dataset(rejection_samples, dataset_gcs, gcs_path)
 
         self.cleanup()
