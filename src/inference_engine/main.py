@@ -10,6 +10,7 @@ from stax import Tracker
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
+from src.data.config import Sample
 from src.model import KVCache, Model
 
 from .config import InferenceConfig, InferenceResults, InferenceRollout, InferenceShardings, InferenceState
@@ -255,22 +256,31 @@ class InferenceEngine:
         return self.compute_max_power_of_two(jnp.max(seq_lens).item(), self.config.max_seq_len)
 
     def prepare_prompt(self, text: str, annealing_trace: str, annealing_percentage: float) -> list[int]:
-        chat_template = self.tokenizer.apply_chat_template(
+        assert annealing_percentage != -1.0, "Annealing percentage is not set for some samples. This should not happen."
+        
+        annealed_base = self.tokenizer.apply_chat_template(
             [{"role": "user", "content": apply_prompt_template(text)}, {"role": "assistant", "content": ""}],
             add_generation_prompt=True,
             tokenize=False,
             enable_thinking=True,
         )
-        template_prefix = chat_template.split("\n</think>\n")[0]
 
-        if not annealing_trace or annealing_percentage <= 0:
-            annealed_trace_str = ""
+        chat_base = self.tokenizer.apply_chat_template(
+            [{"role": "user", "content": apply_prompt_template(text)}],
+            add_generation_prompt=True,
+            tokenize=False,
+            enable_thinking=True,
+        )
+        
+        if not annealing_trace or annealing_percentage <= 1e-6:
+            annealed_template = chat_base
         else:
+            template_prefix = annealed_base.split("\n</think>\n")[0]
             trace_tokens = self.tokenizer.encode(annealing_trace, add_special_tokens=False)
             annealed_trace_tokens = apply_annealing(trace_tokens, annealing_percentage)
             annealed_trace_str = self.tokenizer.decode(annealed_trace_tokens)
+            annealed_template = template_prefix + annealed_trace_str
 
-        annealed_template = template_prefix + annealed_trace_str
         return self.tokenizer.encode(annealed_template, add_special_tokens=False)
 
     def tokenize(
@@ -280,6 +290,8 @@ class InferenceEngine:
         Tokenize the input texts and pad them to the maximum sequence length in the batch.
         Args:
             texts (list[str]): The list of input texts to tokenize.
+            annealing_traces (list[str]): The list of annealing traces to tokenize.
+            annealing_percentages (list[float]): The list of annealing percentages to tokenize.
         Returns:
             tokens (Array): The tokenized and padded input texts. Shape: [batch_size, max_seq_len].
             seq_lens (Array): The original sequence lengths before padding. Shape: [batch_size].
@@ -677,12 +689,9 @@ class InferenceEngine:
 
     def __call__(
         self,
-        prompts: list[str],
+        samples: list[Sample],
         key: Array,
         params: PyTree,
-        *,
-        annealing_rate: float = 0.0,
-        solutions: list[str] | None = None,
     ) -> InferenceResults:
         """
         Perform inference for the given input prompts, random key, and model parameters.
@@ -696,12 +705,11 @@ class InferenceEngine:
             InferenceResults: The results of the inference, containing the output rollouts, optionally the detokenized output strings, and any collected metrics.
         """
         key, params = self.multihost_prep(key, params)
-        if solutions is None:
-            solutions = [""] * len(prompts)
+
         inp_tokens, seq_lens = self.tokenize(
-            prompts,
-            annealing_traces=solutions,
-            annealing_percentages=[annealing_rate] * len(prompts),
+            texts=[s.prompt for s in samples],
+            annealing_traces=[s.solution if s.solution is not None else "" for s in samples],
+            annealing_percentages=[s.annealing_percentage if s.annealing_percentage is not None else -1.0 for s in samples],  # can be used for error check
         )
         output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
         output_strs = self.detokenizer(output_rollouts)

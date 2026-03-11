@@ -294,17 +294,10 @@ class Trainer:
             self.annealing_schedule = optax.linear_schedule( # TODO: ablate the schedule
                 init_value=ac.init_value,
                 end_value=ac.end_value,
-                transition_steps=self.config.num_steps,
+                transition_steps=int(ac.annealing_steps * self.config.num_steps),
             )
         else:
             self.annealing_schedule = None
-
-    def _get_annealing_rate(self, step: int) -> float:
-        """Return annealing rate for the given step. 0.0 if annealing is disabled."""
-        if self.annealing_schedule is None:
-            return 0.0
-        step = min(step, self.config.num_steps - 1)
-        return float(self.annealing_schedule(step))
 
     @partial(setup, component="optimizer")
     def _setup_optimizer(self):
@@ -458,15 +451,11 @@ class Trainer:
 
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
-            samples = self.train_dataset(num_prompts=self.train_n_prompts)
-            prompts = [s.prompt for s in samples]
-            annealing_rate = self._get_annealing_rate(self.global_step)
+            samples = self.train_dataset(num_prompts=self.train_n_prompts, annealing_schedule=self.annealing_schedule, step=self.global_step)
             generations = self.inference_engine(
-                prompts,
+                samples,
                 self.key(),
                 {"params": self.params},
-                annealing_rate=annealing_rate,
-                solutions=[s.solution for s in samples], # assume solutions are provided for each sample
             )
             train_batch, train_data_metrics = self.train_dataset.prepare_batch(samples, generations, train=True)
 
@@ -476,14 +465,11 @@ class Trainer:
             metrics = out["metrics"] | generations.metrics | train_data_metrics
 
             if self.global_step % self.config.val_interval == 0:
-                val_samples = self.val_dataset(num_prompts=self.val_n_prompts)
-                val_prompts = [s.prompt for s in val_samples]
+                val_samples = self.val_dataset(num_prompts=self.val_n_prompts, annealing_schedule=self.annealing_schedule, step=self.global_step)
                 val_generations = self.inference_engine(
-                    val_prompts,
+                    val_samples,
                     self.key(),
                     {"params": self.params},
-                    annealing_rate=annealing_rate,
-                    solutions=[s.solution for s in val_samples], # assume solutions are provided for each sample
                 )
                 val_batch, val_metrics = self.val_dataset.prepare_batch(val_samples, val_generations, train=False)
 

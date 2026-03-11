@@ -1,6 +1,7 @@
 defaults:
   - rl_config: grpo
   - inference_config: main
+  - annealing_config: main
   - _self_
 
 grad_steps: 1

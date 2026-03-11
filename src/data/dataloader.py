@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 from transformers import AutoTokenizer
 import stax
+import optax
 
 from src.constants import DATA, GS_BUCKET
 from src.data.config import DatasetConfig, RLBatch, Sample
@@ -42,16 +43,25 @@ class DataLoader:
         samples = [Sample.from_dict(r) for r in rows]
         return samples
 
+    def _get_annealing_rate(self, annealing_schedule: optax.Schedule, step: int) -> float:
+        if annealing_schedule is None:
+            return 0.0
+        step = min(step, self.config.num_steps - 1)
+        return float(annealing_schedule(step))
+
     @property
     def last_samples(self) -> list[Sample]:
         """Return examples aligned with last batch."""
         return self._last_samples
 
-    def __call__(self, num_prompts: int) -> list[Sample]:
+    def __call__(self, num_prompts: int, annealing_schedule: optax.Schedule, step: int) -> list[Sample]:
         self.total_per_device = num_prompts // jax.process_count()
         self.start_idx = self._current_idx + self.rank * self.total_per_device
         self.process_end_idx = self.start_idx + self.total_per_device
         samples = [self.samples[i % self.total_samples] for i in range(self.start_idx, self.process_end_idx)]
+        annealing_percentage = self._get_annealing_rate(annealing_schedule, step)
+        for sample in samples:
+            sample.annealing_percentage = annealing_percentage
         self._last_samples = samples
         self._current_idx = (self._current_idx + num_prompts) % self.total_samples
 
