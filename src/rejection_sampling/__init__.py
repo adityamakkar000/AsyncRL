@@ -1,5 +1,5 @@
 """rejection sampling"""
 
-from .main import RejectionSample
+from .config import RejectionSingleSample, rejectionSamplingConfig
 
-__all__ = ["RejectionSample"]
+__all__ = ["RejectionSingleSample", "rejectionSamplingConfig"]

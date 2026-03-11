@@ -19,6 +19,7 @@ class vLLMEngine:
         self.vllm_process = None
         self.client = AsyncOpenAI(
             base_url=f"http://{IP}:{PORT}/v1",
+            api_key="",
         )
         self.check_config()
         self.rejection_semaphore = asyncio.Semaphore(max_workers)
