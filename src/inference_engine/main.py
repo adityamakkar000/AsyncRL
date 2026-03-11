@@ -257,7 +257,7 @@ class InferenceEngine:
 
     def prepare_prompt(self, text: str, annealing_trace: str, annealing_percentage: float) -> list[int]:
         assert annealing_percentage != -1.0, "Annealing percentage is not set for some samples. This should not happen."
-        
+
         annealed_base = self.tokenizer.apply_chat_template(
             [{"role": "user", "content": apply_prompt_template(text)}, {"role": "assistant", "content": ""}],
             add_generation_prompt=True,
@@ -271,7 +271,7 @@ class InferenceEngine:
             tokenize=False,
             enable_thinking=True,
         )
-        
+
         if not annealing_trace or annealing_percentage <= 1e-6:
             annealed_template = chat_base
         else:
@@ -709,7 +709,9 @@ class InferenceEngine:
         inp_tokens, seq_lens = self.tokenize(
             texts=[s.prompt for s in samples],
             annealing_traces=[s.solution if s.solution is not None else "" for s in samples],
-            annealing_percentages=[s.annealing_percentage if s.annealing_percentage is not None else -1.0 for s in samples],  # can be used for error check
+            annealing_percentages=[
+                s.annealing_percentage if s.annealing_percentage is not None else -1.0 for s in samples
+            ],  # can be used for error check
         )
         output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
         output_strs = self.detokenizer(output_rollouts)

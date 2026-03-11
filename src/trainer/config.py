@@ -49,7 +49,7 @@ class AnnealedLoss:
 
     init_value: float = 0.0  # Fraction of trace at start of training (e.g. 1.0 = full trace)
     end_value: float = 1.0  # Fraction of trace at end of training (e.g. 0.0 = no trace)
-    annealing_steps: float = 0.1 # currently anneal over 10% of steps
+    annealing_steps: float = 0.1  # currently anneal over 10% of steps
 
 
 @dataclass

@@ -291,7 +291,7 @@ class Trainer:
         """Build annealing rate schedule from config. Same rate applies to whole batch; schedule is over num_steps."""
         ac = self.config.loss_config.annealing_config
         if ac is not None:
-            self.annealing_schedule = optax.linear_schedule( # TODO: ablate the schedule
+            self.annealing_schedule = optax.linear_schedule(  # TODO: ablate the schedule
                 init_value=ac.init_value,
                 end_value=ac.end_value,
                 transition_steps=int(ac.annealing_steps * self.config.num_steps),
@@ -451,7 +451,9 @@ class Trainer:
 
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
-            samples = self.train_dataset(num_prompts=self.train_n_prompts, annealing_schedule=self.annealing_schedule, step=self.global_step)
+            samples = self.train_dataset(
+                num_prompts=self.train_n_prompts, annealing_schedule=self.annealing_schedule, step=self.global_step
+            )
             generations = self.inference_engine(
                 samples,
                 self.key(),
@@ -465,7 +467,9 @@ class Trainer:
             metrics = out["metrics"] | generations.metrics | train_data_metrics
 
             if self.global_step % self.config.val_interval == 0:
-                val_samples = self.val_dataset(num_prompts=self.val_n_prompts, annealing_schedule=self.annealing_schedule, step=self.global_step)
+                val_samples = self.val_dataset(
+                    num_prompts=self.val_n_prompts, annealing_schedule=self.annealing_schedule, step=self.global_step
+                )
                 val_generations = self.inference_engine(
                     val_samples,
                     self.key(),
