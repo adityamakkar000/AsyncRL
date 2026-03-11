@@ -263,7 +263,7 @@ class InferenceEngine:
             add_generation_prompt=True,
             tokenize=False,
             enable_thinking=True,
-        )
+        ).split("\n</think>\n")[0]
 
         chat_base = self.tokenizer.apply_chat_template(
             [{"role": "user", "content": apply_prompt_template(text)}],
@@ -275,11 +275,10 @@ class InferenceEngine:
         if not annealing_trace or annealing_percentage <= 1e-6:
             annealed_template = chat_base
         else:
-            template_prefix = annealed_base.split("\n</think>\n")[0]
             trace_tokens = self.tokenizer.encode(annealing_trace, add_special_tokens=False)
             annealed_trace_tokens = apply_annealing(trace_tokens, annealing_percentage)
             annealed_trace_str = self.tokenizer.decode(annealed_trace_tokens)
-            annealed_template = template_prefix + annealed_trace_str
+            annealed_template = annealed_base + annealed_trace_str
 
         return self.tokenizer.encode(annealed_template, add_special_tokens=False)
 
