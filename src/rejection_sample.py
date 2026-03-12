@@ -77,12 +77,12 @@ class RejectionSample:
 
     async def run(self):
         self.vllm_engine.launch_vllm(self.config.hf_model_name)
-        for dataset_gcs, gcs_path in zip(self.config.datasets, self.config.gcs_paths):
-            samples = self.get_dataset(dataset_gcs)
-            logger.info(f"Running rejection sampling on {len(samples)} samples from {dataset_gcs}...")
+        for dataset, gcs_path in zip(self.config.datasets, self.config.gcs_paths):
+            samples = self.get_dataset(dataset)
+            logger.info(f"Running rejection sampling on {len(samples)} samples from {dataset}...")
 
             rejection_samples = await self.get_samples(samples)
-            self.upload_dataset(rejection_samples, dataset_gcs, gcs_path)
+            self.upload_dataset(rejection_samples, dataset, gcs_path)
 
         self.cleanup()
 

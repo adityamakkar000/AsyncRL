@@ -1,5 +1,6 @@
 import re
 from dataclasses import dataclass
+from loguru import logger
 
 
 @dataclass
@@ -46,6 +47,12 @@ class Verifier:
         return None
 
     def _get_reward(self, solution: str, answer: str) -> float | None:
+        if type(answer) == int:
+            answer = str(answer)
+        
+        logger.info(f"Original solution: {solution}")
+        logger.info(f"Original answer: {answer}")
+
         solution = self._remove_think(solution)
 
         parsed_answer = self.extract_boxed_content(solution)
