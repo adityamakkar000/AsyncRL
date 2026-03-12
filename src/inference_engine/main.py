@@ -276,8 +276,7 @@ class InferenceEngine:
             annealed_template = chat_base
         else:
             trace_tokens = self.tokenizer.encode(annealing_trace, add_special_tokens=False)
-            annealed_trace_tokens = apply_annealing(trace_tokens, annealing_percentage)
-            annealed_trace_str = self.tokenizer.decode(annealed_trace_tokens)
+            annealed_trace_str = self.tokenizer.decode(apply_annealing(trace_tokens, annealing_percentage))
             annealed_template = annealed_base + annealed_trace_str
 
         return self.tokenizer.encode(annealed_template, add_special_tokens=False)
