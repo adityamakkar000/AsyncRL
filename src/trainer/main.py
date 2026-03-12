@@ -485,7 +485,7 @@ class Trainer:
                 val_samples = self.val_dataset(num_prompts=self.val_n_prompts)
                 val_prompts = [s.prompt for s in val_samples]
                 val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})
-                val_batch, val_metrics = self.val_dataset.prepare_batch(val_samples, val_generations, train=False)
+                _val_batch, val_metrics = self.val_dataset.prepare_batch(val_samples, val_generations, train=False)
 
                 metrics |= val_metrics
 
@@ -496,7 +496,12 @@ class Trainer:
                 "train/lr": self.opt_state[1].hyperparams["learning_rate"],
             }
 
-            generations_to_log = [(g, s.answer) for g, s in zip(generations.output_strs, samples)]
+            generations_to_log = None
+            if self.global_step % self.config.log_generations_every_n_steps == 0:
+                # do this to save storage on wandb
+                # since we can't log too much
+                generations_to_log = [(g, s.answer) for g, s in zip(generations.output_strs, samples)]
+
             self.writer(self.global_step, metrics, generations=generations_to_log)
             self.global_step += 1
 

@@ -1,7 +1,7 @@
 defaults:
   - base 
   - data_config: run_1
-  - model_config: qwen_4b
+  - model_config: qwen_1.7b
   - sharding_config: fsdp
   - loss_config: loss
   - _self_
@@ -40,7 +40,7 @@ data_config:
     batch_size: 512
 loss_config:
   inference_config:
-    max_seq_len: 16384
+    max_seq_len: 8192
     batch_size: 4
     n_replicas: 4
     group_size: 16

@@ -70,10 +70,10 @@ class Zip:
 # Configuration
 # ---------------------------------------------------------------------------
 
-TPU_CLUSTERS: list[str] = ["node27", "node26", "node25", "node24"]
+TPU_CLUSTERS: list[str] = ["node27", "node24", "node22", "node21"]
 
 BASE_CONFIG: str = "run1"
-EXPERIMENT_PREFIX: str = "nothink"
+EXPERIMENT_PREFIX: str = "nothink-v2"
 
 lrs = [3e-6, 3e-7]
 minbatch_size = [512]

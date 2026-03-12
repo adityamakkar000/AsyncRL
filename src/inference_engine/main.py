@@ -14,16 +14,35 @@ from transformers import AutoTokenizer
 from src.model import KVCache, Model
 
 from .config import InferenceConfig, InferenceResults, InferenceRollout, InferenceShardings, InferenceState
-from .utils import naive_sample
+from .utils import _maybe_force_eos, _maybe_force_eot, naive_sample
 
 AXIS_NAME = "data"
 PADDING_BUFFER = 1024
+
+
+INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
 
 
 def apply_prompt_template(text: str) -> str:
     return f"""Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
 {text}
 Remember to put your answer inside \\boxed{{}}."""
+
+
+def apply_system_prompt_template() -> str:
+    return r"""You are a helpful AI assistant.
+For every problem, you must reason step-by-step inside <think></think> tags before giving the final answer.
+"""
+
+
+def get_chat_template(system_prompt: bool, text: str) -> list[dict[str, str]]:
+    if system_prompt:
+        return [
+            {"role": "system", "content": apply_system_prompt_template()},
+            {"role": "user", "content": apply_prompt_template(text)},
+        ]
+    else:
+        return [{"role": "user", "content": apply_prompt_template(text)}]
 
 
 class InferenceEngine:
@@ -44,6 +63,12 @@ class InferenceEngine:
             "prefill": {},
             "decode": {},
         }
+
+        self.thinking_tokens = (
+            self.tokenizer(INTERUPT_THINKING_PHARSE, add_special_tokens=False, return_tensors="np")
+            .input_ids[0]
+            .tolist()
+        )
 
         if self.config.precompile:
             self.precompile_decode(params)
@@ -263,7 +288,7 @@ class InferenceEngine:
 
         inputs: list[list[int]] = [
             self.tokenizer.apply_chat_template(
-                [{"role": "user", "content": apply_prompt_template(text)}],
+                get_chat_template(self.config.system_prompt, text),
                 add_generation_prompt=True,
                 enable_thinking=self.config.think_mode,
             )
@@ -437,31 +462,30 @@ class InferenceEngine:
             )
 
         with jax.named_scope("stop_masking"):
-            end_of_think = state.end_of_think | (next_token == 151668)
+            end_of_think = state.end_of_think
             if self.config.reasoning_budget is not None:
-                budget_exceed = (self.config.reasoning_budget is not None) & (
-                    state.seq_lens[:, None] + 1 > self.config.reasoning_budget
+                next_token, next_log_prob, end_of_think = _maybe_force_eot(
+                    next_token,
+                    next_log_prob,
+                    state.end_of_think,
+                    state.seq_lens,
+                    reasoning_budget=self.config.reasoning_budget,
+                    token_sequence=self.thinking_tokens,
                 )
-            else:
-                budget_exceed = jnp.zeros_like(end_of_think, dtype=bool)
-            interrupt_mask = budget_exceed & ~end_of_think
-            end_of_think = end_of_think | interrupt_mask
-            next_token = jnp.where(interrupt_mask, 151668, next_token)
-            next_log_prob = jnp.where(interrupt_mask, 0.0, next_log_prob)
 
-            # split two different masks since if we have <eos> naturally we want that logprob in the next_log_probs (eos_stop_mask)
-            length_stop_mask = state.stop_mask | (state.seq_lens[:, None] + 1 > self.config.max_seq_len)
-            eos_stop_mask = next_token == self.tokenizer.eos_token_id
-            stop_mask = eos_stop_mask | length_stop_mask
+            next_token, next_log_prob, stop_mask = _maybe_force_eos(
+                next_token,
+                next_log_prob,
+                state.stop_mask,
+                state.seq_lens,
+                max_seq_len=self.config.max_seq_len,
+                eos_token_id=self.tokenizer.eos_token_id,
+            )
 
-            next_token = jnp.where(stop_mask, self.tokenizer.eos_token_id, next_token)
-            next_log_prob = jnp.where(stop_mask, 0, next_log_prob)
-            out_tokens = jax.lax.dynamic_update_index_in_dim(
-                state.out_tokens, next_token, state.kv_cache[0].length, axis=1
-            )
-            out_logprobs = jax.lax.dynamic_update_index_in_dim(
-                state.out_logprobs, next_log_prob, state.kv_cache[0].length, axis=1
-            )
+        out_tokens = jax.lax.dynamic_update_index_in_dim(state.out_tokens, next_token, state.kv_cache[0].length, axis=1)
+        out_logprobs = jax.lax.dynamic_update_index_in_dim(
+            state.out_logprobs, next_log_prob, state.kv_cache[0].length, axis=1
+        )
 
         return InferenceState(
             next_token=next_token,
@@ -643,6 +667,7 @@ class InferenceEngine:
             # use inference engine mesh context not STAX context
             with jax.set_mesh(self.shardings.mesh):
                 output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
+            logger.info("finished rolloing out")
             output_strs = self.detokenizer(output_rollouts)
             sync_global_devices("inference_engine_sync")
         metrics |= {"total_inference_time": t.data["time"]}

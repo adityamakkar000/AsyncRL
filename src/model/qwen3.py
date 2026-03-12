@@ -77,7 +77,7 @@ class RMSNorm(nn.Module):
     @nn.compact
     def __call__(self, x: Array):
         rms = jnp.sqrt(jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True) + 1e-6)
-        gamma = self.param("gamma", nn.initializers.ones, (x.shape[-1]), self.activation_dtype)
+        gamma = self.param("gamma", nn.initializers.ones, (x.shape[-1],), self.activation_dtype)
         x = (x * gamma) / rms
         return x
 

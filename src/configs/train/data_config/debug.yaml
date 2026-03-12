@@ -1,6 +1,6 @@
 defaults:
-  - datasets@train_config: gsm8k_hard_256
-  - datasets@val_config: gsm8k_hard_256
+  - datasets@train_config: gsm8k
+  - datasets@val_config: gsm8k
   - _self_
 
 train_config:

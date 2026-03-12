@@ -21,16 +21,16 @@ set_jax_cache(cache_path)
 
 
 model_config = ModelConfig(
-    "Qwen/Qwen3-0.6B",
+    "Qwen/Qwen3-1.7B",
     qwen_config=QwenConfig(
         vocab_size=151_936,
-        d_ff=3072,
+        d_ff=6144,
         sequence_len=16384,
-        model_dim=1024,
+        model_dim=2048,
         n_heads=16,
         n_groups=8,
-        head_dim=128,
         n_layers=28,
+        head_dim=128,
         rope_base=1_000_000,
         activation_dtype="bfloat16",
     ),
@@ -38,21 +38,23 @@ model_config = ModelConfig(
 model = Model(model_config)
 
 params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
-bs = 1
-r = 1
+bs = 4
+r = 2
 config = InferenceConfig(
     temperature=0.7,
     top_p=None,
     top_k=None,
-    max_seq_len=8192,
+    max_seq_len=512,
     intial_sequence_len=64,
-    max_prefill_sequence_len=512,
+    max_prefill_sequence_len=256,
     batch_size=bs,
     n_replicas=r,
     group_size=bs * r,
     kv_cache_dtype="bfloat16",
     precompile=False,
-    reasoning_budget=None,
+    reasoning_budget=128,
+    think_mode=True,
+    system_prompt=False,
 )
 
 engine = InferenceEngine(model, params, config)
@@ -60,15 +62,10 @@ engine = InferenceEngine(model, params, config)
 key = jax.random.PRNGKey(2303)
 
 tokenizer_inp = [
-    r""" A table tennis club hosts a series of doubles matches following several rules:
-(i)  each player belongs to two pairs at most;
-(ii) every two distinct pairs play one game against each other at most;
-(iii) players in the same pair do not play against each other when they pair with others respectively.
-Every player plays a certain number of games in this series. All these distinct numbers make up a set called the “[i]set of games[/i]”. Consider a set $A=\{a_1,a_2,\ldots ,a_k\}$ of positive integers such that every element in $A$ is divisible by $6$. Determine the minimum number of players needed to participate in this series so that a schedule for which the corresponding [i]set of games [/i] is equal to set $A$ exists.
-"""
+    r"""Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?"""
 ]
-engine(tokenizer_inp, key, params)
 
+# engine(tokenizer_inp, key, params)
 output: InferenceResults = engine(tokenizer_inp, key, params)
 
 print(output.output_strs)

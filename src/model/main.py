@@ -18,7 +18,7 @@ from .qwen3 import KVCache, Qwen3
 from .utils import convert_dtype, get_qwen_3_weights, save_to_hf
 
 sizes = [0.6, 1.7, 4, 8]
-model_names = [f"Qwen/Qwen3-{size}B" for size in sizes]
+model_names = [f"Qwen/Qwen3-{size}B" for size in sizes] + [f"Qwen/Qwen3-{size}B-Base" for size in sizes]
 shardingType = Optional[PyTree[Sharding]]
 
 

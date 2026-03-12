@@ -56,10 +56,48 @@ def naive_sample(
     return next_tokens, next_logprobs
 
 
-def top_k_sampling_kernel(logits: Array, key: Array, *, temperature: float, top_k: int) -> tuple[Array, Array]:
-    B, T, V = logits.shape
-    logits = logits[:, -1, :] / temperature
+def _maybe_force_eot(
+    next_token: Array,  # [B, 1]
+    next_log_prob: Array,  # [B, 1]
+    end_of_think_mask: Array,  # [B, 1]
+    seq_lens: Array,  # [B]
+    *,
+    reasoning_budget: int,
+    token_sequence: list[int],
+):
+    think_token = token_sequence[-1]
+    total_tokens = len(token_sequence)
 
-    next_tokens = jax.random.categorical(key, logits, axis=-1)[:, None]
-    next_logprobbs = jnp.take_along_axis(logits, next_tokens, axis=-1)
-    return next_tokens, next_logprobbs
+    end_of_think_mask = end_of_think_mask | (next_token == think_token)
+
+    for t in range(total_tokens):
+        # NOTE: only 1 token in the loop can be inserted at most since the equality is differnt
+        # for each token
+        insert_token = (seq_lens[:, None] + (total_tokens - t)) == reasoning_budget
+        interrupt_mask = insert_token & ~end_of_think_mask
+        next_token = jnp.where(interrupt_mask, token_sequence[t], next_token)
+        next_log_prob = jnp.where(interrupt_mask, 0.0, next_log_prob)
+
+    end_of_think_mask = end_of_think_mask | interrupt_mask
+
+    return next_token, next_log_prob, end_of_think_mask
+
+
+def _maybe_force_eos(
+    next_token: Array,  # [B, 1]
+    next_log_prob: Array,  # [B, 1]
+    stop_mask: Array,  # [B, 1]
+    seq_lens: Array,  # [B]
+    *,
+    max_seq_len: int,
+    eos_token_id: int,
+):
+    # using seq_len + 1 means the model can respond for max_seq_len and the max_seq_len + 1 token will be <eos>
+    length_stop_mask = stop_mask | (seq_lens[:, None] + 1 > max_seq_len)
+    eos_stop_mask = next_token == eos_token_id
+    stop_mask = eos_stop_mask | length_stop_mask
+
+    next_token = jnp.where(stop_mask, eos_token_id, next_token)
+    next_log_prob = jnp.where(length_stop_mask, 0, next_log_prob)
+
+    return next_token, next_log_prob, stop_mask

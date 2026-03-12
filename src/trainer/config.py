@@ -102,6 +102,7 @@ class TrainerConfig:
 
     wandb_config: Optional[WandBConfig] = None  # The configuration for Weights & Biases logging
     metrics_to_log: List[str] = field(default_factory=lambda: ["train/loss", "val/loss"])  # Metrics to log
+    log_generations_every_n_steps: int = 25  # The interval (in steps) at which to log generations
 
     spot_training: bool = False  # Whether to enable spot training
     # if true, will load from latest checkpoint if checkpoint dir with same

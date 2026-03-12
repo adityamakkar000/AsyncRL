@@ -24,6 +24,7 @@ class InferenceConfig:
     reasoning_budget: Optional[int] = None
     think_mode: bool = True
     max_prefill_sequence_len: int = 1024
+    system_prompt: bool = False
 
 
 @struct.dataclass
