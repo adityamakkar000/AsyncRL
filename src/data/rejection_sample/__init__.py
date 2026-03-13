@@ -1,4 +1,4 @@
-"""rejection sampling"""
+"""rejection sample"""
 
 from .config import RejectionSingleSample, rejectionSamplingConfig
 from .main import RejectionSample

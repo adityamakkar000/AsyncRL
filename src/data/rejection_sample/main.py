@@ -6,7 +6,7 @@ from src.data.config import Sample
 from src.data.register import GLOBAL_DICT
 from src.data.utils import upload_local_file_to_gcs
 from src.data.verifier import Verifier, VerifierInput
-from src.rejection_sampling.config import RejectionSingleSample
+from src.data.rejection_sample.config import RejectionSingleSample
 from src.vllm_engine.main import vLLMEngine, vLLMOutput
 
 
