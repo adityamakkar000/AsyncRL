@@ -76,7 +76,6 @@ def filter_rejection_sampled_data(
     )
 
     rows = load_jsonl_from_gcs(gcs_path)
-    breakpoint()
     if lower_bound is not None:
         rows = [row for row in rows if row.get("pass_score", 0.0) >= lower_bound]
     if upper_bound is not None:
