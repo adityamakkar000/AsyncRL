@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import hydra
 from hydra.core.config_store import ConfigStore
@@ -35,7 +36,7 @@ class RejectionSample:
         local_path = f"{dataset_name}_{len(samples_dict)}_rejection_samples.jsonl"
         with open(local_path, "w") as f:
             for s in samples_dict:
-                f.write(f"{s}\n")
+                f.write(json.dumps(s) + "\n")
 
         logger.info(f"Uploading to gcs {gcs_path}...")
 

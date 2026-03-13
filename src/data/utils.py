@@ -76,12 +76,13 @@ def filter_rejection_sampled_data(
     )
 
     rows = load_jsonl_from_gcs(gcs_path)
+    breakpoint()
     if lower_bound is not None:
-        rows = [row for row in rows if row.get("pass_score", 0) >= lower_bound]
+        rows = [row for row in rows if row.get("pass_score", 0.0) >= lower_bound]
     if upper_bound is not None:
-        rows = [row for row in rows if row.get("pass_score", 0) <= upper_bound]
+        rows = [row for row in rows if row.get("pass_score", 0.0) <= upper_bound]
 
-    rows = sorted(rows, key=lambda x: x.get("pass_score", 0), reverse=True)
+    rows = sorted(rows, key=lambda x: x.get("pass_score", 0.0), reverse=True)
     return rows
 
 
@@ -91,5 +92,4 @@ def convert_rejection_samples_to_dataset(
     """Convert a list of RejectionSingleSample dicts to a HuggingFace Dataset."""
 
     filtered_rejection_rows = filter_rejection_sampled_data(gcs_path, lower_bound, upper_bound)
-
     return [Sample.from_dict(row) for row in filtered_rejection_rows]
