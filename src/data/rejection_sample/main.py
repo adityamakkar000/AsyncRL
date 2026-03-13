@@ -39,7 +39,12 @@ class RejectionSample:
         upload_local_file_to_gcs(local_path, gcs_path)
 
     def get_dataset(self, dataset_name: str) -> list[Sample]:
-        return GLOBAL_DICT[dataset_name]()[: self.num_samples]
+        dataset = GLOBAL_DICT[dataset_name]()
+        if self.num_samples == -1:
+            return dataset
+
+        logger.warning(f"Using only {self.num_samples}")
+        return dataset[: self.num_samples]
 
     def get_reward(self, prompt: str, completion: str, reference_answer: str) -> float | None:
         """Calls the verifier to get the reward for a given prompt and completion."""
@@ -54,10 +59,10 @@ class RejectionSample:
             prompt=sample.prompt, answer=sample.answer, solution=sample.solution, pass_score=pass_score
         )
 
-    async def get_samples(self, samples: list[Sample]) -> list[RejectionSingleSample]:
+    def get_samples(self, samples: list[Sample]) -> list[RejectionSingleSample]:
         """Generates num_samples completions for the given sample and returns a RejectionSingleSample with the pass score."""
         prompts = [sample.prompt for sample in samples]
-        vllm_output: vLLMOutput = await self.vllm_engine.generate_completions(
+        vllm_output: vLLMOutput = self.vllm_engine.generate_completions(
             prompts, self.config.max_sequence_len, self.config.pass_at, self.config.temperature
         )
 
@@ -72,13 +77,13 @@ class RejectionSample:
         logger.info("Clearning up vLLM engine...")
         self.vllm_engine.cleanup()
 
-    async def run(self):
+    def run(self):
         self.vllm_engine.launch_vllm(self.config.hf_model_name)
         for dataset, gcs_path in zip(self.config.datasets, self.config.gcs_paths):
             samples = self.get_dataset(dataset)
             logger.info(f"Running rejection sampling on {len(samples)} samples from {dataset}...")
 
-            rejection_samples = await self.get_samples(samples)
+            rejection_samples = self.get_samples(samples)
             self.upload_dataset(rejection_samples, dataset, gcs_path)
 
         self.cleanup()

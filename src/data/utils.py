@@ -88,7 +88,7 @@ def filter_rejection_sampled_data(
 def convert_rejection_samples_to_dataset(
     gcs_path: str, lower_bound: float | None = None, upper_bound: float | None = None
 ) -> list[Sample]:
-    """Convert a list of RejectionSingleSample dicts to a HuggingFace Dataset."""
+    """Convert a list of RejectionSingleSample dicts to a list of Samples."""
 
     filtered_rejection_rows = filter_rejection_sampled_data(gcs_path, lower_bound, upper_bound)
     return [Sample.from_dict(row) for row in filtered_rejection_rows]

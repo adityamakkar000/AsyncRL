@@ -1,5 +1,3 @@
-import asyncio
-
 import hydra
 from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig, OmegaConf
@@ -17,7 +15,7 @@ def main(cfg: DictConfig) -> None:
 
     rejection_sample = RejectionSample(config=cfg)
     try:
-        asyncio.run(rejection_sample.run())
+        rejection_sample.run()
     finally:
         rejection_sample.cleanup()
 

@@ -88,12 +88,19 @@ class vLLMEngine:
             )
             return [choice.text for choice in response.choices]
 
-    async def generate_completions(
+    async def await_completions(
         self, prompts: list[str], max_sequence_len: int, pass_at: int, temperature: float
-    ) -> vLLMOutput:
+    ) -> list[list[str]]:
+        """Synchronous wrapper around call_vllm."""
+
         tasks = [self.call_vllm(prompt, max_sequence_len, pass_at, temperature) for prompt in prompts]
 
-        completion_outputs = await asyncio.gather(*tasks)
+        return await asyncio.gather(*tasks)
+
+    def generate_completions(
+        self, prompts: list[str], max_sequence_len: int, pass_at: int, temperature: float
+    ) -> vLLMOutput:
+        completion_outputs = asyncio.run(self.await_completions(prompts, max_sequence_len, pass_at, temperature))
 
         return vLLMOutput(prompts=prompts, completions=completion_outputs)
 
