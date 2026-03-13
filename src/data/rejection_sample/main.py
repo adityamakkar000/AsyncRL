@@ -66,10 +66,10 @@ class RejectionSample:
             prompts, self.config.max_sequence_len, self.config.pass_at, self.config.temperature
         )
 
-        output_samples = []
-
-        for sample, completions in zip(samples, vllm_output.completions):
-            output_samples.append(self.convert_to_rejection_sample(sample, completions))
+        output_samples = [
+            self.convert_to_rejection_sample(sample, completions)
+            for sample, completions in zip(samples, vllm_output.completions)
+        ]
 
         return output_samples
 

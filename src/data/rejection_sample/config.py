@@ -32,7 +32,7 @@ class rejectionSamplingConfig:
     datasets: list[str] = MISSING
     gcs_paths: list[str] = MISSING
     vllm_config: vLLMConfig = field(default_factory=vLLMConfig)
-    num_samples: int = MISSING
+    num_samples: int = -1
     pass_at: int = MISSING
     max_workers: int = MISSING
     temperature: float = MISSING
