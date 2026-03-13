@@ -1,9 +1,11 @@
+import asyncio
+
 import hydra
 from hydra.core.config_store import ConfigStore
-from stax import staxLogger as logger
 from omegaconf import DictConfig, OmegaConf
-from src.data.config import Sample
-from src.data.rejection_sampling.config import RejectionSingleSample, rejectionSamplingConfig
+from stax import staxLogger as logger
+
+from src.data.rejection_sampling import RejectionSample, rejectionSamplingConfig
 
 cs = ConfigStore.instance()
 cs.store(name="base", node=rejectionSamplingConfig)

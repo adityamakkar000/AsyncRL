@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 
+
 @dataclass
 class VerifierInput:
     solution: str
@@ -45,9 +46,9 @@ class Verifier:
         return None
 
     def _get_reward(self, solution: str, answer: str) -> float | None:
-        if type(answer) == int:
+        if type(answer) is int:
             answer = str(answer)
-        
+
         solution = self._remove_think(solution)
 
         parsed_answer = self.extract_boxed_content(solution)
