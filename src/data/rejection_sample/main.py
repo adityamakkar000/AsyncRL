@@ -93,6 +93,8 @@ class RejectionSample:
             if len(output_samples) % self.checkpoint_number == 0:
                 self.upload_dataset(output_samples, dataset_name, gcs_path)
                 output_samples = []
+        
+        self.upload_dataset(output_samples, dataset_name, gcs_path)
 
     def rejection_sample(self, samples: list[Sample], gcs_path: str, name: str):
         """Generates num_samples completions for the given sample and returns a RejectionSingleSample with the pass score."""
