@@ -85,25 +85,25 @@ class RejectionSample:
             prompt=sample.prompt, answer=sample.answer, solution=sample.solution, pass_score=pass_score
         )
 
-    def generate_output_samples(self, samples: list[Sample], vllm_output: vLLMOutput, gcs_path: str, dataset_name: str):
-        output_samples = []
-        for sample, completions in zip(samples, vllm_output.completions):
-            output_sample = self.convert_to_rejection_sample(sample, completions)
-            output_samples.append(output_sample)
-            if len(output_samples) % self.checkpoint_number == 0:
-                self.upload_dataset(output_samples, dataset_name, gcs_path)
-                output_samples = []
-        
-        self.upload_dataset(output_samples, dataset_name, gcs_path)
-
     def rejection_sample(self, samples: list[Sample], gcs_path: str, name: str):
         """Generates num_samples completions for the given sample and returns a RejectionSingleSample with the pass score."""
-        prompts = [sample.prompt for sample in samples]
-        vllm_output: vLLMOutput = self.vllm_engine.generate_completions(
-            prompts, self.config.max_sequence_len, self.config.pass_at, self.config.temperature
-        )
+        for i in range(0, len(samples), self.checkpoint_number):
+            batch_samples = samples[i : i + self.checkpoint_number]
+            prompts = [sample.prompt for sample in batch_samples]
 
-        self.generate_output_samples(samples, vllm_output, gcs_path, name)
+            vllm_output: vLLMOutput = self.vllm_engine.generate_completions(
+                prompts,
+                self.config.max_sequence_len,
+                self.config.pass_at,
+                self.config.temperature,
+            )
+
+            rejection_samples = [
+                self.convert_to_rejection_sample(sample, vllm_output.completions[i])
+                for i, sample in enumerate(batch_samples)
+            ]
+
+            self.upload_dataset(rejection_samples, gcs_path, name)
 
     def cleanup(self):
         logger.info("Clearning up vLLM engine...")
