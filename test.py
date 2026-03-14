@@ -1,10 +1,17 @@
-import glob
+import numpy as np
+import torch
+from transformers import AutoModelForCausalLM
 
-from safetensors import safe_open
+model_name = "Qwen/Qwen3-0.6B-Base"
 
-for name in ["Qwen/Qwen3-1.7B", "Qwen/Qwen3-1.7B-Base", "Qwen/Qwen3-4B-Base"]:
-    all_keys = []
-    for file in glob.glob(name + "/*safetensors"):
-        with safe_open(file, framework="torch") as f:
-            all_keys.extend(f.keys())
-    print(f"{name}: lm_head.weight present = {'lm_head.weight' in all_keys}")
+model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", device_map="auto")
+model.train()
+
+input_ids = torch.tensor(np.arange(128)).unsqueeze(0).to(model.device)  # shape: (1, 10)
+
+with torch.no_grad():
+    outputs = model(input_ids=input_ids)
+
+logits = outputs.logits  # shape: (1, 10, vocab_size)
+print("Logits shape:", logits.shape)
+print("Logits:\n", logits)

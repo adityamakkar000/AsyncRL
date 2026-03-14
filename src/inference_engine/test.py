@@ -38,8 +38,8 @@ model_config = ModelConfig(
 model = Model(model_config)
 
 params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
-bs = 4
-r = 2
+bs = 1
+r = 1
 config = InferenceConfig(
     temperature=0.7,
     top_p=None,
@@ -52,9 +52,9 @@ config = InferenceConfig(
     group_size=bs * r,
     kv_cache_dtype="bfloat16",
     precompile=False,
-    reasoning_budget=128,
+    reasoning_budget=None,
     think_mode=True,
-    system_prompt=False,
+    system_prompt=True,
 )
 
 engine = InferenceEngine(model, params, config)

@@ -1,4 +1,4 @@
-"""Hyperparameter sweep launcher for TPU clusters via mesh."""
+"""Run launcher for TPU clusters via mesh."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ grad_steps = [8]
 dataset = ["omnimath_debug_1500_1750"]
 algo = ["rloo", "cispo"]
 
-SWEEP: Cross | Zip | Vals = Cross(
+RUN: Cross | Zip | Vals = Cross(
     [
         Zip(
             [
@@ -110,7 +110,7 @@ FIXED_OVERRIDES: dict[str, Any] = {
 
 
 def make_combos() -> list[dict[str, Any]]:
-    return SWEEP.expand()
+    return RUN.expand()
 
 
 def make_name(combo: dict[str, Any]) -> str:
@@ -162,14 +162,14 @@ def run_parallel(cmds: list[tuple[str, list[str]]], print_output=False, time_del
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Launch hparam sweep via mesh")
+    parser = argparse.ArgumentParser(description="Launch multiple runs via mesh")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
     combos = make_combos()
     assignments = list(zip(TPU_CLUSTERS, combos))
 
-    print(f"\n{'=' * 60}\nSWEEP: {len(assignments)} run(s)\n{'=' * 60}")
+    print(f"\n{'=' * 60}\nRUNS: {len(assignments)} run(s)\n{'=' * 60}")
     for cluster, combo in assignments:
         cmd = mesh_cmd(cluster, combo)
         print(f"  [{cluster}] {make_name(combo)}")

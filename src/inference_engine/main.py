@@ -291,9 +291,11 @@ class InferenceEngine:
                 get_chat_template(self.config.system_prompt, text),
                 add_generation_prompt=True,
                 enable_thinking=self.config.think_mode,
+                tokenize=True,
             )
             for text in texts
         ]
+
         seq_lens = np.array([len(x) for x in inputs], dtype=np.int32)
         padding_length = max(self.compute_max_padding_length(seq_lens), self.config.intial_sequence_len)
         inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
@@ -308,36 +310,35 @@ class InferenceEngine:
 
     def cleanup_rollouts(self, rollouts: list[InferenceRollout]) -> list[InferenceRollout]:
         """
-        Remove padding and eos tokens from the rollouts.
-        Args:
-            rollouts (list[InferenceRollout]): The list of rollouts to clean up.
-        Returns:
-            list[InferenceRollout]: The cleaned up rollouts.
+        Remove padding tokens and trailing repeated EOS tokens from rollouts.
+        Keeps the first EOS token and truncates everything after it.
         """
+        pad_id = self.tokenizer.pad_token_id
+        eos_id = self.tokenizer.eos_token_id
 
-        def remove_pad_token(tokens: Array, logprobs: Array) -> tuple[Array, Array]:
-            pad_token_id = self.tokenizer.pad_token_id
-            non_pad_mask = tokens != pad_token_id
-            return tokens[non_pad_mask], logprobs[non_pad_mask]
+        def clean_sequence(tokens: np.ndarray, logprobs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            non_pad = tokens != pad_id
+            tokens = tokens[non_pad]
+            logprobs = logprobs[non_pad]
 
-        def remove_eos_token(tokens: Array, logprobs: Array) -> tuple[Array, Array]:
-            eos_token_id = self.tokenizer.eos_token_id
-            eos_index = jnp.where(tokens == eos_token_id)[0][:2]
-            non_eos_mask = tokens != eos_token_id
-            non_eos_mask[eos_index] = True
-            return tokens[non_eos_mask], logprobs[non_eos_mask]
+            eos_positions = np.where(tokens != eos_id)[0]
+            cutoff = eos_positions[-1] + 2  # keep one token after eos
+            tokens = tokens[:cutoff]
+            logprobs = logprobs[:cutoff]
 
-        def clean_rollout(rollout: InferenceRollout) -> InferenceRollout:
-            rollouts = []
-            logprobs = []
-            for roll, log in zip(rollout.rollouts, rollout.logprobs):
-                roll, log = remove_pad_token(roll, log)
-                roll, log = remove_eos_token(roll, log)
-                rollouts.append(roll)
-                logprobs.append(log)
-            return InferenceRollout(rollouts=rollouts, logprobs=logprobs)
+            return tokens, logprobs
 
-        return [clean_rollout(rollout) for rollout in rollouts]
+        cleaned = []
+        for rollout in rollouts:
+            new_rollouts = []
+            new_logprobs = []
+            for tokens, lps in zip(rollout.rollouts, rollout.logprobs):
+                t, lp = clean_sequence(np.asarray(tokens), np.asarray(lps))
+                new_rollouts.append(t)
+                new_logprobs.append(lp)
+            cleaned.append(InferenceRollout(rollouts=new_rollouts, logprobs=new_logprobs))
+
+        return cleaned
 
     def detokenizer(self, tokens: list[InferenceRollout] | InferenceRollout) -> list[list[str]]:
         """
