@@ -15,3 +15,7 @@ with torch.no_grad():
 logits = outputs.logits  # shape: (1, 10, vocab_size)
 print("Logits shape:", logits.shape)
 print("Logits:\n", logits)
+
+
+for i in range(10):
+    print(i)
