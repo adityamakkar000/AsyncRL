@@ -1,5 +1,4 @@
 import json
-import os
 
 from loguru import logger
 
@@ -20,7 +19,7 @@ class RejectionSample:
         self.vllm_engine = vLLMEngine(config.vllm_config, self.config.max_workers)
 
         self.num_samples = config.num_samples
-        self.checkpoint_number = 32
+        self.checkpoint_number = 100
 
     def check_config(self):
         assert len(self.config.datasets) == len(self.config.gcs_paths), (
@@ -49,11 +48,6 @@ class RejectionSample:
         logger.info(f"Uploading to gcs {gcs_path}...")
 
         upload_local_file_to_gcs(local_path, gcs_path)
-
-        try:
-            os.remove(local_path)
-        except OSError:
-            pass
 
     def get_dataset(self, dataset_name: str) -> list[Sample]:
         dataset = GLOBAL_DICT[dataset_name]()
