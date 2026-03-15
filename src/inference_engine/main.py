@@ -668,7 +668,6 @@ class InferenceEngine:
             # use inference engine mesh context not STAX context
             with jax.set_mesh(self.shardings.mesh):
                 output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
-            logger.info("finished rolloing out")
             output_strs = self.detokenizer(output_rollouts)
             sync_global_devices("inference_engine_sync")
         metrics |= {"total_inference_time": t.data["time"]}

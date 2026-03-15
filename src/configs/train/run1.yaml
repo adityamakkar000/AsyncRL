@@ -51,7 +51,6 @@ loss_config:
     algorithm: cispo
     epsilon_high: 4
     epsilon_low: 4
-  grad_steps: 1
 
 metrics_to_log:
   - "train/loss"

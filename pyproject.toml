@@ -24,12 +24,7 @@ dependencies = [
     "tensorboard>=2.20.0",
     "tensorboard-plugin-profile>=2.21.6",
     "pylatexenc>=2.10",
-]
-
-[project.optional-dependencies]
-eval = [        
-    "openbench>=0.5.3",
-    "vllm-tpu==0.12.0",
+    "vllm-tpu==0.12.0"
 ]
 
 [project.optional-dependencies]
