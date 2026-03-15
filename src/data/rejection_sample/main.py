@@ -97,7 +97,7 @@ class RejectionSample:
                 for i, sample in enumerate(batch_samples)
             ]
 
-            self.upload_dataset(rejection_samples, gcs_path, name)
+            self.upload_dataset(rejection_samples, name, gcs_path)
 
     def cleanup(self):
         logger.info("Clearning up vLLM engine...")
