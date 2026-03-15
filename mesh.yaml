@@ -3,7 +3,7 @@ commands:
   - curl -LsSf https://astral.sh/uv/install.sh | sh
   - rm -rf ~/job
   - rm -rf ~/.cache/uv
-  - sudo chown -R $USER:$USER /tmp/tpu_logs
+  # - sudo chown -R $USER:$USER /tmp/tpu_logs
 
 ignore:
   - "*.pyc"
@@ -17,4 +17,4 @@ prerun:
   - source .env
   - echo "machine github.com login x-access-token password ${STAX_TOKEN}" > ~/.netrc
   - chmod 600 ~/.netrc
-  - uv sync --extra eval
+  - uv sync

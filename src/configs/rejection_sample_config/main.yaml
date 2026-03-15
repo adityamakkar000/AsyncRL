@@ -1,0 +1,15 @@
+defaults:
+  - base
+  - vllm_config: main
+  - _self_
+
+datasets:
+  - "aime" 
+gcs_paths:
+  - "gs://arl-experiments/data/rejection_samples/aime_2025_10_2samples.jsonl"
+num_samples: -1
+pass_at: 10
+max_workers: 200
+temperature: 0.6
+hf_model_name: "Qwen/Qwen3-0.6B"
+max_sequence_len: 8192

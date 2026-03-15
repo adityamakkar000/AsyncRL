@@ -1,33 +1,19 @@
 import json
 import os
 import subprocess
-import time
 
 import gcsfs
 from dotenv import load_dotenv
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-from src.constants import (
-    DISPLAY,
-    EVAL_LOG_DIR,
-    GPU_MEMORY_UTILIZATION,
-    GS_BUCKET,
-    HF_CHECKPOINT_PATH,
-    IP,
-    MAX_TASKS,
-    PORT,
-    SERVED_MODEL_NAME,
-    VLLM_SERVER_TIMEOUT,
-)
+from src.constants import DISPLAY, EVAL_LOG_DIR, GS_BUCKET, HF_CHECKPOINT_PATH, MAX_TASKS, SERVED_MODEL_NAME
 from src.model import Model
+from src.vllm_engine.main import format_command, vLLMEngine
 
 from .config import evalConfig
 from .utils import (
-    format_command,
     hash_dictConfig,
-    ping_server,
-    terminate_process,
 )
 
 load_dotenv()
@@ -40,22 +26,16 @@ class EvalRunner:
         self.model_config = config.model_config
 
         self.check_config()
-        self.vllm_process = None
+        self.vllm_engine = vLLMEngine(self.vllm_config, debug=config.debug)
 
     def check_config(self):
-        # model config
         if self.model_config.use_best_ckpt and self.model_config.step_number is not None:
             raise ValueError("Cannot set both use_best_ckpt and step_number.")
         if not self.model_config.use_best_ckpt and self.model_config.step_number is None:
             raise ValueError("Must set either use_best_ckpt or step_number.")
 
-        # vllm config
-        if isinstance(self.config.vllm_config.max_batched_tokens, str):
-            if self.config.vllm_config.max_batched_tokens != "auto":
-                raise ValueError("If max_batched_tokens is a string, it must be 'auto'.")
-
     def setup_model(self):
-        self.gs_path = f"{GS_BUCKET}/{self.model_config.model_name}"
+        self.gs_path = f"{GS_BUCKET}/runs/{self.model_config.model_name}"
         config = f"{self.gs_path}/config.json"
 
         logger.info(f"Loading model config from {config}...")
@@ -78,56 +58,7 @@ class EvalRunner:
         logger.info("Model saved to HF weights.")
 
     def launch_vllm(self):
-        # TODO:
-        # after we haev saved our own model
-        # use flag vllm serve <path_to_model>
-        # https://discuss.vllm.ai/t/how-to-use-local-model-when-using-vllm-serve/1149
-
-        # args: https://docs.vllm.ai/en/v0.5.4/models/engine_args.html
-        command = [
-            "vllm",
-            "serve",
-            HF_CHECKPOINT_PATH,
-            # variable args
-            "--data-parallel-size",
-            str(self.vllm_config.data_parallel_size),
-            "--tensor-parallel-size",
-            str(self.vllm_config.tensor_parallel_size),
-            "--max-num-seqs",
-            str(self.vllm_config.max_sequences),
-            "--max-num-batched-tokens",
-            str(self.vllm_config.max_batched_tokens),
-            # fixed args
-            "--gpu-memory-utilization",
-            GPU_MEMORY_UTILIZATION,
-            "--port",
-            PORT,
-            "--disable-log-requests",
-            "--enable-prefix-caching",
-            "--served-model-name",
-            SERVED_MODEL_NAME,
-        ]
-
-        logger.info(f"Launching vLLM with command: \n{format_command(command)}")
-
-        # pop off 'cpu' device so VLLM can you tpu
-        vllm_env = os.environ.copy()
-        vllm_env.pop("JAX_PLATFORMS", None)
-        self.vllm_process = subprocess.Popen(
-            command,
-            stdout=subprocess.DEVNULL if not self.config.debug else None,
-            env=vllm_env,
-        )
-        start = time.perf_counter()
-        while not ping_server(IP, PORT):
-            logger.info("Waiting for vLLM server to be ready...")
-            time.sleep(5)
-            if time.perf_counter() - start > VLLM_SERVER_TIMEOUT:
-                raise TimeoutError(f"vLLM server did not start within {VLLM_SERVER_TIMEOUT} seconds.")
-            if self.vllm_process.poll() is not None:
-                raise RuntimeError("vLLM server process has exited unexpectedly.")
-        end = time.perf_counter()
-        logger.info(f"vLLM server is ready in {end - start:.2f} seconds.")
+        self.vllm_engine.launch_vllm(HF_CHECKPOINT_PATH)
 
     def launch_eval(self):
         log_file_template = hash_dictConfig(self.config)
@@ -223,8 +154,8 @@ class EvalRunner:
         # TODO: maybe wandb but not needed for now
 
     def cleanup(self):
-        logger.info("Cleaning up...")
-        self.vllm_process = terminate_process(self.vllm_process, "vLLM")
+        logger.info("Cleaning up vLLM engine...")
+        self.vllm_engine.cleanup()
 
     def run_evaluation(self):
         self.setup_model()

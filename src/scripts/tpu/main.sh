@@ -90,4 +90,4 @@ tpu_ls () {
       state,
       networkEndpoints[].accessConfig.externalIp
     )"
-}
+gcloud projects list}

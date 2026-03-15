@@ -2,8 +2,8 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
-from transformers import AutoTokenizer
 import stax
+from transformers import AutoTokenizer
 
 from src.constants import DATA, GS_BUCKET
 from src.data.config import DatasetConfig, RLBatch, Sample

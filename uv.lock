@@ -151,6 +151,7 @@ dependencies = [
     { name = "jax" },
     { name = "jax", extra = ["tpu"], marker = "sys_platform == 'linux'" },
     { name = "jaxtyping" },
+    { name = "openai" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "python-dotenv" },
@@ -188,6 +189,7 @@ requires-dist = [
     { name = "jaxtyping", specifier = ">=0.3.4" },
     { name = "matplotlib", marker = "extra == 'data'", specifier = ">=3.10.8" },
     { name = "notebook", marker = "extra == 'data'", specifier = ">=7.5.3" },
+    { name = "openai", specifier = ">=2.21.0" },
     { name = "openbench", marker = "extra == 'eval'", specifier = ">=0.5.3" },
     { name = "opencv-python", marker = "extra == 'data'", specifier = ">=4.12.0.88" },
     { name = "orbax-checkpoint", marker = "extra == 'data'", specifier = ">=0.11.31" },
@@ -2373,13 +2375,13 @@ name = "mlx-lm"
 version = "0.29.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jinja2", marker = "sys_platform != 'linux'" },
+    { name = "jinja2", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
     { name = "mlx", marker = "sys_platform == 'darwin'" },
-    { name = "numpy", marker = "sys_platform != 'linux'" },
-    { name = "protobuf", marker = "sys_platform != 'linux'" },
-    { name = "pyyaml", marker = "sys_platform != 'linux'" },
-    { name = "sentencepiece", marker = "sys_platform != 'linux'" },
-    { name = "transformers", marker = "sys_platform != 'linux'" },
+    { name = "numpy", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "protobuf", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "pyyaml", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "sentencepiece", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "transformers", marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e3/62/f46e1355256a114808517947f8e83ad6be310c7288c551db0fa678f47923/mlx_lm-0.29.1.tar.gz", hash = "sha256:b99180d8f33d33a077b814e550bfb2d8a59ae003d668fd1f4b3fff62a381d34b", size = 232302, upload-time = "2025-12-16T16:58:27.959Z" }
 wheels = [
@@ -5300,6 +5302,7 @@ dependencies = [
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/40/c63173557a4ee32205dba0019fe4463cc13da43b5035c454a5d4716ff89a/xprof-2.21.6-cp311-none-any.whl", hash = "sha256:f28aff36688e247dac1960002b50664835d0e5591166d2fd376dbfd4e6f6c528", size = 19204782, upload-time = "2026-02-09T10:10:45.683Z" },
     { url = "https://files.pythonhosted.org/packages/d4/41/edc46056dd6e25fd8d1042c9f543228d5920dee1aca482d883b2ef7d3b97/xprof-2.21.6-cp311-none-manylinux_2_27_x86_64.whl", hash = "sha256:80a5e69ed2217124a35be111742e7379a85e5c4a9dce4837166527655bfdfdc9", size = 22731161, upload-time = "2026-02-09T09:58:13.106Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/a5/c80bf771bce071cf112fbbb37cf737caa6789d74d95a02fd569599cbb98d/xprof-2.21.6-cp311-none-manylinux_2_35_aarch64.whl", hash = "sha256:58b4873d5a373f9d88d11e7151d381329b25626e0a60c6f11e66ab61076db30e", size = 23661498, upload-time = "2026-02-24T22:48:27.629Z" },
 ]
 
 [[package]]
