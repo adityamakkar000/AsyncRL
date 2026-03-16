@@ -74,6 +74,8 @@ class EvalRunner:
                 ]
                 + self.config.tasks
                 + [
+                    "-M",
+                    'chat_template_kwargs={"enable_thinking": false}',
                     # variable args
                     "--max-connections",
                     str(self.config.max_connections),

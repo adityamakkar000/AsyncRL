@@ -1,13 +1,14 @@
 # short config for debugging 
-temperature: 0.6
-top_p: 0.95
+temperature: 0.8
+top_p: null
 top_k: null
-max_seq_len: 1024
+max_seq_len: 8192
 intial_sequence_len: 64
 max_prefill_sequence_len: 512
 batch_size: 2
 n_replicas: 4
 group_size: 8
 kv_cache_dtype: "bfloat16"
-precompile: true
-reasoning_budget: 512
+precompile: True
+reasoning_budget: null
+think_mode: true

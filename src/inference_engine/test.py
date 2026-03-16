@@ -21,16 +21,16 @@ set_jax_cache(cache_path)
 
 
 model_config = ModelConfig(
-    "Qwen/Qwen3-0.6B",
+    "Qwen/Qwen3-1.7B",
     qwen_config=QwenConfig(
         vocab_size=151_936,
-        d_ff=3072,
-        sequence_len=10112,
-        model_dim=1024,
+        d_ff=6144,
+        sequence_len=16384,
+        model_dim=2048,
         n_heads=16,
         n_groups=8,
-        head_dim=128,
         n_layers=28,
+        head_dim=128,
         rope_base=1_000_000,
         activation_dtype="bfloat16",
     ),
@@ -41,18 +41,20 @@ params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
 bs = 1
 r = 1
 config = InferenceConfig(
-    temperature=0.6,
-    top_p=0.95,
-    top_k=50,
-    max_seq_len=4096,
+    temperature=0.7,
+    top_p=None,
+    top_k=None,
+    max_seq_len=512,
     intial_sequence_len=64,
     max_prefill_sequence_len=256,
     batch_size=bs,
     n_replicas=r,
     group_size=bs * r,
     kv_cache_dtype="bfloat16",
-    precompile=True,
-    reasoning_budget=64,
+    precompile=False,
+    reasoning_budget=None,
+    think_mode=True,
+    system_prompt=True,
 )
 
 engine = InferenceEngine(model, params, config)
@@ -60,11 +62,16 @@ engine = InferenceEngine(model, params, config)
 key = jax.random.PRNGKey(2303)
 
 tokenizer_inp = [
-    " The parabola with equation $y = x^2 - 4$ is rotated $60^\circ$ counterclockwise around the origin. The unique point in the fourth quadrant where the original parabola and its image intersect has $y$-coordinate $\frac{a - \sqrt{b}}{c}$, where $a$, $b$, and $c$ are positive integers, and $a$ and $c$ are relatively prime. Find $a + b + c$."
+    r"""Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?"""
 ]
 
+# engine(tokenizer_inp, key, params)
 output: InferenceResults = engine(tokenizer_inp, key, params)
+
 print(output.output_strs)
 for key in output.metrics:
     print(f"{key}: {output.metrics[key]}")
 breakpoint()
+
+# tps  k = 50 : 904.6337280273438
+# tps k = None :

@@ -34,5 +34,6 @@ wandb_config:
 
 metrics_to_log:
   - "train/loss"
-  - "train/reward"
-  - "val/reward"
+  - "train/is_ratio_step_0"
+  - "train/mean_reward"
+  - "val/mean_reward"
