@@ -152,7 +152,7 @@ requires-dist = [
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "ruff", specifier = ">=0.14.10" },
-    { name = "stax", git = "https://github.com/adityamakkar000/stax.git" },
+    { name = "stax", git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FevalLogger" },
     { name = "tensorboard", specifier = ">=2.20.0" },
     { name = "tensorboard-plugin-profile", specifier = ">=2.21.6" },
     { name = "tfds-nightly", marker = "extra == 'data'", specifier = ">=4.9.9.dev202510250044" },
@@ -4031,7 +4031,7 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git#37d32ac1ffcf80b537227ce975b5a7e59f0acd66" }
+source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FevalLogger#0a5b5c2c92c142f8a6f19d9755320734e50cbb38" }
 dependencies = [
     { name = "flax" },
     { name = "jax" },

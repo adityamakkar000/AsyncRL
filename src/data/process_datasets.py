@@ -18,39 +18,38 @@ class ProcessDataset:
     """Process a dataset (registered or HuggingFace) and upload to GCS."""
 
     def __init__(self, cfg: DictConfig) -> None:
-        self.dataset_name = cfg.name
-        self.seed = cfg.seed
+        self.datasets_name = cfg.name
         self.chunk_size = cfg.chunk_size
         self._resolve_config()
 
+        random.seed(cfg.seed)
+
     def _resolve_config(self) -> None:
         """Resolve: registered dataset (name in GLOBAL_DICT)"""
-        name = self.dataset_name
-        if name not in GLOBAL_DICT:
-            raise ValueError(
-                f"Unknown dataset: {name}. "
-                f"Use a registered name (in src/data/register.py), set hf_path+columns, or add to datasets. "
-                f"Registered: {list(GLOBAL_DICT.keys())}"
-            )
+        for name in self.datasets_name:
+            if name not in GLOBAL_DICT:
+                raise ValueError(
+                    f"Unknown dataset: {name}. "
+                    f"Use a registered name (in src/data/register.py), set hf_path+columns, or add to datasets. "
+                    f"Registered: {list(GLOBAL_DICT.keys())}"
+                )
 
-    @property
-    def get_samples(self) -> list[Sample]:
-        return GLOBAL_DICT[self.dataset_name]()
+    def get_samples(self, name) -> list[Sample]:
+        return GLOBAL_DICT[name]()
 
     @staticmethod
-    def apply_transformations(samples: list[Sample], seed: int) -> list[Sample]:
-        random.seed(seed)
+    def apply_transformations(samples: list[Sample]) -> list[Sample]:
         random.shuffle(samples)
         return samples
 
-    def _process_and_upload(self) -> None:
+    def _process_and_upload(self, name: str) -> None:
         """Load dataset (from registry or HuggingFace), process, and upload chunks to GCS."""
-        samples = ProcessDataset.apply_transformations(self.get_samples, seed=self.seed)
+        samples = ProcessDataset.apply_transformations(self.get_samples(name))
         dataset = samples_to_dataset(samples)
 
-        base_gs = f"{GS_BUCKET}/{DATA}/{self.dataset_name}"
+        base_gs = f"{GS_BUCKET}/{DATA}/{name}"
         cwd = os.getcwd()
-        base_name = f"{self.dataset_name}.jsonl"
+        base_name = f"{name}.jsonl"
 
         n = len(dataset)
         print(f"{YELLOW}Preparing to write and upload samples ({n} rows) to GCS at: {base_gs}{END}")
@@ -76,3 +75,8 @@ class ProcessDataset:
             start_idx = end_idx
 
         print(f"{GREEN}All chunks processed and uploaded.{END}")
+
+    def process_and_upload(self):
+        for name in self.datasets_name:
+            print(f"{YELLOW}Processing dataset: {name}{END}")
+            self._process_and_upload(name)

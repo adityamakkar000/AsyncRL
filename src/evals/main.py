@@ -1,4 +1,5 @@
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -6,6 +7,7 @@ import gcsfs
 from dotenv import load_dotenv
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from stax import TextWriter, WandBWriter
 
 from src.constants import GS_BUCKET, HF_CHECKPOINT_PATH
 from src.data import Sample, Verifier, VerifierInput
@@ -48,7 +50,7 @@ class EvalRunner:
         logger.info(f"Model config loaded: \n{OmegaConf.to_yaml(model_config)}")
         logger.info(f"Loading model from {self.gs_path}...")
         model = Model(model_config)
-        self.step_number, params = model.load_from_ckpt(
+        self.step_number, params, metadata = model.load_from_ckpt(
             self.gs_path, step_number=self.model_config.step_number, use_best=self.model_config.use_best_ckpt
         )
         logger.info(f"Checkpoint loaded successfully from step {self.step_number}")
@@ -56,6 +58,21 @@ class EvalRunner:
 
         model.save_hf(HF_CHECKPOINT_PATH, params)
         logger.info("Model saved to HF weights.")
+
+        if writer_config := self.train_config.wandb_config:
+            if metadata["writer_id"] is None:
+                raise ValueError("Writer ID is None in metadata, cannot initialize WandBWriter.")
+            self.writer = WandBWriter(
+                entity=os.getenv("WANDB_ENTITY", ""),
+                project=writer_config.project,
+                metrics_to_print=dict(),
+                run_id=metadata["writer_id"],
+            )
+
+        else:
+            self.writer = TextWriter(metrics_to_print=dict())
+
+        logger.info(f"Model setup complete with step number {self.step_number} and metadata {metadata}.")
 
     def launch_vllm(self):
         self.vllm_engine.launch_vllm(HF_CHECKPOINT_PATH)
@@ -88,12 +105,16 @@ class EvalRunner:
 
     def process_results(self, results: dict[str, dict[str, float]]):
         logger.info("Evaluation results:")
-        for task, metrics in results.items():
-            logger.info(f"Task: {task}")
-            for metric, value in metrics.items():
-                logger.info(f"  {metric}: {value:.4f}")
 
-        # TODO: add visualization and logging to WandB or TextWriter
+        self.writer.log_eval_results(
+            self.step_number,
+            results,
+        )
+
+        for task, metrics in results.items():
+            logger.info(f"Task:\t{task}")
+            for metric, value in metrics.items():
+                logger.info(f"\t\t{metric}: {value:.4f}")
 
     def launch_eval(self):
         eval_results = dict()
@@ -107,8 +128,8 @@ class EvalRunner:
         self.process_results(eval_results)
 
     def cleanup(self):
-        logger.info("Cleaning up vLLM engine...")
         self.vllm_engine.cleanup()
+        self.writer.finish()
 
     def run_evaluation(self):
         self.setup_model()

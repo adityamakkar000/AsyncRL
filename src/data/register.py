@@ -190,3 +190,11 @@ def load_math_500() -> list[Sample]:
     ]
     ds.cleanup_cache_files()
     return samples
+
+
+@register_dataset("amc_23")
+def load_amc_23() -> list[Sample]:
+    ds = load_dataset("zwhe99/amc23")["test"]
+    samples = [Sample(prompt=example["question"], answer=str(example["answer"]), solution=None) for example in ds]
+    ds.cleanup_cache_files()
+    return samples
