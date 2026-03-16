@@ -1,27 +1,12 @@
-import hashlib
-import json
-
-from omegaconf import DictConfig, OmegaConf
-
-from .config import evalConfig
+from src.constants import DATA, GS_BUCKET
+from src.data import Sample, load_jsonl_from_gcs
 
 
-def hash_dictConfig(d: DictConfig | evalConfig) -> str:
-    """
-    Hash a DictConfig object.
-    Args:
-        d (DictConfig): The DictConfig object to hash.
-    Returns:
-        str: The SHA-256 hash of the DictConfig.
-    """
-
-    # TODO:
-    # find a way to only include some keys
-
-    hash_obj = OmegaConf.to_container(
-        d,
-        resolve=True,
-        throw_on_missing=True,
-    )
-    hash_dict = json.dumps(hash_obj, sort_keys=True)
-    return hashlib.sha256(hash_dict.encode("utf-8")).hexdigest()
+def fetch_eval_samples(task: str) -> list[Sample]:
+    """Fetches evaluation prompts for a given task."""
+    gs_path = f"{GS_BUCKET}/{DATA}/{task}"
+    rows = load_jsonl_from_gcs(gs_path)
+    if not rows:
+        raise ValueError(f"No rows found at {gs_path}")
+    samples: list[Sample] = [Sample.from_dict(r) for r in rows]
+    return samples

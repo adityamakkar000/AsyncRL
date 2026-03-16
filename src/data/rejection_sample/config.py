@@ -36,5 +36,6 @@ class rejectionSamplingConfig:
     pass_at: int = MISSING
     max_workers: int = MISSING
     temperature: float = MISSING
+    top_p: float = MISSING
     hf_model_name: str = MISSING
     max_sequence_len: int = MISSING

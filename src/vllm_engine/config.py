@@ -13,3 +13,11 @@ class vLLMConfig:
 class vLLMOutput:
     prompts: list[str]
     completions: list[list[str]]  # prompt x pass_at
+
+
+@dataclass
+class SamplingParams:
+    max_sequence_len: int
+    pass_at: int
+    temperature: float
+    top_p: float
