@@ -4,10 +4,11 @@ from loguru import logger
 
 from src.data.config import Sample
 from src.data.register import GLOBAL_DICT
-from src.data.rejection_sample.config import RejectionSingleSample
 from src.data.utils import load_jsonl_from_gcs, upload_local_file_to_gcs
 from src.data.verifier import Verifier, VerifierInput
 from src.vllm_engine.main import vLLMEngine, vLLMOutput
+
+from .config import RejectionSingleSample
 
 
 class RejectionSample:
