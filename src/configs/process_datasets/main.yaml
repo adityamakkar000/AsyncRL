@@ -5,6 +5,12 @@ defaults:
   - base
   - _self_
 
-name: omnimath
+name: 
+  - aime_2024
+  - aime_2025
+  - aime_2026
+  - math_500
+  - amc_23
+
 chunk_size: 100000
 seed: 0

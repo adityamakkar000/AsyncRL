@@ -24,5 +24,5 @@ class evalConfig:
     debug: bool = False
     epochs: int = 4
 
-    # not to include in hash
     max_connections: int = 100
+    max_tasks: int = 5

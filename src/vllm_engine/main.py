@@ -8,7 +8,7 @@ from openai import AsyncOpenAI
 
 from src.constants import GPU_MEMORY_UTILIZATION, IP, PORT, SERVED_MODEL_NAME, VLLM_SERVER_TIMEOUT
 
-from .config import vLLMConfig, vLLMOutput
+from .config import SamplingParams, vLLMConfig, vLLMOutput
 from .utils import format_command, ping_server, terminate_process
 
 
@@ -76,31 +76,36 @@ class vLLMEngine:
         end = time.perf_counter()
         logger.info(f"vLLM server is ready in {end - start:.2f} seconds.")
 
-    async def call_vllm(self, prompt: str, max_sequence_len: int, pass_at: int, temperature: float) -> list[str]:
+    async def call_vllm(self, prompt: str, sampling_config: SamplingParams) -> list[str]:
         """Calls the vLLM server to generate completions for a given prompt."""
         async with self.rejection_semaphore:
             response = await self.client.completions.create(
                 model=SERVED_MODEL_NAME,
                 prompt=prompt,
-                max_tokens=max_sequence_len,
-                temperature=temperature,
-                n=pass_at,
+                max_tokens=sampling_config.max_sequence_len,
+                temperature=sampling_config.temperature,
+                top_p=sampling_config.top_p,
+                n=sampling_config.pass_at,
             )
             return [choice.text for choice in response.choices]
 
-    async def await_completions(
-        self, prompts: list[str], max_sequence_len: int, pass_at: int, temperature: float
-    ) -> list[list[str]]:
+    async def await_completions(self, prompts: list[str], sampling_config: SamplingParams) -> list[list[str]]:
         """Synchronous wrapper around call_vllm."""
 
-        tasks = [self.call_vllm(prompt, max_sequence_len, pass_at, temperature) for prompt in prompts]
-
+        tasks = [self.call_vllm(prompt, sampling_config) for prompt in prompts]
         return await asyncio.gather(*tasks)
 
     def generate_completions(
-        self, prompts: list[str], max_sequence_len: int, pass_at: int, temperature: float
+        self, prompts: list[str], max_sequence_len: int, pass_at: int, temperature: float, top_p: float
     ) -> vLLMOutput:
-        completion_outputs = asyncio.run(self.await_completions(prompts, max_sequence_len, pass_at, temperature))
+        sampling_config = SamplingParams(
+            max_sequence_len=max_sequence_len,
+            pass_at=pass_at,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        logger.info(f"Generating completions with sampling config: {sampling_config}")
+        completion_outputs = asyncio.run(self.await_completions(prompts, sampling_config))
 
         return vLLMOutput(prompts=prompts, completions=completion_outputs)
 

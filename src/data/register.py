@@ -32,9 +32,6 @@ def register_dataset(name: str) -> Callable[[Callable[[], list[Sample]]], Callab
     return decorator
 
 
-# -- Register your dataset below --
-
-
 @register_dataset("omnimath")
 def load_omnimath() -> list[Sample]:
     ds = load_dataset("KbsdJames/Omni-MATH", split="test")
@@ -157,3 +154,47 @@ def load_aime() -> list[Sample]:
     aime_2025 = [Sample(prompt=example["problem"], answer=str(example["answer"]), solution=None) for example in ds_2025]
     ds_2025.cleanup_cache_files()
     return aime_2024 + aime_2025
+
+
+@register_dataset("aime_2024")
+def load_aime_2024() -> list[Sample]:
+    ds = load_dataset("Maxwell-Jia/AIME_2024")["train"]
+    samples = [
+        Sample(prompt=example["Problem"], answer=str(example["Answer"]), solution=example["Solution"]) for example in ds
+    ]
+    ds.cleanup_cache_files()
+    return samples
+
+
+@register_dataset("aime_2025")
+def load_aime_2025() -> list[Sample]:
+    ds = load_dataset("MathArena/aime_2025")["train"]
+    samples = [Sample(prompt=example["problem"], answer=str(example["answer"]), solution=None) for example in ds]
+    ds.cleanup_cache_files()
+    return samples
+
+
+@register_dataset("aime_2026")
+def load_aime_2026() -> list[Sample]:
+    ds = load_dataset("MathArena/aime_2026")["train"]
+    samples = [Sample(prompt=example["problem"], answer=str(example["answer"]), solution=None) for example in ds]
+    ds.cleanup_cache_files()
+    return samples
+
+
+@register_dataset("math_500")
+def load_math_500() -> list[Sample]:
+    ds = load_dataset("HuggingFaceH4/MATH-500")["test"]
+    samples = [
+        Sample(prompt=example["problem"], answer=example["answer"], solution=example["solution"]) for example in ds
+    ]
+    ds.cleanup_cache_files()
+    return samples
+
+
+@register_dataset("amc_23")
+def load_amc_23() -> list[Sample]:
+    ds = load_dataset("zwhe99/amc23")["test"]
+    samples = [Sample(prompt=example["question"], answer=str(example["answer"]), solution=None) for example in ds]
+    ds.cleanup_cache_files()
+    return samples

@@ -14,7 +14,7 @@ cs.store(name="base", node=ProcessDatasetConfig)
 def main(cfg: DictConfig) -> None:
     logger.info("ProcessDataset configuration:\n" + OmegaConf.to_yaml(cfg))
     processor = ProcessDataset(cfg)
-    processor._process_and_upload()
+    processor.process_and_upload()
 
 
 if __name__ == "__main__":

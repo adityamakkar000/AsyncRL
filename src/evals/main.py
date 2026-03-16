@@ -1,20 +1,21 @@
 import json
 import os
-import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 import gcsfs
 from dotenv import load_dotenv
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from stax import TextWriter, WandBWriter
 
-from src.constants import DISPLAY, EVAL_LOG_DIR, GS_BUCKET, HF_CHECKPOINT_PATH, MAX_TASKS, SERVED_MODEL_NAME
+from src.constants import GS_BUCKET, HF_CHECKPOINT_PATH
+from src.data import Sample, Verifier, VerifierInput
 from src.model import Model
-from src.vllm_engine.main import format_command, vLLMEngine
+from src.vllm_engine.main import vLLMEngine
 
 from .config import evalConfig
-from .utils import (
-    hash_dictConfig,
-)
+from .utils import fetch_eval_samples
 
 load_dotenv()
 
@@ -24,9 +25,10 @@ class EvalRunner:
         self.config = config
         self.vllm_config = config.vllm_config
         self.model_config = config.model_config
+        self.verifier = Verifier()
 
         self.check_config()
-        self.vllm_engine = vLLMEngine(self.vllm_config, debug=config.debug)
+        self.vllm_engine = vLLMEngine(self.vllm_config, self.config.max_connections, debug=config.debug)
 
     def check_config(self):
         if self.model_config.use_best_ckpt and self.model_config.step_number is not None:
@@ -48,7 +50,7 @@ class EvalRunner:
         logger.info(f"Model config loaded: \n{OmegaConf.to_yaml(model_config)}")
         logger.info(f"Loading model from {self.gs_path}...")
         model = Model(model_config)
-        self.step_number, params = model.load_from_ckpt(
+        self.step_number, params, metadata = model.load_from_ckpt(
             self.gs_path, step_number=self.model_config.step_number, use_best=self.model_config.use_best_ckpt
         )
         logger.info(f"Checkpoint loaded successfully from step {self.step_number}")
@@ -57,110 +59,79 @@ class EvalRunner:
         model.save_hf(HF_CHECKPOINT_PATH, params)
         logger.info("Model saved to HF weights.")
 
+        if writer_config := self.train_config.wandb_config:
+            if metadata["writer_id"] is None:
+                raise ValueError("Writer ID is None in metadata, cannot initialize WandBWriter.")
+            self.writer = WandBWriter(
+                entity=os.getenv("WANDB_ENTITY", ""),
+                project=writer_config.project,
+                metrics_to_print=dict(),
+                run_id=metadata["writer_id"],
+            )
+
+        else:
+            self.writer = TextWriter(metrics_to_print=dict())
+
+        logger.info(f"Model setup complete with step number {self.step_number} and metadata {metadata}.")
+
     def launch_vllm(self):
         self.vllm_engine.launch_vllm(HF_CHECKPOINT_PATH)
 
+    def run_task(self, task: str) -> dict[str, float]:
+        task_samples: list[Sample] = fetch_eval_samples(task)
+        outputs = self.vllm_engine.generate_completions(
+            prompts=[sample.prompt for sample in task_samples],
+            max_sequence_len=self.config.max_tokens,
+            pass_at=self.config.epochs,
+            temperature=self.config.temperature,
+            top_p=self.config.top_p,
+        )
+
+        prompt_to_answer = {sample.prompt: sample.answer for sample in task_samples}
+
+        def flatten_2d_list(lst: list[list[Any]]) -> list[float]:
+            return [item for sublist in lst for item in sublist]
+
+        rewards = flatten_2d_list(
+            [
+                [self.verifier(VerifierInput(completion, prompt_to_answer[prompt])) for completion in rollouts]
+                for prompt, rollouts in zip(outputs.prompts, outputs.completions)
+            ]
+        )
+        valid_rewards = [r for r in rewards if r is not None]
+        avg_reward = sum(valid_rewards) / len(valid_rewards) if valid_rewards else 0
+
+        return {"average": avg_reward}
+
+    def process_results(self, results: dict[str, dict[str, float]]):
+        logger.info("Evaluation results:")
+
+        self.writer.log_eval_results(
+            self.step_number,
+            results,
+        )
+
+        for task, metrics in results.items():
+            logger.info(f"Task:\t{task}")
+            for metric, value in metrics.items():
+                logger.info(f"\t\t{metric}: {value:.4f}")
+
     def launch_eval(self):
-        log_file_template = hash_dictConfig(self.config)
-        self.log_path = os.path.join(os.path.abspath(EVAL_LOG_DIR), log_file_template)
+        eval_results = dict()
 
-        if not os.path.exists(self.log_path):
-            logger.info("launching new evaluation ...")
-            # args: https://github.com/groq/openbench?tab=readme-ov-file#commands-and-options
-            command = (
-                [
-                    "bench",
-                    "eval",
-                ]
-                + self.config.tasks
-                + [
-                    "-M",
-                    'chat_template_kwargs={"enable_thinking": false}',
-                    # variable args
-                    "--max-connections",
-                    str(self.config.max_connections),
-                    "--epochs",
-                    str(self.config.epochs) if not self.config.debug else "1",
-                    "--temperature",
-                    str(self.config.temperature),
-                    "--top-p",
-                    str(self.config.top_p),
-                    "--max-tokens",
-                    str(self.config.max_tokens),
-                    # fix args
-                    "--model",
-                    "vllm/" + SERVED_MODEL_NAME,
-                    "--max-tasks",
-                    MAX_TASKS,
-                    "--log-dir",
-                    f"{EVAL_LOG_DIR}/{log_file_template}",
-                    "--display",
-                    DISPLAY,
-                    "--log-samples",
-                    "--log-format",
-                    "json",
-                ]
-            )
-            if self.config.debug:
-                command += ["--limit", "10", "--debug"]
+        with ThreadPoolExecutor(max_workers=self.config.max_connections) as executor:
+            futures = {executor.submit(self.run_task, task): task for task in self.config.tasks}
+            for future in as_completed(futures):
+                task = futures[future]
+                eval_results[task] = future.result()
 
-        else:
-            """
-            #TODO: restarting has some problems with openbench 
-             if we really need to restart an eval
-             we can just make seperate processes for each task 
-             current issues 
-             1. eval retry uses the intearactive dashbord dispaly -- doesn't support display arg
-             2. it retries but fails with more then one task
-            """
-            logger.info("resuming evaluation from existing run ...")
-            log_files = [f"{self.log_path}/{f}" for f in os.listdir(self.log_path) if f.endswith(".json")]
-            command = (
-                [
-                    "bench",
-                    "eval-retry",
-                ]
-                + log_files
-                + [
-                    # fixed args
-                    "--log-samples",
-                ]
-            )
-
-        logger.info(f"Launching evaluation with command: \n{format_command(command)}")
-        subprocess.run(command)
-
-    def parse_metrics(self):
-        eval_path = f"{self.gs_path}/evals"
-        fs = gcsfs.GCSFileSystem()
-        tasks = [t.replace("_", "-") for t in self.config.tasks]
-
-        def find_task(f_name: str):
-            for task in tasks:
-                if task in f_name:
-                    return task
-            raise ValueError(f"Could not find task for file name: {f_name}")
-
-        for f in os.listdir(self.log_path):
-            if f.endswith(".json"):
-                try:
-                    current_task = find_task(f)
-                except ValueError:
-                    logger.warning(f"Could not find task for file {f}, skipping upload.")
-                    continue
-                logger.info(f"Uploading metrics for task: {current_task} ...")
-                with fs.open(f"{eval_path}/{current_task}", "w") as gcs_f:
-                    with open(f"{self.log_path}/{f}", "r") as local_f:
-                        gcs_f.write(local_f.read())
-
-        # TODO: maybe wandb but not needed for now
+        self.process_results(eval_results)
 
     def cleanup(self):
-        logger.info("Cleaning up vLLM engine...")
         self.vllm_engine.cleanup()
+        self.writer.finish()
 
     def run_evaluation(self):
         self.setup_model()
         self.launch_vllm()
         self.launch_eval()
-        self.parse_metrics()

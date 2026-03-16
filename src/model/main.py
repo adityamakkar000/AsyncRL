@@ -93,7 +93,9 @@ class Model(HFModelBase):
 
         return [_init() for _ in range(self.config.qwen_config.n_layers)]
 
-    def load_from_ckpt(self, path: str, step_number: Optional[int] = None, use_best=False) -> Tuple[int, PyTree]:
+    def load_from_ckpt(
+        self, path: str, step_number: Optional[int] = None, use_best=False
+    ) -> Tuple[int, PyTree, dict[str, float]]:
         assert (step_number is not None) ^ use_best, "Either step_number or use_best must be set."
         path = f"{path}/checkpoints/"
         if use_best:
@@ -120,9 +122,8 @@ class Model(HFModelBase):
             ),
         )
         assert hasattr(restored, "state"), "Restored object has no attribute 'state'"
-        assert restored.state, "Restored has no state"
 
-        return step_number, restored.state["params"]  # type: ignore
+        return step_number, restored.state["params"], restored.metadata  # type: ignore
 
     def save_hf(self, path: str, params: PyTree) -> None:
         """Saves the model parameters in a local safetensors file. Inverse of load_from_hf."""

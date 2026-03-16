@@ -66,12 +66,12 @@ class RejectionSample:
         filtered_samples = [s for s in samples if s.prompt not in existing_prompts]
         return filtered_samples
 
-    def get_reward(self, prompt: str, completion: str, reference_answer: str) -> float | None:
+    def get_reward(self, completion: str, reference_answer: str) -> float | None:
         """Calls the verifier to get the reward for a given prompt and completion."""
         return self.verifier(VerifierInput(completion, reference_answer))
 
     def convert_to_rejection_sample(self, sample: Sample, completions: list[str]) -> RejectionSingleSample:
-        rewards = [self.get_reward(sample.prompt, c, sample.answer) for c in completions]
+        rewards = [self.get_reward(c, sample.answer) for c in completions]
         valid_rewards = [r for r in rewards if r is not None]
         pass_score = sum(valid_rewards) / len(valid_rewards) if valid_rewards else 0
 
@@ -90,6 +90,7 @@ class RejectionSample:
                 self.config.max_sequence_len,
                 self.config.pass_at,
                 self.config.temperature,
+                self.config.top_p,
             )
 
             rejection_samples = [

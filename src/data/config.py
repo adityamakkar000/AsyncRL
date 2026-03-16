@@ -27,7 +27,7 @@ class Sample:
 
 @dataclass
 class ProcessDatasetConfig:
-    name: str
+    name: list[str]
     chunk_size: int
     seed: int
 
