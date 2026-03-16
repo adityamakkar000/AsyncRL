@@ -18,15 +18,16 @@ from .qwen3 import KVCache, Qwen3
 from .utils import convert_dtype, get_qwen_3_weights, save_to_hf
 
 sizes = [0.6, 1.7, 4, 8]
-model_names = [f"Qwen/Qwen3-{size}B" for size in sizes]
+model_names = [f"Qwen/Qwen3-{size}B" for size in sizes] + [f"Qwen/Qwen3-{size}B-Base" for size in sizes]
 shardingType = Optional[PyTree[Sharding]]
 
 
 class Model(HFModelBase):
-    def __init__(self, config: DictConfig[ModelConfig]):
+    def __init__(self, config: DictConfig | ModelConfig):
         self.config = config
         self.validate_config()
-        self.model = Qwen3.from_config(config.qwen_config)
+        is_base = self.config.hf_model_name.endswith("Base")
+        self.model = Qwen3.from_config(config.qwen_config, is_base=is_base)
 
     def validate_config(self):
         if self.config.hf_model_name not in model_names:
@@ -38,9 +39,10 @@ class Model(HFModelBase):
         x_init = jnp.ones((1, self.config.qwen_config.sequence_len), dtype=jnp.int32)
         seq_lens = jnp.array([1])
 
-        @jax.jit
         def init_state(rng, x_init, sequence_lens):
-            params = self.model.init(rngs=rng, x=x_init, sequence_lens=sequence_lens, kv_cache=None)["params"]
+            params = jax.eval_shape(self.model.init, rngs=rng, x=x_init, sequence_lens=sequence_lens, kv_cache=None)[
+                "params"
+            ]
             out_state = {"params": params}
             if tx:
                 out_state["opt_state"] = tx.init(params)

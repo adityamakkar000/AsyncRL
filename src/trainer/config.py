@@ -59,12 +59,12 @@ class RLConfig:
     algorithm: str = "grpo"  # "grpo", "dr_grpo", "dapo"
     epsilon_high: float = 1.0
     epsilon_low: float = 0.1
+    ppo_minibatch_size: int = 32
 
 
 @dataclass
 class LossConfig:
     rl_config: RLConfig = field(default_factory=RLConfig)
-    grad_steps: int = 1  # how many off-policy ppo steps to take
     inference_config: InferenceConfig = field(default_factory=InferenceConfig)
     annealing_config: Optional[AnnealedLoss] = None  # TODO: Annealed RL config will go here
 
@@ -101,6 +101,7 @@ class TrainerConfig:
 
     wandb_config: Optional[WandBConfig] = None  # The configuration for Weights & Biases logging
     metrics_to_log: List[str] = field(default_factory=lambda: ["train/loss", "val/loss"])  # Metrics to log
+    log_generations_every_n_steps: int = 25  # The interval (in steps) at which to log generations
 
     spot_training: bool = False  # Whether to enable spot training
     # if true, will load from latest checkpoint if checkpoint dir with same

@@ -1,0 +1,10 @@
+defaults:
+  - datasets@train_config: omnimath_debug_500_750
+  - datasets@val_config: aime
+  - _self_
+
+train_config:
+  batch_size: 8
+
+val_config:
+  batch_size: 8

@@ -1,5 +1,5 @@
 temperature: 0.6
-top_p: 0.95
+top_p: null
 top_k: null
 max_seq_len: 1024
 intial_sequence_len: 64
@@ -10,3 +10,4 @@ group_size: 32
 kv_cache_dtype: "bfloat16"
 precompile: true
 reasoning_budget: null
+think_mode: true

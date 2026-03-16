@@ -1,6 +1,7 @@
 defaults:
-  - rl_config: grpo
+  - rl_config: cispo
   - inference_config: main
   - _self_
 
-grad_steps: 1
+rl_config:
+  ppo_minibatch_size: 32

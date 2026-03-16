@@ -22,7 +22,9 @@ class InferenceConfig:
     precompile: bool = True
     kv_cache_dtype: str = "bfloat16"
     reasoning_budget: Optional[int] = None
+    think_mode: bool = True
     max_prefill_sequence_len: int = 1024
+    system_prompt: bool = False
 
 
 @struct.dataclass
@@ -39,6 +41,7 @@ class InferenceState:
 
 @dataclass
 class InferenceShardings:
+    mesh: jax.sharding.Mesh
     split_sharding: jax.NamedSharding
     replicate_sharding: jax.NamedSharding
     kv_cache_sharding: KVCache

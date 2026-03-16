@@ -21,8 +21,10 @@ dependencies = [
     "transformers>=4.57.3",
     "datasets>=4.5.0",
     "openai>=2.21.0",
-    "openbench>=0.5.3",
-    "vllm-tpu==0.12.0; platform_system == 'Linux'",
+    "tensorboard>=2.20.0",
+    "tensorboard-plugin-profile>=2.21.6",
+    "pylatexenc>=2.10",
+    "vllm-tpu==0.12.0; platform_system == 'Linux'"
 ]
 
 [project.optional-dependencies]
@@ -37,4 +39,4 @@ data = [
 ]
 
 [tool.uv.sources]
-stax = { git = "https://github.com/adityamakkar000/stax.git", branch="aditya/evalLogger"}
+stax = { git = "https://github.com/adityamakkar000/stax.git" }

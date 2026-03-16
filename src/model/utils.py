@@ -233,6 +233,11 @@ def get_qwen_3_weights(params: PyTree, name: str) -> PyTree:
 
 def convert_weights(name: str, param: Array) -> torch.Tensor:
     """Convert JAX parameter to Hugging Face compatible tensor format."""
+
+    # numpy can't store bfloat 16 convert to fp32 instead
+    # this only applies to gamma param in qwen3
+    if param.dtype == jnp.bfloat16:
+        param = param.astype(jnp.float32)
     return torch.Tensor(param.T if "kernel" in name else param).contiguous()
 
 

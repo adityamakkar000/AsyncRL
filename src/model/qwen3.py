@@ -77,7 +77,7 @@ class RMSNorm(nn.Module):
     @nn.compact
     def __call__(self, x: Array):
         rms = jnp.sqrt(jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True) + 1e-6)
-        gamma = self.param("gamma", nn.initializers.ones, (x.shape[-1]), self.activation_dtype)
+        gamma = self.param("gamma", nn.initializers.ones, (x.shape[-1],), self.activation_dtype)
         x = (x * gamma) / rms
         return x
 
@@ -233,6 +233,7 @@ class Qwen3(nn.Module):
     n_layers: int
     rope_base: int
     activation_dtype: jnp.dtype = jnp.float32
+    is_base: bool = False
 
     @nn.compact
     def __call__(
@@ -294,12 +295,16 @@ class Qwen3(nn.Module):
 
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)
 
-        # logits = embed_layer.attend(x)
-        logits = nn.Dense(features=self.vocab_size, use_bias=False, dtype=self.activation_dtype)(x)
+        if self.is_base:
+            logits = embed_layer.attend(x)
+            logits = logits.astype(jnp.float32)
+        else:
+            logits = nn.Dense(features=self.vocab_size, use_bias=False, dtype=jnp.float32)(x)
+
         return logits, out_cache
 
     @classmethod
-    def from_config(cls, config: QwenConfig):
+    def from_config(cls, config: QwenConfig, is_base: bool = False):
         activation_dtype = convert_dtype(config.activation_dtype)
         return cls(
             vocab_size=config.vocab_size,
@@ -312,4 +317,5 @@ class Qwen3(nn.Module):
             n_layers=config.n_layers,
             rope_base=config.rope_base,
             activation_dtype=activation_dtype,
+            is_base=is_base,
         )

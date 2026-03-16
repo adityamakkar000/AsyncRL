@@ -1,7 +1,7 @@
 from typing import Any
 
 import jax
-import jax.numpy as jnp
+import numpy as np
 import stax
 from transformers import AutoTokenizer
 
@@ -57,7 +57,7 @@ class DataLoader:
 
         return samples
 
-    def _get_rewards(self, samples: list[Sample], generations: InferenceResults) -> tuple[jax.Array, int]:
+    def _get_rewards(self, samples: list[Sample], generations: InferenceResults) -> tuple[np.ndarray, int]:
         num_unparsable = 0
         total_rewards = []
         for sample, inference_rollout in zip(samples, generations.rollouts):
@@ -71,21 +71,21 @@ class DataLoader:
 
             total_rewards.append(token_rewards)
 
-        return jnp.array(total_rewards, dtype=jnp.int32), num_unparsable
+        return np.array(total_rewards, dtype=np.int32), num_unparsable
 
     def prepare_batch(self, samples: list[Sample], generations: InferenceResults, train: bool) -> tuple[RLBatch, dict]:
         tokens = self.pad_tokens(generations.rollouts, self.tokenizer.pad_token_id, "rollouts")
-        reference_model_logprobs = self.pad_tokens(generations.rollouts, -jnp.inf, "logprobs")
+        reference_model_logprobs = self.pad_tokens(generations.rollouts, -np.inf, "logprobs")
 
-        seq_lens = jnp.array(
+        seq_lens = np.array(
             [[len(tokens) for tokens in inference_rollout.rollouts] for inference_rollout in generations.rollouts],
-            dtype=jnp.int32,
+            dtype=np.int32,
         )
 
         rewards, num_unparsable = self._get_rewards(samples, generations)
 
-        group_mean = rewards.mean(axis=1, keepdims=True) * jnp.ones_like(rewards)
-        group_std = rewards.std(axis=1, keepdims=True) * jnp.ones_like(rewards) + 1e-8
+        group_mean = rewards.mean(axis=1, keepdims=True) * np.ones_like(rewards)
+        group_std = rewards.std(axis=1, keepdims=True) * np.ones_like(rewards) + 1e-8
 
         rl_batch = RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std)
 
@@ -103,19 +103,19 @@ class DataLoader:
 
         return rl_batch, metrics
 
-    def pad_tokens(self, inference_rollouts: list[InferenceRollout], constant_val, field_name: str) -> jax.Array:
+    def pad_tokens(self, inference_rollouts: list[InferenceRollout], constant_val, field_name: str) -> np.ndarray:
         for inference_rollout in inference_rollouts:
             for field in getattr(inference_rollout, field_name):
                 assert self.max_seq_length >= field.shape[0], (
                     f"self.max_seq_length ({self.max_seq_length}) must be >= field length ({field.shape[0]})"
                 )
 
-        return jnp.array(
+        return np.array(
             [
-                jnp.stack(
+                np.stack(
                     [
-                        jnp.pad(
-                            jnp.array(field),
+                        np.pad(
+                            np.array(field),
                             (self.max_seq_length - field.shape[0], 0),
                             mode="constant",
                             constant_values=constant_val,

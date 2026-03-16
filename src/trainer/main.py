@@ -7,12 +7,14 @@ import jax
 import optax
 import stax
 from dotenv import load_dotenv
+from einops import rearrange
 from jax.experimental.multihost_utils import sync_global_devices
 from jaxtyping import Array, PyTree
 from omegaconf import DictConfig, OmegaConf
 from stax import staxLogger as logger
+from stax.utils import metrics_all_reduce
 
-from src.constants import CACHE, CHECKPOINTS, GS_BUCKET
+from src.constants import CHECKPOINTS, GS_BUCKET
 from src.data import DataLoader, RLBatch
 from src.inference_engine import InferenceEngine
 from src.model import Model
@@ -22,11 +24,6 @@ from .loss import get_single_step
 from .utils import Key, setup, write_to_gcs
 
 load_dotenv()
-
-jax.config.update("jax_compilation_cache_dir", f"{GS_BUCKET}/{CACHE}")
-jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
 
 
 class Trainer:
@@ -90,24 +87,40 @@ class Trainer:
         if cfg.sharding_config.sharding_type not in ["single", "dp", "fsdp"]:
             raise ValueError("sharding_type must be one of 'single', 'dp', or 'fsdp'")
         if cfg.data_config.train_config.batch_size % cfg.loss_config.inference_config.group_size != 0:
-            raise ValueError("Batch size must be divisible by group size for proper batching in inference.")
+            raise ValueError(
+                f"Batch size must be divisible by group size for proper batching in inference, got {cfg.data_config.train_config.batch_size} batch size and {cfg.loss_config.inference_config.group_size} group size."
+            )
 
         n_hosts = jax.process_count()
         train_batch_size = cfg.data_config.train_config.batch_size
         val_batch_size = cfg.data_config.val_config.batch_size
         assert train_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
-            "Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference."
+            f"Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {train_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
         )
         assert val_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
-            "Validation batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference."
+            f"Validation batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {val_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
         )
 
         n_devices = jax.device_count() if cfg.sharding_config.sharding_type in ["fsdp", "dp"] else 1
-        assert train_batch_size % (n_devices * cfg.grad_accum_steps) == 0, (
-            "Train batch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation."
+
+        if cfg.sharding_config.sharding_type == "single":
+            assert jax.process_count() == 1, (
+                "Single sharding type does not support distributed training across multiple hosts."
+            )
+
+        ppo_minibatch_size = cfg.loss_config.rl_config.ppo_minibatch_size
+        assert train_batch_size % ppo_minibatch_size == 0, (
+            f"Train batch size must be divisible by PPO minibatch size for proper PPO updates, got {train_batch_size} batch size and {ppo_minibatch_size} PPO minibatch size."
         )
-        assert val_batch_size % (n_devices * cfg.val_steps) == 0, (
-            "Validation batch size must be divisible by number of devices for proper sharding during validation."
+        assert ppo_minibatch_size % (n_devices * cfg.grad_accum_steps) == 0, (
+            f"PPO minibatch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation, got {ppo_minibatch_size} PPO minibatch size, {n_devices} devices, and {cfg.grad_accum_steps} grad_accum_steps."
+        )
+
+        assert (train_batch_size // cfg.loss_config.inference_config.group_size) % jax.process_count() == 0, (
+            f"Number of groups per step must be divisible by number of hosts for proper distribution of groups, got {train_batch_size} train batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
+        )
+        assert (val_batch_size // cfg.loss_config.inference_config.group_size) % jax.process_count() == 0, (
+            f"Number of groups per validation step must be divisible by number of hosts for proper distribution of groups, got {val_batch_size} val batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
         )
 
     @partial(setup, component="initialized state")
@@ -170,7 +183,7 @@ class Trainer:
         abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx, abstract=True)
         params_shape, opt_state_shape = abstract_state["params"], abstract_state["opt_state"]
 
-        step_fn = get_single_step(self.config.loss_config.rl_config)
+        step_fn = get_single_step(self.config.loss_config)
 
         # val fn not needed since we just care about val reward, not loss
         train_fn, _val_fn, shardings = stax.fn.get_steps_fn(
@@ -193,6 +206,11 @@ class Trainer:
 
         self.params_sharding, self.opt_state_sharding = shardings.param_sharding, shardings.opt_state_sharding
 
+        train_batch_size = self.config.data_config.train_config.batch_size
+        ppo_minibatch_size = self.config.loss_config.rl_config.ppo_minibatch_size
+        ppo_k_steps = train_batch_size // ppo_minibatch_size
+        grad_accum_steps = self.config.grad_accum_steps
+
         def train_step(params: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
             """
             Takes single step and implments PPO-k loss (k steps off-policy)
@@ -209,14 +227,28 @@ class Trainer:
                 "params": params,
                 "opt_state": opt_state,
             }
-            reshaped_batch = jax.tree.map(
-                lambda x: x.reshape(
-                    self.config.grad_accum_steps, x.shape[0] // self.config.grad_accum_steps, *x.shape[1:]
-                ),
-                batch,
+
+            global_batch = shardings.shard_data(batch)  # [train_batch_size, T]
+            perm = jax.random.permutation(self.key(), train_batch_size)
+            global_batch_shuffled = jax.tree.map(lambda x: x[perm], global_batch)
+
+            ppo_global_batch = jax.tree.map(
+                lambda x: rearrange(
+                    x,
+                    "(b g k) ... -> k g b ...",
+                    b=ppo_minibatch_size // grad_accum_steps,
+                    g=grad_accum_steps,
+                    k=ppo_k_steps,
+                ),  # [ppo_steps, grad_accum_steps, ppo_minibatch_size // grad_accum_steps, T]
+                global_batch_shuffled,
             )
-            for step in range(self.config.loss_config.grad_steps):
-                out = train_fn(out["params"], out["opt_state"], reshaped_batch)
+
+            for step in range(ppo_k_steps):
+                current_batch = jax.tree.map(
+                    lambda x: x[step],  # [grad_accum_steps, ppo_minibatch_size // grad_accum_steps, T]
+                    ppo_global_batch,
+                )
+                out = train_fn(out["params"], out["opt_state"], current_batch)
                 aux_metrics |= {f"{k}_step_{step}": v for k, v in out["metrics"].items()}
 
             return {
@@ -230,10 +262,10 @@ class Trainer:
     @partial(setup, component="dataset")
     def _setup_dataset(self):
         self.train_n_prompts: int = self.config.data_config.train_config.batch_size // (
-            self.config.loss_config.inference_config.group_size * self.n_hosts
+            self.config.loss_config.inference_config.group_size
         )
         self.val_n_prompts: int = self.config.data_config.val_config.batch_size // (
-            self.config.loss_config.inference_config.group_size * self.n_hosts
+            self.config.loss_config.inference_config.group_size
         )
 
         max_seq_length = self.config.loss_config.inference_config.max_seq_len
@@ -314,6 +346,9 @@ class Trainer:
         }
         if self.config.weight_decay is not None and self.config.optimizer == "adamw":
             optimizer_args["weight_decay"] = self.config.weight_decay
+            optimizer_args["eps"] = 1e-15
+        if self.config.optimizer == "adam" or self.config.optimizer == "adamw":
+            optimizer_args["mu_dtype"] = "float32"
         self.tx = optax.chain(
             clip,
             optax.inject_hyperparams(optimizer)(
@@ -444,13 +479,13 @@ class Trainer:
             out = self.train_step(self.params, self.opt_state, train_batch)
 
             self.params, self.opt_state = out["params"], out["opt_state"]
-            metrics = out["metrics"] | generations.metrics | train_data_metrics
+            metrics = out["metrics"] | metrics_all_reduce(generations.metrics) | metrics_all_reduce(train_data_metrics)
 
             if self.global_step % self.config.val_interval == 0:
                 val_samples = self.val_dataset(num_prompts=self.val_n_prompts)
                 val_prompts = [s.prompt for s in val_samples]
                 val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})
-                val_batch, val_metrics = self.val_dataset.prepare_batch(val_samples, val_generations, train=False)
+                _val_batch, val_metrics = self.val_dataset.prepare_batch(val_samples, val_generations, train=False)
 
                 metrics |= val_metrics
 
@@ -461,13 +496,18 @@ class Trainer:
                 "train/lr": self.opt_state[1].hyperparams["learning_rate"],
             }
 
-            self.writer(self.global_step, metrics)
+            generations_to_log = None
+            if self.global_step % self.config.log_generations_every_n_steps == 0:
+                # do this to save storage on wandb
+                # since we can't log too much
+                generations_to_log = [(g, s.answer) for g, s in zip(generations.output_strs, samples)]
 
+            self.writer(self.global_step, metrics, generations=generations_to_log)
             self.global_step += 1
 
             # save after you update state since if you want to save every 10 steps
             # you want to save after you have done 10 steps and resume at the 11th step
-            if self.global_step % self.config.checkpoint_interval == 0:
+            if self.global_step % self.config.checkpoint_interval == 0 or self.global_step == self.total_steps:
                 self.save_checkpoint(step=self.global_step, metadata_metrics=metrics)
 
         logger.info("Training complete.")
