@@ -4,7 +4,6 @@ commands:
   - rm -rf ~/job
   - rm -rf ~/.cache/uv
   
-
 ignore:
   - "*.pyc"
   - "*/__pycache__/*"
