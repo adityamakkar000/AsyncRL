@@ -20,7 +20,7 @@ AXIS_NAME = "data"
 PADDING_BUFFER = 1024
 
 
-INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
+INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n</think>"
 
 
 def apply_prompt_template(text: str) -> str:
@@ -483,9 +483,9 @@ class InferenceEngine:
                 eos_token_id=self.tokenizer.eos_token_id,
             )
 
-        out_tokens = jax.lax.dynamic_update_index_in_dim(state.out_tokens, next_token, state.kv_cache[0].length, axis=1)
+        out_tokens = jax.lax.dynamic_update_index_in_dim(state.out_tokens, next_token, out_cache[0].length, axis=1)
         out_logprobs = jax.lax.dynamic_update_index_in_dim(
-            state.out_logprobs, next_log_prob, state.kv_cache[0].length, axis=1
+            state.out_logprobs, next_log_prob, out_cache[0].length, axis=1
         )
 
         return InferenceState(

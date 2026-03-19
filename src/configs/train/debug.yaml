@@ -1,7 +1,7 @@
 defaults:
   - base 
   - data_config: debug
-  - model_config: qwen_0.6b
+  - model_config: qwen_1.7b_base
   - sharding_config: fsdp
   - loss_config: loss
   - override loss_config/inference_config: debug
@@ -45,13 +45,14 @@ loss_config:
     n_replicas: 4
     group_size: 8
     temperature: 1.0
-    reasoning_budget: 150
+    reasoning_budget: null
     think_mode: true
     precompile: false
-    system_prompt: false
+    system_prompt: true
   rl_config:
     ppo_minibatch_size: 64
 
+log_generations_every_n_steps: 10
 metrics_to_log:
   - "train/loss"
   - "train/is_ratio_step_0"

@@ -21,7 +21,7 @@ set_jax_cache(cache_path)
 
 
 model_config = ModelConfig(
-    "Qwen/Qwen3-1.7B",
+    "Qwen/Qwen3-1.7B-Base",
     qwen_config=QwenConfig(
         vocab_size=151_936,
         d_ff=6144,

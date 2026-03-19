@@ -1,17 +1,32 @@
-import numpy as np
-import torch
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-model_name = "Qwen/Qwen3-0.6B-Base"
+model_name = "Qwen/Qwen3-1.7B"
 
+# load the tokenizer and the model
+tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", device_map="auto")
-model.train()
 
-input_ids = torch.tensor(np.arange(128)).unsqueeze(0).to(model.device)  # shape: (1, 10)
+# prepare the model input
+prompt = "Give me a short introduction to large language model."
+messages = [{"role": "user", "content": prompt}]
+text = tokenizer.apply_chat_template(
+    messages,
+    tokenize=False,
+    add_generation_prompt=True,
+    enable_thinking=True,  # Switches between thinking and non-thinking modes. Default is True.
+)
+model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
 
-with torch.no_grad():
-    outputs = model(input_ids=input_ids)
+# conduct text completion
+generated_ids = model.generate(**model_inputs, max_new_tokens=32768)
+output_ids = generated_ids[0][len(model_inputs.input_ids[0]) :].tolist()
 
-logits = outputs.logits  # shape: (1, 10, vocab_size)
-print("Logits shape:", logits.shape)
-print("Logits:\n", logits)
+# parsing thinking content
+try:
+    # rindex finding 151668 (</think>)
+    index = len(output_ids) - output_ids[::-1].index(151668)
+except ValueError:
+    index = 0
+
+output = tokenizer.decode(output_ids, skip_special_tokens=False)
+breakpoint()
