@@ -17,7 +17,7 @@ from .config import InferenceConfig, InferenceResults, InferenceRollout, Inferen
 from .utils import _maybe_force_eos, _maybe_force_eot, naive_sample
 
 AXIS_NAME = "data"
-PADDING_BUFFER = 1024
+PADDING_BUFFER = 3000
 
 
 INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
@@ -243,9 +243,9 @@ class InferenceEngine:
         inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
         tokens = np.array(inputs, dtype=np.int32)
 
-        if (T := tokens.shape[1]) > PADDING_BUFFER:
+        if padding_length > PADDING_BUFFER:
             raise ValueError(
-                f"Input sequence padded prompts (T={T}) was greater than kv-cache length with padding, either implement roll cache or add additional buffer space"
+                f"Input sequence padded prompts (T={padding_length}) was greater than kv-cache length with padding, either implement roll cache or add additional buffer space"
             )
 
         return tokens, seq_lens

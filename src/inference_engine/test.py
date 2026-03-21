@@ -51,8 +51,8 @@ model_config = ModelConfig(
 model = Model(model_config)
 
 params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
-bs = 16
-r = 4
+bs = 4
+r = 8
 config = InferenceConfig(
     temperature=0.7,
     top_p=None,
@@ -82,9 +82,6 @@ tokenizer_inp = [
 ] * 4
 
 engine(tokenizer_inp, key, params)
-
-logger.info("starting profiler")
-# with stax.Tracker(trace="./profile"):
 output: InferenceResults = engine(tokenizer_inp, key, params)
 
 # print(output.output_strs)

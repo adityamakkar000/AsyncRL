@@ -1,2 +1,2 @@
 name: polaris
-gcs_path: gs://arl-experiments/data/polaris/000_polaris.jsonl
+gcs_path: gs://arl-experiments/data/polaris/
