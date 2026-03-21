@@ -16,7 +16,7 @@ class RejectionSample:
         self.verifier = Verifier()
 
         self.check_config()
-        self.vllm_engine = vLLMEngine(config.vllm_config, self.config.max_workers)
+        self.vllm_engine = vLLMEngine(config.vllm_config, self.config.max_workers, debug=True)
 
         self.num_samples = config.num_samples
         self.checkpoint_number = 100

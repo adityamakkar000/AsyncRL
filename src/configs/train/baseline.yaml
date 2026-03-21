@@ -1,0 +1,61 @@
+defaults:
+  - base
+  - data_config: baseline
+  - model_config: qwen_1.7b_base
+  - sharding_config: fsdp
+  - loss_config: loss
+  - _self_
+
+grad_accum_steps: 1
+val_steps: 1
+seed: 0
+num_steps: 1000
+val_interval: 25
+
+optimizer: "adamw"
+weight_decay: 0.01
+grad_clip: 1.0
+
+learning_rate_init: 0
+learning_rate_peak: 1e-5
+learning_rate_end: 1e-5
+warmup_steps: 0.01
+decay_steps: 0.9
+
+spot_training: true
+checkpoint_interval: 25
+best_metric: null
+max_checkpoints_to_keep: 5
+
+wanb_config:
+  project: "AnnealedRL"
+  notes: null
+  tags: null
+
+data_config:
+  train_config:
+    batch_size: 4096
+  val_config:
+    batch_size: 1024
+
+loss_config:
+  inference_config:
+    max_seq_len: 4096
+    batch_size: 4
+    n_replicas: 4
+    group_size: 16
+    temperature: 1.0
+    reasoning_budget: null
+    think_mode: false
+  rl_config:
+    algorithm: cispo
+    epsilon_high: 4
+    epsilon_low: 4
+    ppo_minibatch_size: 256
+
+    
+metrics_to_log:
+  - "train/loss"
+  - "train/is_ratio_step_0"
+  - "train/mean_reward"
+  - "val/mean_reward"

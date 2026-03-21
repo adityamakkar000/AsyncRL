@@ -1,0 +1,5 @@
+defaults:
+  - datasets@train_config: polaris
+  - datasets@val_config: aime
+  - _self_
+
