@@ -70,10 +70,6 @@ class InferenceEngine:
             .tolist()
         )
 
-        if self.config.precompile:
-            self.precompile_decode(params)
-            self.precompile_prefill(params)
-
     def validate_config(self):
         """Validate the inference configuration to ensure it meets the requirements for the inference engine."""
         assert self.config.n_replicas <= jax.local_device_count(), (
@@ -198,76 +194,6 @@ class InferenceEngine:
     def setup_parameters(self, params: PyTree) -> PyTree:
         return jax.tree.map(lambda p: process_allgather(p, tiled=True), params)
 
-    def precompile_prefill(self, params: PyTree) -> None:
-        """
-        Precompile prefill function for different sequence lengths up to max_seq_len.
-        The structure self.precompiled_dict = dict[seq_len --> compiled_fn].
-        """
-
-        curr_seq_len = self.config.intial_sequence_len
-        params_host = self.setup_parameters(params)
-
-        with jax.set_mesh(self.shardings.mesh):
-            key = jax.random.PRNGKey(0)
-            while curr_seq_len <= self.config.max_prefill_sequence_len:
-                seq_lens_np = np.ones((1,), dtype=np.int32)
-                x_init_np = np.ones((1, curr_seq_len), dtype=np.int32)
-
-                x_init, seq_lens, params_sharded, key_sharded = self.put_batch_on_device(
-                    x_init_np, seq_lens_np, params_host, key
-                )
-
-                self.precompile_dict["prefill"][curr_seq_len] = jax.jit(
-                    self.prefill,
-                    **self.shardings.prefill_shardings,
-                )
-
-                _output = self.precompile_dict["prefill"][curr_seq_len](x_init, seq_lens, params_sharded, key_sharded)
-
-                curr_seq_len *= 2
-            del params_host
-            logger.info("Finished prefill precompile")
-
-    def precompile_decode(self, params: PyTree) -> None:
-        """
-        Precompile decode function for max attention length only since we use jax.lax.while loop.
-        """
-        params_host = self.setup_parameters(params)
-
-        with jax.set_mesh(self.shardings.mesh):
-            params_sharded = jax.tree.map(self.replicate_across_axis, params_host)
-
-            @partial(jax.jit, out_shardings=self.shardings.state_sharding)
-            def create_initial_state() -> InferenceState:
-                state = InferenceState(
-                    next_token=jnp.ones((self.decode_size, 1), dtype=jnp.int32),
-                    kv_cache=self.model.init_kv_cache(
-                        self.decode_size,
-                        length=self.max_attention_length,
-                        dtype=self.config.kv_cache_dtype,
-                        sharding=self.shardings.kv_cache_sharding,
-                    ),
-                    key=jax.random.PRNGKey(0),
-                    seq_lens=jnp.array([1] * self.decode_size, dtype=jnp.int32),
-                    stop_mask=jnp.zeros((self.decode_size, 1), dtype=bool),
-                    end_of_think=jnp.zeros((self.decode_size, 1), dtype=bool),
-                    out_tokens=jnp.ones((self.decode_size, self.max_attention_length), dtype=jnp.int32),
-                    out_logprobs=jnp.zeros((self.decode_size, self.max_attention_length), dtype=jnp.float32),
-                )
-                return state
-
-            state = create_initial_state()
-
-            self.precompile_dict["decode"][self.max_attention_length] = jax.jit(
-                self._decode_loop,
-                donate_argnums=(0,),
-                **self.shardings.decode_shardings,
-            )
-            _output = self.precompile_dict["decode"][self.max_attention_length](state, params_sharded)
-
-            del (_output, params_sharded, params_host)
-            logger.info("Finished decode precompile")
-
     def compute_max_power_of_two(self, n: int, upper_bound: int) -> int:
         """Compute the maximum power of two less than or equal to n and upper_bound."""
         return min(1 << (n.bit_length()), upper_bound)
@@ -277,15 +203,6 @@ class InferenceEngine:
         return self.compute_max_power_of_two(max(seq_lens).item(), self.config.max_seq_len)
 
     def tokenize(self, texts: list[str]) -> tuple[np.ndarray, np.ndarray]:
-        """
-        Tokenize the input texts and pad them to the maximum sequence length in the batch.
-        Args:
-            texts (list[str]): The list of input texts to tokenize.
-        Returns:
-            tokens (Array): The tokenized and padded input texts. Shape: [batch_size, max_seq_len].
-            seq_lens (Array): The original sequence lengths before padding. Shape: [batch_size].
-        """
-
         inputs: list[list[int]] = [
             self.tokenizer.apply_chat_template(
                 get_chat_template(self.config.system_prompt, text),
@@ -309,10 +226,6 @@ class InferenceEngine:
         return tokens, seq_lens
 
     def cleanup_rollouts(self, rollouts: list[InferenceRollout]) -> list[InferenceRollout]:
-        """
-        Remove padding tokens and trailing repeated EOS tokens from rollouts.
-        Keeps the first EOS token and truncates everything after it.
-        """
         pad_id = self.tokenizer.pad_token_id
         eos_id = self.tokenizer.eos_token_id
 
@@ -341,13 +254,6 @@ class InferenceEngine:
         return cleaned
 
     def detokenizer(self, tokens: list[InferenceRollout] | InferenceRollout) -> list[list[str]]:
-        """
-        Detokenize the output rollouts into strings.
-        Args:
-            tokens list[InferenceRollout]: The list of rollouts to detokenize.
-        Returns:
-            list[list[str]]: The detokenized output strings.
-        """
         if isinstance(tokens, InferenceRollout):
             tokens = [tokens]
 
@@ -359,16 +265,6 @@ class InferenceEngine:
         return output_strs
 
     def prefill(self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array) -> InferenceState:
-        """
-        Run model forward pass for prefill
-        Args:
-            input_tokens (Array): The input tokens for the prefill step. Shape: [decode_size, seq_len].
-            seq_lens (Array): The sequence lengths of the input tokens. Shape: [decode_size].
-            params (PyTree): The model parameters.
-            key (Array): The random key for any stochastic operations during prefill.
-        Returns:
-            InferenceState: The state after the prefill step, containing the filled kv cache and other necessary information for decoding.
-        """
         logger.info(f"Compiling prefill for sequence length {input_tokens.shape[1]}")
 
         with jax.named_scope("prefill"):
@@ -409,17 +305,6 @@ class InferenceEngine:
     def prefill_step(
         self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array
     ) -> tuple[InferenceState, dict[str, float]]:
-        """
-        Perform the prefill step with precompilation for the given input tokens and sequence lengths.
-        Args:
-            input_tokens (Array): The input tokens for the prefill step. Shape: [batch_size, seq_len].
-            seq_lens (Array): The sequence lengths of the input tokens. Shape: [batch_size].
-            params (PyTree): The model parameters.
-            key (Array): The random key for any stochastic operations during prefill.
-        Returns:
-            InferenceState: The state after the prefill step, containing the filled kv cache and other necessary information for decoding.
-            dict[str, float]: Metrics collected during the prefill step, such as time taken.
-        """
         precompiled_length = input_tokens.shape[1]
         if self.precompile_dict["prefill"].get(precompiled_length) is None:
             self.precompile_dict["prefill"][precompiled_length] = jax.jit(
@@ -435,14 +320,6 @@ class InferenceEngine:
         return out, {"ttft": t.data["time"]}
 
     def decode(self, state: InferenceState, params: PyTree) -> InferenceState:
-        """
-        Perform the decode step of the inference, which runs the model for one step to get the next token and update the kv cache.
-        Args:
-            state (InferenceState): The current state of the inference, containing the current token, kv cache, and other necessary information.
-            params (PyTree): The model parameters.
-        Returns:
-            InferenceState: The updated state after the decode step, containing the next token, updated kv cache, and other necessary information for the next step.
-        """
         logger.info(f"Compiling decode step for attention length {state.kv_cache[0].k.shape[1]}")
         key, sample_key = jax.random.split(state.key)
 
@@ -506,17 +383,89 @@ class InferenceEngine:
             state,
         )
 
+    def _decode_single_loop(self, state: InferenceState, params: PyTree) -> InferenceState:
+        return jax.lax.while_loop(
+            lambda state: ~jnp.any(state.stop_mask),
+            lambda state: self.decode(state, params),
+            state,
+        )
+
+    def continuous_batch(self, prompts: InferenceState, params: PyTree):
+        P = prompts.next_token.shape[0]
+        prompts_list = [prompts.get_index(i) for i in range(P)]
+
+        prompt_queue = []
+        for prompt in prompts_list:
+            for _ in range(self.config.group_size):
+                prompt_queue.append(prompt)
+
+        def create_batch(n) -> InferenceState:
+            batch = [prompt_queue.pop() for _ in range(n)]
+            return jax.tree.map(lambda *x: jnp.concatenate(x, axis=0), *batch)
+
+        def roll_cache_to_length(state: InferenceState, length: int) -> InferenceState:
+            diff = length - state.kv_cache[0].length
+
+            def roll_kv_cache(kv: KVCache) -> KVCache:
+                rolled_k = jnp.roll(kv.k, diff, axis=1)
+                rolled_v = jnp.roll(kv.v, diff, axis=1)
+                return KVCache(k=rolled_k, v=rolled_v, length=length)
+
+            return state.replace(kv_cache=[roll_kv_cache(kv) for kv in state.kv_cache])
+
+        def substitute_batch(state: InferenceState, new_batch: InferenceState) -> InferenceState:
+            current_length = state.kv_cache[0].length
+            new_batch = roll_cache_to_length(new_batch, current_length)
+            state = InferenceState(
+                next_token=jnp.where(state.stop_mask, new_batch.next_token, state.next_token),
+                kv_cache=[
+                    KVCache(
+                        k=jnp.where(state.stop_mask[:, None, None], new_batch.kv_cache[i].k, state.kv_cache[i].k),
+                        v=jnp.where(state.stop_mask[:, None, None], new_batch.kv_cache[i].v, state.kv_cache[i].v),
+                        length=current_length,
+                    )
+                    for i in range(len(state.kv_cache))
+                ],
+                key=state.key,
+                seq_lens=jnp.where(state.stop_mask, new_batch.seq_lens, state.seq_lens),
+                stop_mask=jnp.where(state.stop_mask, new_batch.stop_mask, state.stop_mask),
+                end_of_think=jnp.where(state.stop_mask, new_batch.end_of_think, state.end_of_think),
+                out_tokens=jnp.where(state.stop_mask, new_batch.out_tokens, state.out_tokens),
+                out_logprobs=jnp.where(state.stop_mask, new_batch.out_logprobs, state.out_logprobs),
+            )
+
+            max_seq = jnp.max(state.seq_lens)
+            shift_back = -(current_length - max_seq)
+            state = state.replace(
+                kv_cache=[
+                    KVCache(k=jnp.roll(kv.k, shift_back, axis=1), v=jnp.roll(kv.v, shift_back, axis=1), length=max_seq)
+                    for kv in state.kv_cache
+                ]
+            )
+
+            return state
+
+        finished_tokens = []
+        finished_logprobs = []
+
+        state = create_batch(self.decode_size)
+        while len(prompt_queue) > 0:
+            state = self._decode_single_loop(state, params)
+            n_finished = jnp.sum(state.stop_mask)
+            new_batch = create_batch(n_finished)
+
+            tokens, logprobs = (
+                state.out_tokens[jnp.where(state.stop_mask)],
+                state.out_logprobs[jnp.where(state.stop_mask)],
+            )
+            finished_tokens.append(tokens)
+            finished_logprobs.append(logprobs)
+
+            state = substitute_batch(state, new_batch)
+
+        state = self._decode_loop(state, params)
+
     def single_rollout(self, state: InferenceState, params: PyTree) -> tuple[Array, Array, dict[str, float]]:
-        """
-        Perform a single rollout for the given inference state using an on-device while_loop.
-        Args:
-            state (InferenceState): The initial state of the inference, containing the current token, kv cache, and other necessary information.
-            params (PyTree): The model parameters.
-        Returns:
-            Array: The output tokens generated during the rollout. Shape: [decode_size, total_seq_len].
-            Array: The log probabilities of the generated tokens during the rollout. Shape: [decode_size, total_seq_len].
-            dict[str, float]: Metrics collected during the rollout, such as time taken and tokens per second.
-        """
         initial_cache_length = jnp.copy(state.kv_cache[0].length)
 
         if self.precompile_dict["decode"].get(self.max_attention_length) is None:
@@ -533,18 +482,18 @@ class InferenceEngine:
 
         n_steps = (state.kv_cache[0].length - initial_cache_length).item()
         total_tokens = n_steps * self.decode_size * jax.process_count()
-        total_time = t.data["time"]
+        decode_time = t.data["time"]
 
         decode_metrics = {
-            "total_time": total_time,
+            "decode_time": decode_time,
             "total_decode_tokens": total_tokens,
             "decode_steps": n_steps,
-            "tps": total_tokens / total_time,
-            "sps": n_steps / total_time,
+            "tps": total_tokens / decode_time,
+            "sps": n_steps / decode_time,
         }
 
         logger.info(
-            f"Inferenced {decode_metrics['decode_steps']} tokens in {decode_metrics['total_time']:.2f} seconds ({decode_metrics['tps']:.2f} tps, {decode_metrics['sps']:.2f} sps)"
+            f"Inferenced {decode_metrics['decode_steps']} tokens in {decode_metrics['decode_time']:.2f} seconds ({decode_metrics['tps']:.2f} tps, {decode_metrics['sps']:.2f} sps)"
         )
         return (
             out_tokens,
@@ -553,17 +502,6 @@ class InferenceEngine:
         )
 
     def rollout_group(self, x: Array, seq_lens: Array, params: PyTree, key: Array) -> tuple[InferenceRollout, PyTree]:
-        """
-        Perform rollouts for a group of inputs, where the group size is determined by the config.
-        Args:
-            x (Array): The input tokens for the group. Shape: [batch_size, seq_len].
-            seq_lens (Array): The sequence lengths of the input tokens. Shape: [batch_size].
-            params (PyTree): The model parameters.
-            key (Array): The random key for any stochastic operations during the rollouts.
-        Returns:
-            InferenceRollout: The rollouts generated for the group, containing the output tokens and log probabilities.
-            PyTree: Metrics collected during the rollouts, such as time taken and tokens per second.
-        """
         assert (B := x.shape[0]) == 1, f"Expected batch size {self.decode_size}, got {B}"
         rollout_output = InferenceRollout(rollouts=[], logprobs=[])
         decode_metrics_collected = []
@@ -586,6 +524,8 @@ class InferenceEngine:
             decode_metrics_collected.append(decode_metrics)
             prefill_metrics_collected.append(prefill_metrics)
 
+            del state  # free kv cache
+
         metrics: dict[str, float] = dict()
         for stage in [decode_metrics_collected, prefill_metrics_collected]:
             for key in stage[0].keys():
@@ -602,17 +542,6 @@ class InferenceEngine:
     def batch_rollout(
         self, batch_tokens: np.ndarray, seq_lens: np.ndarray, key: Array, params: PyTree
     ) -> tuple[list[InferenceRollout], PyTree]:
-        """
-        Perform rollouts for the entire batch of inputs by splitting them into groups and running rollouts for each group.
-        Args:
-            batch_tokens (Array): The input tokens for the entire batch. Shape: [batch_size, seq_len].
-            seq_lens (Array): The sequence lengths of the input tokens. Shape: [batch_size].
-            key (Array): The random key for any stochastic operations during the rollouts.
-            params (PyTree): The model parameters.
-        Returns:
-            list[InferenceRollout]: The rollouts generated for the entire batch, containing the output tokens and log probabilities for each input.
-            PyTree: Metrics collected during the rollouts, such as time taken and tokens per second.
-        """
         B, _ = batch_tokens.shape
         output: list[InferenceRollout] = []
         metrics: list[dict[str, float]] = []
@@ -638,15 +567,6 @@ class InferenceEngine:
         return self.cleanup_rollouts(output), metrics
 
     def multihost_prep(self, key: Array, params: PyTree) -> tuple[Array, PyTree]:
-        """
-        Prepare the random key and model parameters for multi-host inference by performing an all-gather across hosts.
-        Args:
-            key (Array): The random key for any stochastic operations during inference.
-            params (PyTree): The model parameters to use for inference.
-        Returns:
-            Array: The updated random key after folding in the host index.
-            PyTree: The model parameters after performing an all-gather across hosts.
-        """
         key = jax.device_get(jax.random.fold_in(key, stax.get_rank()))
         params = self.setup_parameters(params)
         return key, params
@@ -655,13 +575,17 @@ class InferenceEngine:
         """
         Perform inference for the given input prompts, random key, and model parameters.
         Args:
-            prompts (list[str]): The list of input prompts to perform inference on.
-            key (Array): The random key for any stochastic operations during inference.
+            prompts (list[str]): The list of input prompts.
+            key (Array): PRNG key for inference.
             params (PyTree): The model parameters to use for inference.
             detokenize (bool): Whether to detokenize the output rollouts into strings. Default is False.
         Returns:
             InferenceResults: The results of the inference, containing the output rollouts, optionally the detokenized output strings, and any collected metrics.
         """
+        assert len(prompts) % self.config._max_prompts_decode == 0, (
+            f"Number of prompts {len(prompts)} must be divisible by max_prompts_decode {self.config._max_prompts_decode}"
+        )
+
         with Tracker(timer=True) as t:
             key, params = self.multihost_prep(key, params)
             inp_tokens, seq_lens = self.tokenize(prompts)
