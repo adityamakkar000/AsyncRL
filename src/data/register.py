@@ -198,3 +198,11 @@ def load_amc_23() -> list[Sample]:
     samples = [Sample(prompt=example["question"], answer=str(example["answer"]), solution=None) for example in ds]
     ds.cleanup_cache_files()
     return samples
+
+
+@register_dataset("polaris")
+def load_polaris() -> list[Sample]:
+    ds = load_dataset("POLARIS-Project/Polaris-Dataset-53K")["train"]
+    samples = [Sample(prompt=example["problem"], answer=str(example["answer"]), solution=None) for example in ds]
+    ds.cleanup_cache_files()
+    return samples
