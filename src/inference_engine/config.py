@@ -21,8 +21,8 @@ class InferenceConfig:
     group_size: int = MISSING
     n_replicas: int = 1
 
-    _max_prompts_decode: int = 16
-    _max_decode_batch_size: int = 64
+    _max_decode_prompts: int = 16  # number of prompts to take during each continous run of the engine
+    _max_decode_batch_size: int = 64  # at decode time how many samples to take for each device
 
     intial_sequence_len: int = 64
     precompile: bool = True
@@ -43,6 +43,7 @@ class InferenceState:
     end_of_think: Array
     out_tokens: Array
     out_logprobs: Array
+    prompt_id: Array
 
     def get_index(self, i: int) -> "InferenceState":
         return InferenceState(
@@ -50,12 +51,13 @@ class InferenceState:
             kv_cache=[
                 KVCache(k=cache.k[i : i + 1], v=cache.v[i : i + 1], length=cache.length) for cache in self.kv_cache
             ],
-            key=self.key[i : i + 1],
+            key=self.key,
             seq_lens=self.seq_lens[i : i + 1],
             stop_mask=self.stop_mask[i : i + 1],
             end_of_think=self.end_of_think[i : i + 1],
             out_tokens=self.out_tokens[i : i + 1],
             out_logprobs=self.out_logprobs[i : i + 1],
+            prompt_id=self.prompt_id[i : i + 1],
         )
 
 

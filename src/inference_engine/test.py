@@ -1,5 +1,3 @@
-import sys
-
 import jax
 
 from src.constants import CACHE, GS_BUCKET
@@ -7,8 +5,6 @@ from src.model import Model, ModelConfig, QwenConfig
 
 from .config import InferenceConfig, InferenceResults
 from .main import InferenceEngine
-
-sys.exit(0)
 
 
 def set_jax_cache(path: str):
@@ -42,8 +38,8 @@ model_config = ModelConfig(
 model = Model(model_config)
 
 params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
-bs = 32
-r = 4
+bs = 2
+r = 1
 config = InferenceConfig(
     temperature=0.7,
     top_p=None,
@@ -53,7 +49,9 @@ config = InferenceConfig(
     max_prefill_sequence_len=256,
     batch_size=bs,
     n_replicas=r,
-    group_size=bs * r,
+    group_size=2,
+    _max_decode_prompts=bs,
+    _max_decode_batch_size=bs * r,
     kv_cache_dtype="bfloat16",
     precompile=True,
     reasoning_budget=None,
@@ -66,10 +64,11 @@ engine = InferenceEngine(model, params, config)
 key = jax.random.PRNGKey(2303)
 
 tokenizer_inp = [
-    r"""Patrick started walking at a constant speed along a straight road from his school to the park. One hour after Patrick left, Tanya started running at a constant speed of $2$ miles per hour faster than Patrick walked, following the same straight road from the school to the park. One hour after Tanya left, Jose started bicycling at a constant speed of $7$ miles per hour faster than Tanya ran, following the same straight road from the school to the park. All three people arrived at the park at the same time. The distance from the school to the park is $\frac{m}{n}$ miles, where $m$ and $n$ are relatively prime positive integers. Find $m+n$."""
+    r"""Patrick started walking at a constant speed along a straight road from his school to the park. One hour after Patrick left, Tanya started running at a constant speed of $2$ miles per hour faster than Patrick walked, following the same straight road from the school to the park. One hour after Tanya left, Jose started bicycling at a constant speed of $7$ miles per hour faster than Tanya ran, following the same straight road from the school to the park. All three people arrived at the park at the same time. The distance from the school to the park is $\frac{m}{n}$ miles, where $m$ and $n$ are relatively prime positive integers. Find $m+n$.""",
+    r"""Find the sum of all integer bases $b>9$ for which $17_b$ is a divisor of $97_b.$""",
 ]
 
-# engine(tokenizer_inp, key, params)
+engine(tokenizer_inp, key, params)
 output: InferenceResults = engine(tokenizer_inp, key, params)
 
 print(output.output_strs)
