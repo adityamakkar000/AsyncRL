@@ -471,21 +471,29 @@ class InferenceEngine:
 
         if self.precompile_dict["decode"].get("any_stop") is None:
             self.precompile_dict["decode"]["any_stop"] = jax.jit(
-                self._decode_single_loop, **self.shardings.decode_shardings
+                self._decode_single_loop,
+                # donate_argnums=(0,),
+                **self.shardings.decode_shardings,
             )
         if self.precompile_dict["decode"].get("all_stop") is None:
-            self.precompile_dict["decode"]["all_stop"] = jax.jit(self._decode_loop, **self.shardings.decode_shardings)
+            self.precompile_dict["decode"]["all_stop"] = jax.jit(
+                self._decode_loop,
+                # donate_argnums=(0,),
+                **self.shardings.decode_shardings,
+            )
+
+        finished_tokens = []
+        finished_logprobs = []
+        finished_prompt_ids = []
+        decode_steps = 0
+        queued_steps = 0
 
         with Tracker(timer=True) as t:
-            finished_tokens = []
-            finished_logprobs = []
-            finished_prompt_ids = []
-            queued_steps = 0
-
-            state = create_batch(self.decode_size)
-
+            state = create_batch(self.config._max_decode_batch_size)
             while len(prompt_queue) > 0:
+                before_length = jnp.copy(state.kv_cache[0].length)
                 state = self.precompile_dict["decode"]["any_stop"](state, params)
+                after_length = jnp.copy(state.kv_cache[0].length)
                 n_finished = jnp.sum(state.stop_mask)
                 new_batch = create_batch(n_finished)
 
@@ -500,9 +508,13 @@ class InferenceEngine:
                 finished_prompt_ids.append(prompt_ids)
 
                 state = substitute_batch(state, new_batch)
-                queued_steps += 1
+                queued_steps += after_length - before_length
+
+            before_steps = jnp.copy(state.kv_cache[0].length)
 
             state = self.precompile_dict["decode"]["all_stop"](state, params)
+
+            after_steps = state.kv_cache[0].length
 
             tokens, logprobs, prompt_ids = (
                 state.out_tokens,
@@ -516,6 +528,8 @@ class InferenceEngine:
             finished_tokens_cpu = list(map(lambda x: jax.device_get(x), finished_tokens))
             finished_logprobs_cpu = list(map(lambda x: jax.device_get(x), finished_logprobs))
             finished_prompt_ids_cpu = list(map(lambda x: jax.device_get(x), finished_prompt_ids))
+            final_steps = (after_steps - before_steps).item()
+            queued_steps = queued_steps.item()
 
         finished_tokens_cpu = np.concat(finished_tokens_cpu, axis=0)
         finished_logprobs_cpu = np.concat(finished_logprobs_cpu, axis=0)
@@ -528,7 +542,26 @@ class InferenceEngine:
 
         rollouts = [InferenceRollout(rollouts=t, logprobs=lp) for t, lp in zip(grouped_tokens, grouped_logprobs)]
 
-        return rollouts, {"decode_time": t.data["time"], "queued_steps": queued_steps}
+        decode_steps = queued_steps + final_steps
+
+        queued_tokens = queued_steps * self.config._max_decode_batch_size * self.config.n_replicas
+        final_tokens = final_steps * self.config._max_decode_batch_size * self.config.n_replicas
+        decode_tokens = decode_steps * self.config._max_decode_batch_size * self.config.n_replicas
+
+        decode_metrics = {
+            "decode_steps": decode_steps,
+            "queued_steps": queued_steps,
+            "final_steps": final_steps,
+            "decode_time": t.data["time"],
+            "decode_tokens": decode_tokens,
+            "decode_tps": decode_tokens / t.data["time"],
+            "decode_sps": decode_steps / t.data["time"],
+            "queue_sps": queued_steps / t.data["time"],
+            "queue_tps": queued_tokens / t.data["time"],
+            "final_sps": final_steps / t.data["time"],
+            "final_tps": final_tokens / t.data["time"],
+        }
+        return rollouts, decode_metrics
 
     def batch_rollout(
         self, batch_tokens: np.ndarray, seq_lens: np.ndarray, key: Array, params: PyTree
@@ -553,9 +586,11 @@ class InferenceEngine:
                 self.put_batch_on_device(current_batch, current_seq_lens, params, current_key)
             )
 
-            prefill_state, prefill_metrics = self.prefill_step(
-                current_batch_sharded, current_seq_lens_sharded, params_sharded, current_key_sharded
-            )
+            with Tracker(timer=True) as t:
+                prefill_state, prefill_metrics = self.prefill_step(
+                    current_batch_sharded, current_seq_lens_sharded, params_sharded, current_key_sharded
+                )
+                prefill_state = jax.tree.map(lambda x: x.block_until_ready(), prefill_state)
 
             batch_output, batch_metrics = self.continuous_batch(
                 prefill_state,
@@ -563,7 +598,7 @@ class InferenceEngine:
             )
 
             output.extend(batch_output)
-            metrics.append(batch_metrics)
+            metrics.append(batch_metrics | {"prefill_time": t.data["time"]})
 
         metrics: dict[str, float] = jax.tree.map(lambda *x: sum(x) / len(x), *metrics)
 
