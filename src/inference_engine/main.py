@@ -53,7 +53,6 @@ class InferenceEngine:
         self.config = config
         self.validate_config()
 
-        self.decode_size = config.batch_size * config.n_replicas
         self.shardings = self.get_shardings(params)
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model.config.hf_model_name)
@@ -461,7 +460,7 @@ class InferenceEngine:
             current_length = state.kv_cache[0].length
             new_batch = roll_cache_to_length(new_batch, current_length)
 
-            stop_indices = jnp.where(state.stop_mask[:, 0])[0]
+            stop_indices = jnp.where(state.stop_mask[:, 0])[0][: new_batch.next_token.shape[0]]
 
             state = InferenceState(
                 next_token=state.next_token.at[stop_indices].set(new_batch.next_token),
@@ -481,8 +480,6 @@ class InferenceEngine:
                 out_logprobs=state.out_logprobs.at[stop_indices].set(new_batch.out_logprobs),
                 prompt_id=state.prompt_id.at[stop_indices].set(new_batch.prompt_id),
             )
-            # breakpoint()
-
             max_seq = jnp.max(state.seq_lens)
             shift_back = -(current_length - max_seq)
             state = state.replace(
@@ -523,13 +520,13 @@ class InferenceEngine:
                 state = self.precompile_dict["decode"]["any_stop"](state, params)
                 after_length = jnp.copy(state.kv_cache[0].length)
 
-                n_finished = jnp.sum(state.stop_mask)
+                n_finished = min(jnp.sum(state.stop_mask), len(prompt_queue))
                 new_batch = create_batch(n_finished)
 
                 tokens, logprobs, prompt_ids = (
-                    state.out_tokens[jnp.where(state.stop_mask)[0]],
-                    state.out_logprobs[jnp.where(state.stop_mask)[0]],
-                    state.prompt_id[jnp.where(state.stop_mask)[0]],
+                    state.out_tokens[jnp.where(state.stop_mask)[0][:n_finished]],
+                    state.out_logprobs[jnp.where(state.stop_mask)[0][:n_finished]],
+                    state.prompt_id[jnp.where(state.stop_mask)[0][:n_finished]],
                 )
 
                 finished_tokens.append(tokens)
@@ -612,7 +609,6 @@ class InferenceEngine:
                 prefill_state, prefill_metrics = self.prefill_step(
                     current_batch_sharded, current_seq_lens_sharded, params_sharded, current_key_sharded
                 )
-                prefill_state = jax.tree.map(lambda x: x.block_until_ready(), prefill_state)
 
             batch_output, batch_metrics = self.continuous_batch(
                 prefill_state,
