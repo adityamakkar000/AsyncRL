@@ -97,10 +97,12 @@ class InferenceEngine:
             f"_max_decode_prompts {self.config._max_decode_prompts} must be divisible by n_replicas {self.config.n_replicas}"
         )
 
-        assert (self.config._max_decode_prompts * self.config.group_size) % (
-            self.config._max_decode_batch_size * self.config.n_replicas
-        ) == 0, (
+        assert (self.config._max_decode_prompts * self.config.group_size) % (self.config._max_decode_batch_size) == 0, (
             f"group_size * _max_decode_prompts {self.config.group_size * self.config._max_decode_prompts} must be divisible by _max_decode_batch_size * n_replicas {self.config._max_decode_batch_size * self.config.n_replicas}"
+        )
+
+        assert self.config._max_decode_batch_size % self.config.n_replicas == 0, (
+            f"_max_decode_batch_size {self.config._max_decode_batch_size} must be divisible by n_replicas {self.config.n_replicas}"
         )
 
         if self.config.reasoning_budget is not None:
@@ -146,6 +148,8 @@ class InferenceEngine:
 
         params_sharding = jax.tree.map(lambda _p: replicate_sharding, params)
 
+        # NOTE: use replicate sharding since we have to split aftewards into slices of
+        # (1, ...) and so we will have to replicate
         prefill_shardings = {
             "in_shardings": (
                 split_sharding,
@@ -153,8 +157,9 @@ class InferenceEngine:
                 replicate_sharding,
                 replicate_sharding,
             ),
-            "out_shardings": state_sharding,
+            "out_shardings": jax.tree.map(lambda _p: replicate_sharding, state_sharding),
         }
+
         decode_shardings = {
             "in_shardings": (state_sharding, params_sharding),
             "out_shardings": state_sharding,
@@ -195,6 +200,9 @@ class InferenceEngine:
             data_callback=lambda _index: seq_lens,  # index not needed
             dtype=seq_lens.dtype,
         )
+
+        batch = jax.device_put(batch, self.shardings.split_sharding)
+        seq_lens = jax.device_put(seq_lens, self.shardings.split_sharding)
 
         key = self.replicate_across_axis(key)
         params = jax.tree.map(self.replicate_across_axis, params)
@@ -328,6 +336,20 @@ class InferenceEngine:
             jax.tree.map(lambda x: x.block_until_ready(), out)
         return out, {"ttft": t.data["time"]}
 
+    def log_type(self, state: InferenceState):
+        logger.info(f"next tokens: {state.next_token.shape, state.next_token.dtype, state.next_token.sharding}")
+        logger.info(f"seq lens: {state.seq_lens.shape, state.seq_lens.dtype, state.seq_lens.sharding}")
+        logger.info(f"kv cache k: {state.kv_cache[0].k.shape, state.kv_cache[0].k.dtype, state.kv_cache[0].k.sharding}")
+        logger.info(f"key shape: {state.key.shape, state.key.dtype, state.key.sharding}")
+        logger.info(f"stop mask shape: {state.stop_mask.shape, state.stop_mask.dtype, state.stop_mask.sharding}")
+        logger.info(
+            f"end of think shape: {state.end_of_think.shape, state.end_of_think.dtype, state.end_of_think.sharding}"
+        )
+        logger.info(f"out tokens shape: {state.out_tokens.shape, state.out_tokens.dtype, state.out_tokens.sharding}")
+        logger.info(
+            f"out logprobs shape: {state.out_logprobs.shape, state.out_logprobs.dtype, state.out_logprobs.sharding}"
+        )
+
     def decode(self, state: InferenceState, params: PyTree) -> InferenceState:
         logger.info(f"Compiling decode step for attention length {state.kv_cache[0].k.shape[1]}")
         key, sample_key = jax.random.split(state.key)
@@ -402,29 +424,24 @@ class InferenceEngine:
 
     def continuous_batch(self, prompts: InferenceState, params: PyTree):
         P = prompts.next_token.shape[0]
-        prompts_list = [prompts.get_index(i) for i in range(P)]
-
-        prompt_queue: list[InferenceState] = []
-        for prompt_state in prompts_list:
-            for _ in range(self.config.group_size):
-                prompt_queue.append(prompt_state)
+        prompt_queue: list[int] = [i for i in range(P) for _ in range(self.config.group_size)]
 
         grouped_tokens: list[list[np.ndarray]] = [[] for _ in range(P)]
         grouped_logprobs: list[list[np.ndarray]] = [[] for _ in range(P)]
 
         def create_batch(n: int | Array) -> InferenceState:
-            states: list[InferenceState] = [prompt_queue.pop() for _ in range(n)]
-
             def concat(x):
                 if x[0].ndim == 0:
-                    return x[0]
+                    return jnp.asarray(x[0], dtype="int32")
                 elif x[0].ndim == 1:
                     return jnp.stack(x, axis=0)[:, 0]
                 return jnp.concat(x, axis=0)
 
+            state_ids: list[int] = [prompt_queue.pop() for _ in range(n)]
+            states = [jax.tree.map(lambda x: x.copy(), prompts.get_index(i)) for i in state_ids]
+
             out_state = jax.tree.map(lambda *x: concat(x), *states).replace(key=states[0].key)
-            out_state_sharded = jax.device_put(out_state, self.shardings.state_sharding)
-            return out_state_sharded
+            return out_state
 
         def roll_cache_to_length(state: InferenceState, length: int) -> InferenceState:
             diff = length - state.kv_cache[0].length
@@ -432,7 +449,7 @@ class InferenceEngine:
             def roll_kv_cache(kv: KVCache) -> KVCache:
                 rolled_k = jnp.roll(kv.k, diff, axis=1)
                 rolled_v = jnp.roll(kv.v, diff, axis=1)
-                return KVCache(k=rolled_k, v=rolled_v, length=length)
+                return KVCache(k=rolled_k, v=rolled_v, length=jnp.array(length))
 
             return state.replace(kv_cache=[roll_kv_cache(kv) for kv in state.kv_cache])
 
@@ -445,7 +462,7 @@ class InferenceEngine:
                     KVCache(
                         k=jnp.where(state.stop_mask[:, None, None], new_batch.kv_cache[i].k, state.kv_cache[i].k),
                         v=jnp.where(state.stop_mask[:, None, None], new_batch.kv_cache[i].v, state.kv_cache[i].v),
-                        length=current_length,
+                        length=current_length.copy(),
                     )
                     for i in range(len(state.kv_cache))
                 ],
@@ -462,24 +479,23 @@ class InferenceEngine:
             shift_back = -(current_length - max_seq)
             state = state.replace(
                 kv_cache=[
-                    KVCache(k=jnp.roll(kv.k, shift_back, axis=1), v=jnp.roll(kv.v, shift_back, axis=1), length=max_seq)
+                    KVCache(
+                        k=jnp.roll(kv.k, shift_back, axis=1),
+                        v=jnp.roll(kv.v, shift_back, axis=1),
+                        length=max_seq.copy(),
+                    )
                     for kv in state.kv_cache
                 ]
             )
-
-            return state
+            return jax.device_put(state, self.shardings.state_sharding)
 
         if self.precompile_dict["decode"].get("any_stop") is None:
             self.precompile_dict["decode"]["any_stop"] = jax.jit(
-                self._decode_single_loop,
-                # donate_argnums=(0,),
-                **self.shardings.decode_shardings,
+                self._decode_single_loop, donate_argnums=(0,), **self.shardings.decode_shardings
             )
         if self.precompile_dict["decode"].get("all_stop") is None:
             self.precompile_dict["decode"]["all_stop"] = jax.jit(
-                self._decode_loop,
-                # donate_argnums=(0,),
-                **self.shardings.decode_shardings,
+                self._decode_loop, donate_argnums=(0,), **self.shardings.decode_shardings
             )
 
         finished_tokens = []
@@ -492,7 +508,10 @@ class InferenceEngine:
             state = create_batch(self.config._max_decode_batch_size)
             while len(prompt_queue) > 0:
                 before_length = jnp.copy(state.kv_cache[0].length)
+
+                state = jax.device_put(state, self.shardings.state_sharding)
                 state = self.precompile_dict["decode"]["any_stop"](state, params)
+
                 after_length = jnp.copy(state.kv_cache[0].length)
                 n_finished = jnp.sum(state.stop_mask)
                 new_batch = create_batch(n_finished)
@@ -543,9 +562,6 @@ class InferenceEngine:
         rollouts = [InferenceRollout(rollouts=t, logprobs=lp) for t, lp in zip(grouped_tokens, grouped_logprobs)]
 
         decode_steps = queued_steps + final_steps
-
-        queued_tokens = queued_steps * self.config._max_decode_batch_size * self.config.n_replicas
-        final_tokens = final_steps * self.config._max_decode_batch_size * self.config.n_replicas
         decode_tokens = decode_steps * self.config._max_decode_batch_size * self.config.n_replicas
 
         decode_metrics = {
@@ -556,10 +572,6 @@ class InferenceEngine:
             "decode_tokens": decode_tokens,
             "decode_tps": decode_tokens / t.data["time"],
             "decode_sps": decode_steps / t.data["time"],
-            "queue_sps": queued_steps / t.data["time"],
-            "queue_tps": queued_tokens / t.data["time"],
-            "final_sps": final_steps / t.data["time"],
-            "final_tps": final_tokens / t.data["time"],
         }
         return rollouts, decode_metrics
 
@@ -599,6 +611,8 @@ class InferenceEngine:
 
             output.extend(batch_output)
             metrics.append(batch_metrics | {"prefill_time": t.data["time"]})
+
+            del prefill_state
 
         metrics: dict[str, float] = jax.tree.map(lambda *x: sum(x) / len(x), *metrics)
 
