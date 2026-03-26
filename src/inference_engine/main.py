@@ -335,20 +335,6 @@ class InferenceEngine:
             jax.tree.map(lambda x: x.block_until_ready(), out)
         return out, {"ttft": t.data["time"]}
 
-    def log_type(self, state: InferenceState):
-        logger.info(f"next tokens: {state.next_token.shape, state.next_token.dtype, state.next_token.sharding}")
-        logger.info(f"seq lens: {state.seq_lens.shape, state.seq_lens.dtype, state.seq_lens.sharding}")
-        logger.info(f"kv cache k: {state.kv_cache[0].k.shape, state.kv_cache[0].k.dtype, state.kv_cache[0].k.sharding}")
-        logger.info(f"key shape: {state.key.shape, state.key.dtype, state.key.sharding}")
-        logger.info(f"stop mask shape: {state.stop_mask.shape, state.stop_mask.dtype, state.stop_mask.sharding}")
-        logger.info(
-            f"end of think shape: {state.end_of_think.shape, state.end_of_think.dtype, state.end_of_think.sharding}"
-        )
-        logger.info(f"out tokens shape: {state.out_tokens.shape, state.out_tokens.dtype, state.out_tokens.sharding}")
-        logger.info(
-            f"out logprobs shape: {state.out_logprobs.shape, state.out_logprobs.dtype, state.out_logprobs.sharding}"
-        )
-
     def decode(self, state: InferenceState, params: PyTree) -> InferenceState:
         logger.info(f"Compiling decode step for attention length {state.kv_cache[0].k.shape[1]}")
         key, sample_key = jax.random.split(state.key)
