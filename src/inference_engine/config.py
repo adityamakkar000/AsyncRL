@@ -45,21 +45,6 @@ class InferenceState:
     out_logprobs: Array
     prompt_id: Array
 
-    def get_index(self, i: int) -> "InferenceState":
-        return InferenceState(
-            next_token=self.next_token[i : i + 1],
-            kv_cache=[
-                KVCache(k=cache.k[i : i + 1], v=cache.v[i : i + 1], length=cache.length) for cache in self.kv_cache
-            ],
-            key=self.key,
-            seq_lens=self.seq_lens[i : i + 1],
-            stop_mask=self.stop_mask[i : i + 1],
-            end_of_think=self.end_of_think[i : i + 1],
-            out_tokens=self.out_tokens[i : i + 1],
-            out_logprobs=self.out_logprobs[i : i + 1],
-            prompt_id=self.prompt_id[i : i + 1],
-        )
-
 
 @dataclass
 class InferenceShardings:

@@ -93,7 +93,7 @@ def _maybe_force_eos(
     eos_token_id: int,
 ):
     # using seq_len + 1 means the model can respond for max_seq_len and the max_seq_len + 1 token will be <eos>
-    length_stop_mask = stop_mask | (seq_lens[:, None] + 1 > max_seq_len)
+    length_stop_mask = stop_mask | (seq_lens[:, None] + 1 >= max_seq_len)
     eos_stop_mask = next_token == eos_token_id
     stop_mask = eos_stop_mask | length_stop_mask
 

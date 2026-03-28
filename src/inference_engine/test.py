@@ -1,4 +1,6 @@
 import jax
+import stax
+from stax import staxLogger as logger
 
 from src.model import Model, ModelConfig, QwenConfig
 
@@ -15,15 +17,30 @@ def set_jax_cache(path: str):
     # jax.config.update("jax_log_compiles", True)
 
 
-set_jax_cache("./jax/cache")
+# set_jax_cache("./jax/cache")
 
+# model_config = ModelConfig(
+#     "Qwen/Qwen3-1.7B",
+#     qwen_config=QwenConfig(
+#         vocab_size=151_936,
+#         d_ff=6144,
+#         sequence_len=16384,
+#         model_dim=2048,
+#         n_heads=16,
+#         n_groups=8,
+#         n_layers=28,
+#         head_dim=128,
+#         rope_base=1_000_000,
+#         activation_dtype="bfloat16",
+#     ),
+# )
 model_config = ModelConfig(
-    "Qwen/Qwen3-1.7B",
+    "Qwen/Qwen3-0.6B",
     qwen_config=QwenConfig(
         vocab_size=151_936,
-        d_ff=6144,
+        d_ff=3072,
         sequence_len=16384,
-        model_dim=2048,
+        model_dim=1024,
         n_heads=16,
         n_groups=8,
         n_layers=28,
@@ -41,7 +58,7 @@ config = InferenceConfig(
     temperature=0.7,
     top_p=None,
     top_k=None,
-    max_seq_len=4096,
+    max_seq_len=512,
     intial_sequence_len=64,
     max_prefill_sequence_len=256,
     batch_size=bs,
@@ -69,13 +86,11 @@ tokenizer_inp = [
 
 engine(tokenizer_inp, key, params)
 
-# with stax.Tracker(trace="./profile"):
-output: InferenceResults = engine(tokenizer_inp, key, params)
+logger.info("starting profiler")
+with stax.Tracker(trace="./profile"):
+    output: InferenceResults = engine(tokenizer_inp, key, params)
 
 print(output.output_strs)
 for key in output.metrics:
     print(f"{key}: {output.metrics[key]}")
 breakpoint()
-
-# tps k = 50 : 904.6337280273438
-# tps k = None :
