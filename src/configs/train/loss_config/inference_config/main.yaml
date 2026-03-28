@@ -4,10 +4,10 @@ top_k: null
 max_seq_len: 1024
 intial_sequence_len: 64
 max_prefill_sequence_len: 1024
-batch_size: 8
+_max_decode_prompts: 16
+_max_decode_batch_size: 64
 n_replicas: 4
 group_size: 32
 kv_cache_dtype: "bfloat16"
-precompile: true
 reasoning_budget: null
 think_mode: true

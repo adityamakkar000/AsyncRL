@@ -41,7 +41,8 @@ data_config:
 loss_config:
   inference_config:
     max_seq_len: 8192
-    batch_size: 4
+    _max_decode_prompts: 16
+    _max_decode_batch_size: 64
     n_replicas: 4
     group_size: 16
     temperature: 1.0

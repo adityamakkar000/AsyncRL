@@ -36,13 +36,11 @@ For every problem, you must reason step-by-step inside <think></think> tags befo
 
 
 def get_chat_template(system_prompt: bool, text: str) -> list[dict[str, str]]:
+    chat = []
     if system_prompt:
-        return [
-            {"role": "system", "content": apply_system_prompt_template()},
-            {"role": "user", "content": apply_prompt_template(text)},
-        ]
-    else:
-        return [{"role": "user", "content": apply_prompt_template(text)}]
+        chat.append({"role": "system", "content": apply_system_prompt_template()})
+    chat.append({"role": "user", "content": apply_prompt_template(text)})
+    return chat
 
 
 class InferenceEngine:
@@ -80,12 +78,9 @@ class InferenceEngine:
         assert self.config.max_seq_len & (self.config.max_seq_len - 1) == 0, (
             f"max_seq_len must be a power of 2, got {self.config.max_seq_len}"
         )
-        assert self.config.intial_sequence_len & (self.config.intial_sequence_len - 1) == 0, (
-            f"initial_sequence_len must be a power of 2, got {self.config.intial_sequence_len}"
+        assert self.config.initial_sequence_len & (self.config.initial_sequence_len - 1) == 0, (
+            f"initial_sequence_len must be a power of 2, got {self.config.initial_sequence_len}"
         )
-        # assert self.config.group_size % (self.config.batch_size * self.config.n_replicas) == 0, (
-        #     "Batch size must be divisible by group size for static batching"
-        # )
 
         assert self.config.max_prefill_sequence_len <= self.config.max_seq_len, (
             f"max_prefill_sequence_len {self.config.max_prefill_sequence_len} must be less than or equal to max_seq_len {self.config.max_seq_len}"
@@ -158,13 +153,26 @@ class InferenceEngine:
                 replicate_sharding,
                 replicate_sharding,
             ),
-            # "out_shardings": jax.tree.map(lambda x: x.with_memory_kind("pinned_host"), state_sharding),
             "out_shardings": state_sharding,
         }
 
-        decode_shardings = {
-            "in_shardings": (state_sharding, params_sharding),
-            "out_shardings": state_sharding,
+        decode_any_sharding = {
+            "in_shardings": (state_sharding, params_sharding, state_sharding, replicate_sharding),
+            "out_shardings": (
+                state_sharding,
+                replicate_sharding,
+                replicate_sharding,
+                replicate_sharding,
+                replicate_sharding,
+            ),
+        }
+
+        decode_all_shardings = {
+            "in_shardings": (
+                state_sharding,
+                params_sharding,
+            ),
+            "out_shardings": (state_sharding, replicate_sharding),
         }
 
         return InferenceShardings(
@@ -175,7 +183,8 @@ class InferenceEngine:
             state_sharding=state_sharding,
             params_sharding=params_sharding,
             prefill_shardings=prefill_shardings,
-            decode_shardings=decode_shardings,
+            decode_any_shardings=decode_any_sharding,
+            decode_all_shardings=decode_all_shardings,
         )
 
     def replicate_across_axis(self, value: Array) -> Array:
@@ -202,9 +211,6 @@ class InferenceEngine:
             data_callback=lambda _index: seq_lens,  # index not needed
             dtype=seq_lens.dtype,
         )
-
-        # batch = jax.device_put(batch, self.shardings.split_sharding)
-        # seq_lens = jax.device_put(seq_lens, self.shardings.split_sharding)
 
         key = self.replicate_across_axis(key)
         params = jax.tree.map(self.replicate_across_axis, params)
@@ -233,7 +239,7 @@ class InferenceEngine:
         ]
 
         seq_lens = np.array([len(x) for x in inputs], dtype=np.int32)
-        padding_length = max(self.compute_max_padding_length(seq_lens), self.config.intial_sequence_len)
+        padding_length = max(self.compute_max_padding_length(seq_lens), self.config.initial_sequence_len)
         inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
         tokens = np.array(inputs, dtype=np.int32)
 
@@ -427,7 +433,7 @@ class InferenceEngine:
         )
 
     def sub_batch(self, state: InferenceState, new_batch: InferenceState) -> InferenceState:
-        logger.info("compiling batch sub")
+        logger.info("compiling sub batch")
 
         index = jnp.argmax(state.stop_mask[:, 0], keepdims=True)
         current_length = state.kv_cache[0].length
@@ -500,19 +506,17 @@ class InferenceEngine:
         return state
 
     @partial(jax.jit, static_argnums=(0,))
-    def create_intial_state(self, prompts: InferenceState, intial_ids: Array) -> InferenceState:
-        logger.info("compilig inital state")
-
+    def create_initial_state(self, prompts: InferenceState, initial_ids: Array) -> InferenceState:
         @partial(
             jax.shard_map,
             mesh=self.shardings.mesh,
             in_specs=(jax.tree.map(lambda _x: P(), self.shardings.state_sharding), P("data")),
             out_specs=jax.tree.map(lambda x: x.spec, self.shardings.state_sharding),
         )
-        def f(prompts, intial_ids):
-            return jax.vmap(self.create_batch, in_axes=(None, 0))(prompts, intial_ids)
+        def f(prompts, initial_ids):
+            return jax.vmap(self.create_batch, in_axes=(None, 0))(prompts, initial_ids)
 
-        stacked_state = f(prompts, intial_ids)
+        stacked_state = f(prompts, initial_ids)
         stacked_state = stacked_state.replace(
             next_token=stacked_state.next_token[:, 0],
             kv_cache=[
@@ -543,48 +547,37 @@ class InferenceEngine:
     def _decode_single_loop(
         self, state: InferenceState, params: PyTree, prompts: InferenceState, next_index: int
     ) -> tuple[InferenceState, Array, Array, Array, int]:
-        before_length = state.kv_cache[0].length
-        state = jax.lax.while_loop(
-            lambda state: ~jnp.any(state.stop_mask),
-            lambda state: self.decode(state, params),
-            state,
-        )
-        after_length = state.kv_cache[0].length
+        with jax.named_scope("single_decode_loop"):
+            before_length = state.kv_cache[0].length
+            state = jax.lax.while_loop(
+                lambda state: ~jnp.any(state.stop_mask),
+                lambda state: self.decode(state, params),
+                state,
+            )
+            after_length = state.kv_cache[0].length
 
-        index = jnp.argmax(state.stop_mask[:, 0], keepdims=True)
-        tokens, logprobs, prompt_ids = (
-            state.out_tokens[index],
-            state.out_logprobs[index],
-            state.prompt_id[index],
-        )
+            index = jnp.argmax(state.stop_mask[:, 0], keepdims=True)
+            tokens, logprobs, prompt_ids = (
+                state.out_tokens[index],
+                state.out_logprobs[index],
+                state.prompt_id[index],
+            )
 
-        next_batch = self.create_batch(prompts, next_index)
-        state = self.sub_batch(state, next_batch)
+        with jax.named_scope("sub_next_batch"):
+            next_batch = self.create_batch(prompts, next_index)
+            state = self.sub_batch(state, next_batch)
 
         return state, tokens, logprobs, prompt_ids, (after_length - before_length)
 
     def continuous_batch(self, prompts: InferenceState, params: PyTree):
         if self.precompile_dict["decode"].get("any_stop") is None:
-            replicate = self.shardings.replicate_sharding
             self.precompile_dict["decode"]["any_stop"] = jax.jit(
-                self._decode_single_loop,
-                donate_argnums=(0,),
-                in_shardings=(
-                    self.shardings.state_sharding,
-                    self.shardings.params_sharding,
-                    self.shardings.state_sharding,
-                    replicate,
-                ),
-                out_shardings=(self.shardings.state_sharding, replicate, replicate, replicate, replicate),
+                self._decode_single_loop, donate_argnums=(0,), **self.shardings.decode_any_shardings
             )
 
         if self.precompile_dict["decode"].get("all_stop") is None:
-            replicate = self.shardings.replicate_sharding
             self.precompile_dict["decode"]["all_stop"] = jax.jit(
-                self._decode_loop,
-                donate_argnums=(0,),
-                in_shardings=(self.shardings.state_sharding, self.shardings.params_sharding),
-                out_shardings=(self.shardings.state_sharding, replicate),
+                self._decode_loop, donate_argnums=(0,), **self.shardings.decode_all_shardings
             )
 
         P = prompts.next_token.shape[0]
@@ -605,7 +598,7 @@ class InferenceEngine:
                 [prompt_queue.pop() for _ in range(self.config._max_decode_batch_size)], dtype=jnp.int32
             )
             intial_ids = jax.device_put(intial_ids, self.shardings.split_sharding)
-            state = self.create_intial_state(prompts, intial_ids)
+            state = self.create_initial_state(prompts, intial_ids)
             while len(prompt_queue) > 0:
                 next_index = prompt_queue.pop()
 
@@ -635,8 +628,10 @@ class InferenceEngine:
             finished_logprobs_cpu = list(map(lambda x: jax.device_get(x), finished_logprobs))
             finished_prompt_ids_cpu = list(map(lambda x: jax.device_get(x), finished_prompt_ids))
 
-            final_steps = final_steps.item()
-            queued_steps = queued_steps.item()
+            if isinstance(final_steps, jnp.ndarray):
+                final_steps = final_steps.item()
+            if isinstance(queued_steps, jnp.ndarray):
+                queued_steps = queued_steps.item()
 
         finished_tokens_cpu = np.concat(finished_tokens_cpu, axis=0)
         finished_logprobs_cpu = np.concat(finished_logprobs_cpu, axis=0)
