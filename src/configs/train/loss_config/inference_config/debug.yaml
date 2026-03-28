@@ -3,7 +3,7 @@ temperature: 0.8
 top_p: null
 top_k: null
 max_seq_len: 8192
-intial_sequence_len: 64
+initial_sequence_len: 64
 max_prefill_sequence_len: 512
 _max_decode_prompts: 16
 _max_decode_batch_size: 64
