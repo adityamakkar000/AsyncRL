@@ -1,5 +1,5 @@
 defaults:
-  - datasets@train_config: polaris
+  - datasets@train_config: polaris-1024-filtered
   - datasets@val_config: aime
   - _self_
 

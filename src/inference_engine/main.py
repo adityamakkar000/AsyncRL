@@ -17,8 +17,7 @@ from .config import InferenceConfig, InferenceResults, InferenceRollout, Inferen
 from .utils import _maybe_force_eos, _maybe_force_eot, naive_sample
 
 AXIS_NAME = "data"
-PADDING_BUFFER = 3000
-
+PADDING_BUFFER = 2048
 
 INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
 
@@ -726,11 +725,14 @@ class InferenceEngine:
         with Tracker(timer=True) as t:
             key, params = self.multihost_prep(key, params)
             inp_tokens, seq_lens = self.tokenize(prompts)
+            logger.info("starting batch rollouts")
             # use inference engine mesh context not STAX context
             with jax.set_mesh(self.shardings.mesh):
                 output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
             output_strs = self.detokenizer(output_rollouts)
+            logger.info("done on this device")
             sync_global_devices("inference_engine_sync")
+            logger.info("done sync")
         metrics |= {"total_inference_time": t.data["time"]}
         metrics = {f"inference_metrics/{k}": v for k, v in metrics.items()}
         return InferenceResults(rollouts=output_rollouts, output_strs=output_strs, metrics=metrics)
