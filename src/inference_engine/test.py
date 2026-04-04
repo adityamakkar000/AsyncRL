@@ -7,32 +7,17 @@ from .config import InferenceConfig, InferenceResults
 from .main import InferenceEngine
 
 
-def set_jax_cache(path: str):
+def set_jax_cache(path: str, log_compile: bool = False):
     """Sets the JAX cache directory to the specified path."""
     jax.config.update("jax_compilation_cache_dir", path)
     jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
     jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
     jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
-    # jax.config.update("jax_log_compiles", True)
+    jax.config.update("jax_log_compiles", log_compile)
 
 
-set_jax_cache("./jax/cache")
+set_jax_cache("./jax/cache", log_compile=False)
 
-# model_config = ModelConfig(
-#     "Qwen/Qwen3-1.7B",
-#     qwen_config=QwenConfig(
-#         vocab_size=151_936,
-#         d_ff=6144,
-#         sequence_len=16384,
-#         model_dim=2048,
-#         n_heads=16,
-#         n_groups=8,
-#         n_layers=28,
-#         head_dim=128,
-#         rope_base=1_000_000,
-#         activation_dtype="bfloat16",
-#     ),
-# )
 model_config = ModelConfig(
     "Qwen/Qwen3-0.6B",
     qwen_config=QwenConfig(
@@ -51,7 +36,7 @@ model_config = ModelConfig(
 model = Model(model_config)
 
 params = model.init_state(jax.random.PRNGKey(0), None, abstract=False)
-bs = 16
+bs = 8
 r = 4
 config = InferenceConfig(
     temperature=0.7,
@@ -62,8 +47,8 @@ config = InferenceConfig(
     max_prefill_sequence_len=256,
     n_replicas=r,
     group_size=8,
-    _max_decode_prompts=bs,
-    _max_decode_batch_size=64,
+    _max_decode_prompts=8,
+    _max_decode_batch_size=32,
     kv_cache_dtype="bfloat16",
     reasoning_budget=None,
     think_mode=True,

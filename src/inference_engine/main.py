@@ -17,8 +17,7 @@ from .config import InferenceConfig, InferenceResults, InferenceRollout, Inferen
 from .utils import _maybe_force_eos, _maybe_force_eot, naive_sample
 
 AXIS_NAME = "data"
-PADDING_BUFFER = 1024
-
+PADDING_BUFFER = 512
 
 INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
 
@@ -142,6 +141,8 @@ class InferenceEngine:
             prompt_id=split_sharding,  # type: ignore
         )
 
+        replicate_state_sharding = jax.tree.map(lambda _x: replicate_sharding, state_sharding)
+
         params_sharding = jax.tree.map(lambda _p: replicate_sharding, params)
 
         # NOTE: use replicate sharding since we have to split aftewards into slices of
@@ -153,11 +154,11 @@ class InferenceEngine:
                 replicate_sharding,
                 replicate_sharding,
             ),
-            "out_shardings": state_sharding,
+            "out_shardings": replicate_state_sharding,
         }
 
         decode_any_sharding = {
-            "in_shardings": (state_sharding, params_sharding, state_sharding, replicate_sharding),
+            "in_shardings": (state_sharding, params_sharding, replicate_state_sharding, replicate_sharding),
             "out_shardings": (
                 state_sharding,
                 replicate_sharding,
@@ -243,9 +244,9 @@ class InferenceEngine:
         inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
         tokens = np.array(inputs, dtype=np.int32)
 
-        if (T := tokens.shape[1]) > PADDING_BUFFER:
+        if padding_length > PADDING_BUFFER:
             raise ValueError(
-                f"Input sequence padded prompts (T={T}) was greater than kv-cache length with padding, either implement roll cache or add additional buffer space"
+                f"Input sequence padded prompts (T={padding_length}) was greater than kv-cache length with padding, either implement roll cache or add additional buffer space"
             )
 
         return tokens, seq_lens
@@ -480,11 +481,9 @@ class InferenceEngine:
 
             sub_on_this_device = (index >= start_idx) & (index < end_idx)
 
-            state = jax.lax.cond(
-                sub_on_this_device[0], sub, lambda old_state, _n, _i: old_state, old_state, new_state, local_idx
-            )
+            old_state = jax.lax.cond(sub_on_this_device[0], sub, lambda o, _n, _i: o, old_state, new_state, local_idx)
 
-            return state
+            return old_state
 
         state = _sub(state, new_batch, index)
 
@@ -510,7 +509,7 @@ class InferenceEngine:
         @partial(
             jax.shard_map,
             mesh=self.shardings.mesh,
-            in_specs=(jax.tree.map(lambda _x: P(), self.shardings.state_sharding), P("data")),
+            in_specs=(P(), P("data")),
             out_specs=jax.tree.map(lambda x: x.spec, self.shardings.state_sharding),
         )
         def f(prompts, initial_ids):
@@ -531,7 +530,6 @@ class InferenceEngine:
             out_logprobs=stacked_state.out_logprobs[:, 0],
             prompt_id=stacked_state.prompt_id[:, 0],
         )
-
         return stacked_state
 
     def _decode_loop(self, state: InferenceState, params: PyTree) -> tuple[InferenceState, int]:
@@ -726,11 +724,14 @@ class InferenceEngine:
         with Tracker(timer=True) as t:
             key, params = self.multihost_prep(key, params)
             inp_tokens, seq_lens = self.tokenize(prompts)
+            logger.info("starting batch rollouts")
             # use inference engine mesh context not STAX context
             with jax.set_mesh(self.shardings.mesh):
                 output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
             output_strs = self.detokenizer(output_rollouts)
+            logger.info("done on this device")
             sync_global_devices("inference_engine_sync")
+            logger.info("done sync")
         metrics |= {"total_inference_time": t.data["time"]}
         metrics = {f"inference_metrics/{k}": v for k, v in metrics.items()}
         return InferenceResults(rollouts=output_rollouts, output_strs=output_strs, metrics=metrics)
