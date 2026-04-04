@@ -19,7 +19,7 @@ from src.data import DataLoader, RLBatch
 from src.inference_engine import InferenceEngine
 from src.model import Model
 
-from .config import TrainerConfig
+from .config import AnnealedLoss, TrainerConfig
 from .loss import get_single_step
 from .utils import Key, setup, write_to_gcs
 
@@ -53,6 +53,7 @@ class Trainer:
             self._setup_dataset()
             self._setup_train_state()
             self._setup_inference_engine()
+            self._setup_annealing_schedule()
             self._setup_writer()
 
             if not self.resumed:
@@ -146,6 +147,7 @@ class Trainer:
         self.writer = None
         self.key = Key(self.config.seed)
         self.global_step = 0
+        self.annealing_schedule = None
 
         self.n_hosts = jax.process_count()
         self.n_devices = jax.device_count()
@@ -315,6 +317,19 @@ class Trainer:
         self.inference_engine = InferenceEngine(
             model=self.model, params=inference_params, config=self.config.loss_config.inference_config
         )
+    
+    @partial(setup, component="annealing schedule")
+    def _setup_annealing_schedule(self):
+        """Build annealing rate schedule from config. Same rate applies to whole batch; schedule is over num_steps."""
+        ac = self.config.loss_config.annealing_config
+        if ac is not None:
+            self.annealing_schedule = optax.linear_schedule( # TODO: change schedule later, linear for now
+                init_value=ac.init_value,
+                end_value=ac.end_value,
+                transition_steps=int(ac.annealing_steps * self.config.num_steps),
+            )
+        else:
+            self.annealing_schedule = None
 
     @partial(setup, component="optimizer")
     def _setup_optimizer(self):
@@ -471,9 +486,8 @@ class Trainer:
 
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
-            samples = self.train_dataset(num_prompts=self.train_n_prompts)
-            prompts = [s.prompt for s in samples]
-            generations = self.inference_engine(prompts, self.key(), {"params": self.params})
+            samples = self.train_dataset(num_prompts=self.train_n_prompts, annealing_schedule=self.annealing_schedule, step=self.global_step)
+            generations = self.inference_engine(samples, self.key(), {"params": self.params})
             train_batch, train_data_metrics = self.train_dataset.prepare_batch(samples, generations, train=True)
 
             out = self.train_step(self.params, self.opt_state, train_batch)
@@ -482,9 +496,8 @@ class Trainer:
             metrics = out["metrics"] | metrics_all_reduce(generations.metrics) | metrics_all_reduce(train_data_metrics)
 
             if self.global_step % self.config.val_interval == 0:
-                val_samples = self.val_dataset(num_prompts=self.val_n_prompts)
-                val_prompts = [s.prompt for s in val_samples]
-                val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})
+                val_samples = self.val_dataset(num_prompts=self.val_n_prompts, annealing_schedule=self.annealing_schedule, step=self.global_step)
+                val_generations = self.inference_engine(val_samples, self.key(), {"params": self.params})
                 _val_batch, val_metrics = self.val_dataset.prepare_batch(val_samples, val_generations, train=False)
 
                 metrics |= val_metrics
