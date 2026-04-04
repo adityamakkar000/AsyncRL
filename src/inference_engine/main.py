@@ -93,7 +93,7 @@ class InferenceEngine:
         )
 
         assert (self.config._max_decode_prompts * self.config.group_size) % (self.config._max_decode_batch_size) == 0, (
-            f"group_size * _max_decode_prompts {self.config.group_size * self.config._max_decode_prompts} must be divisible by _max_decode_batch_size * n_replicas {self.config._max_decode_batch_size * self.config.n_replicas}"
+            f"group_size * _max_decode_prompts {self.config.group_size * self.config._max_decode_prompts} must be divisible by _max_decode_batch_size {self.config._max_decode_batch_size}"
         )
 
         assert self.config._max_decode_batch_size % self.config.n_replicas == 0, (
