@@ -1,0 +1,3 @@
+init_value: 0.0
+end_value: 1.0
+annealing_steps: 0.1
