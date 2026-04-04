@@ -41,13 +41,13 @@ data_config:
 loss_config:
   inference_config:
     max_seq_len: 512
-    batch_size: 2
+    _max_decode_prompts: 32
+    _max_decode_batch_size: 128
     n_replicas: 4
     group_size: 8
     temperature: 1.0
     reasoning_budget: 150
     think_mode: true
-    precompile: false
     system_prompt: false
   rl_config:
     ppo_minibatch_size: 64
