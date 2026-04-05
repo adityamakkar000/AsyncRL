@@ -48,8 +48,8 @@ class WandBConfig:
 class AnnealedLoss: 
     """Config for annealing the fraction of reasoning trace injected into prompts. Currently linear schedule runs over num_steps."""
 
-    init_value: float = 0.0 # Fraction of trace at start of training (e.g. 1.0 = full trace)
-    end_value: float = 1.0 # Fraction of trace at end of training (e.g. 0.0 = no trace)
+    init_value: float = 1.0 # Fraction of trace at start of training (e.g. 1.0 = full trace)
+    end_value: float = 0.0 # Fraction of trace at end of training (e.g. 0.0 = no trace)
     annealing_steps: float = 0.1 # currently anneal over 10% of steps
 
 

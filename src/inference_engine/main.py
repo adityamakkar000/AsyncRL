@@ -14,7 +14,13 @@ from transformers import AutoTokenizer
 from src.data.config import Sample
 from src.model import KVCache, Model
 
-from .config import InferenceConfig, InferenceResults, InferenceRollout, InferenceShardings, InferenceState
+from .config import (
+    InferenceConfig,
+    InferenceResults,
+    InferenceRollout,
+    InferenceShardings,
+    InferenceState,
+)
 from .utils import _maybe_force_eos, _maybe_force_eot, naive_sample
 
 AXIS_NAME = "data"
@@ -23,8 +29,9 @@ PADDING_BUFFER = 1024
 
 INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
 
+
 def apply_annealing(tokens: list[int], percent: float) -> list[int]:
-    return tokens[:int(len(tokens) * percent)]
+    return tokens[: int(len(tokens) * percent)]
 
 
 def apply_prompt_template(text: str) -> str:
@@ -69,7 +76,9 @@ class InferenceEngine:
         }
 
         self.thinking_tokens = (
-            self.tokenizer(INTERUPT_THINKING_PHARSE, add_special_tokens=False, return_tensors="np")
+            self.tokenizer(
+                INTERUPT_THINKING_PHARSE, add_special_tokens=False, return_tensors="np"
+            )
             .input_ids[0]
             .tolist()
         )
@@ -80,43 +89,52 @@ class InferenceEngine:
 
     def validate_config(self):
         """Validate the inference configuration to ensure it meets the requirements for the inference engine."""
-        assert self.config.n_replicas <= jax.local_device_count(), (
-            f"Number of replicas {self.config.n_replicas} must be less than or equal to number of devices {jax.device_count()}"
-        )
-        assert self.config.max_seq_len <= self.model.sequence_len, (
-            f"expected inference max seq len {self.config.max_seq_len} to be less than model sequence length {self.model.sequence_len}"
-        )
-        assert self.config.max_seq_len & (self.config.max_seq_len - 1) == 0, (
-            f"max_seq_len must be a power of 2, got {self.config.max_seq_len}"
-        )
-        assert self.config.intial_sequence_len & (self.config.intial_sequence_len - 1) == 0, (
-            f"initial_sequence_len must be a power of 2, got {self.config.intial_sequence_len}"
-        )
-        assert self.config.group_size % (self.config.batch_size * self.config.n_replicas) == 0, (
-            "Batch size must be divisible by group size for static batching"
-        )
+        assert (
+            self.config.n_replicas <= jax.local_device_count()
+        ), f"Number of replicas {self.config.n_replicas} must be less than or equal to number of devices {jax.device_count()}"
+        assert (
+            self.config.max_seq_len <= self.model.sequence_len
+        ), f"expected inference max seq len {self.config.max_seq_len} to be less than model sequence length {self.model.sequence_len}"
+        assert (
+            self.config.max_seq_len & (self.config.max_seq_len - 1) == 0
+        ), f"max_seq_len must be a power of 2, got {self.config.max_seq_len}"
+        assert (
+            self.config.intial_sequence_len & (self.config.intial_sequence_len - 1) == 0
+        ), f"initial_sequence_len must be a power of 2, got {self.config.intial_sequence_len}"
+        assert (
+            self.config.group_size % (self.config.batch_size * self.config.n_replicas)
+            == 0
+        ), "Batch size must be divisible by group size for static batching"
 
-        assert self.config.max_prefill_sequence_len <= self.config.max_seq_len, (
-            f"max_prefill_sequence_len {self.config.max_prefill_sequence_len} must be less than or equal to max_seq_len {self.config.max_seq_len}"
-        )
-        assert self.config.max_prefill_sequence_len & (self.config.max_prefill_sequence_len - 1) == 0, (
-            f"max_prefill_sequence_len must be a power of 2, got {self.config.max_prefill_sequence_len}"
-        )
+        assert (
+            self.config.max_prefill_sequence_len <= self.config.max_seq_len
+        ), f"max_prefill_sequence_len {self.config.max_prefill_sequence_len} must be less than or equal to max_seq_len {self.config.max_seq_len}"
+        assert (
+            self.config.max_prefill_sequence_len
+            & (self.config.max_prefill_sequence_len - 1)
+            == 0
+        ), f"max_prefill_sequence_len must be a power of 2, got {self.config.max_prefill_sequence_len}"
 
         if self.config.reasoning_budget is not None:
             answer_tokens = min(1024, self.config.max_seq_len // 2)
-            assert self.config.reasoning_budget <= (self.config.max_seq_len - answer_tokens), (
-                f"Reasoning budget {self.config.reasoning_budget} must be less than or equal to {self.config.max_seq_len - answer_tokens} to account answer tokens"
-            )
+            assert self.config.reasoning_budget <= (
+                self.config.max_seq_len - answer_tokens
+            ), f"Reasoning budget {self.config.reasoning_budget} must be less than or equal to {self.config.max_seq_len - answer_tokens} to account answer tokens"
 
         if not self.config.think_mode:
-            assert self.config.reasoning_budget is None, "Reasoning budget should be None when think_mode is disabled"
+            assert (
+                self.config.reasoning_budget is None
+            ), "Reasoning budget should be None when think_mode is disabled"
 
         if self.config.top_k is not None:
-            assert self.config.top_k > 0, f"top_k must be positive, got {self.config.top_k}"
+            assert (
+                self.config.top_k > 0
+            ), f"top_k must be positive, got {self.config.top_k}"
 
         if self.config.top_p is not None:
-            assert 0.0 < self.config.top_p <= 1.0, f"top_p must be in the range (0, 1], got {self.config.top_p}"
+            assert (
+                0.0 < self.config.top_p <= 1.0
+            ), f"top_p must be in the range (0, 1], got {self.config.top_p}"
 
     def get_shardings(self, params) -> InferenceShardings:
         """Get the shardings for the model parameters, kv cache, and inference state based on the configuration."""
@@ -134,7 +152,9 @@ class InferenceEngine:
 
         state_sharding = InferenceState(
             next_token=split_sharding,  # type: ignore
-            kv_cache=[kv_sharding for _ in range(self.model.config.qwen_config.n_layers)],
+            kv_cache=[
+                kv_sharding for _ in range(self.model.config.qwen_config.n_layers)
+            ],
             key=replicate_sharding,  # type: ignore
             seq_lens=split_sharding,  # type: ignore
             stop_mask=split_sharding,  # type: ignore
@@ -177,7 +197,9 @@ class InferenceEngine:
         return jax.device_put(value, self.shardings.split_sharding)
 
     def put_state_on_device(self, state: InferenceState) -> InferenceState:
-        return jax.tree.map(lambda x, s: jax.device_put(x, s), state, self.shardings.state_sharding)
+        return jax.tree.map(
+            lambda x, s: jax.device_put(x, s), state, self.shardings.state_sharding
+        )
 
     def put_batch_on_device(
         self, batch: np.ndarray, seq_lens: np.ndarray, params: PyTree, key: Array
@@ -217,8 +239,8 @@ class InferenceEngine:
                 seq_lens_np = np.ones((1,), dtype=np.int32)
                 x_init_np = np.ones((1, curr_seq_len), dtype=np.int32)
 
-                x_init, seq_lens, params_sharded, key_sharded = self.put_batch_on_device(
-                    x_init_np, seq_lens_np, params_host, key
+                x_init, seq_lens, params_sharded, key_sharded = (
+                    self.put_batch_on_device(x_init_np, seq_lens_np, params_host, key)
                 )
 
                 self.precompile_dict["prefill"][curr_seq_len] = jax.jit(
@@ -226,7 +248,9 @@ class InferenceEngine:
                     **self.shardings.prefill_shardings,
                 )
 
-                _output = self.precompile_dict["prefill"][curr_seq_len](x_init, seq_lens, params_sharded, key_sharded)
+                _output = self.precompile_dict["prefill"][curr_seq_len](
+                    x_init, seq_lens, params_sharded, key_sharded
+                )
 
                 curr_seq_len *= 2
             del params_host
@@ -255,8 +279,12 @@ class InferenceEngine:
                     seq_lens=jnp.array([1] * self.decode_size, dtype=jnp.int32),
                     stop_mask=jnp.zeros((self.decode_size, 1), dtype=bool),
                     end_of_think=jnp.zeros((self.decode_size, 1), dtype=bool),
-                    out_tokens=jnp.ones((self.decode_size, self.max_attention_length), dtype=jnp.int32),
-                    out_logprobs=jnp.zeros((self.decode_size, self.max_attention_length), dtype=jnp.float32),
+                    out_tokens=jnp.ones(
+                        (self.decode_size, self.max_attention_length), dtype=jnp.int32
+                    ),
+                    out_logprobs=jnp.zeros(
+                        (self.decode_size, self.max_attention_length), dtype=jnp.float32
+                    ),
                 )
                 return state
 
@@ -267,7 +295,9 @@ class InferenceEngine:
                 donate_argnums=(0,),
                 **self.shardings.decode_shardings,
             )
-            _output = self.precompile_dict["decode"][self.max_attention_length](state, params_sharded)
+            _output = self.precompile_dict["decode"][self.max_attention_length](
+                state, params_sharded
+            )
 
             del (_output, params_sharded, params_host)
             logger.info("Finished decode precompile")
@@ -278,13 +308,20 @@ class InferenceEngine:
 
     def compute_max_padding_length(self, seq_lens: np.ndarray) -> int:
         """Compute the maximum padding length for the input batch based on the sequence lengths and the maximum sequence length."""
-        return self.compute_max_power_of_two(max(seq_lens).item(), self.config.max_seq_len)
-    
-    def prepare_prompt(self, text: str, annealing_trace: str, annealing_percentage: float) -> list[int]:
+        return self.compute_max_power_of_two(
+            max(seq_lens).item(), self.config.max_seq_len
+        )
+
+    def prepare_prompt(
+        self, text: str, annealing_trace: str, annealing_percentage: float
+    ) -> list[int]:
         assert annealing_percentage != -1.0, "Annealing percentage must be provided"
 
         annealed_base = self.tokenizer.apply_chat_template(
-            [{"role": "user", "content": apply_prompt_template(text)}, {"role": "assistant", "content": ""}],
+            [
+                {"role": "user", "content": apply_prompt_template(text)},
+                {"role": "assistant", "content": ""},
+            ],
             add_generation_prompt=True,
             tokenize=False,
             enable_thinking=True,
@@ -300,8 +337,12 @@ class InferenceEngine:
         if not annealing_trace or annealing_percentage <= 1e-6:
             annealed_template = chat_base
         else:
-            trace_tokens = self.tokenizer.encode(annealing_trace, add_special_tokens=False)
-            annealed_trace_str = self.tokenizer.decode(apply_annealing(trace_tokens, annealing_percentage))
+            trace_tokens = self.tokenizer.encode(
+                annealing_trace, add_special_tokens=False
+            )
+            annealed_trace_str = self.tokenizer.decode(
+                apply_annealing(trace_tokens, annealing_percentage)
+            )
             annealed_template = annealed_base + annealed_trace_str
 
         # TODO: implement this after consulting with @adityamakkar000
@@ -311,11 +352,16 @@ class InferenceEngine:
         #         enable_thinking=self.config.think_mode,
         #         tokenize=True,
         #     )
-        #     for text in texts 
+        #     for text in texts
 
         return self.tokenizer.encode(annealed_template, add_special_tokens=False)
 
-    def tokenize(self, texts: list[str], annealing_traces: list[str], annealing_percentages: list[float]) -> tuple[np.ndarray, np.ndarray]:
+    def tokenize(
+        self,
+        texts: list[str],
+        annealing_traces: list[str],
+        annealing_percentages: list[float],
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Tokenize the input texts and pad them to the maximum sequence length in the batch.
         Args:
@@ -329,12 +375,19 @@ class InferenceEngine:
 
         inputs: list[list[int]] = [
             self.prepare_prompt(text, annealing_trace, annealing_percentage)
-            for text, annealing_trace, annealing_percentage in zip(texts, annealing_traces, annealing_percentages)
+            for text, annealing_trace, annealing_percentage in zip(
+                texts, annealing_traces, annealing_percentages
+            )
         ]
 
         seq_lens = np.array([len(x) for x in inputs], dtype=np.int32)
-        padding_length = max(self.compute_max_padding_length(seq_lens), self.config.intial_sequence_len)
-        inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
+        padding_length = max(
+            self.compute_max_padding_length(seq_lens), self.config.intial_sequence_len
+        )
+        inputs = [
+            (padding_length - len(x)) * [self.tokenizer.pad_token_id] + x
+            for x in inputs
+        ]
         tokens = np.array(inputs, dtype=np.int32)
 
         if (T := tokens.shape[1]) > PADDING_BUFFER:
@@ -344,7 +397,9 @@ class InferenceEngine:
 
         return tokens, seq_lens
 
-    def cleanup_rollouts(self, rollouts: list[InferenceRollout]) -> list[InferenceRollout]:
+    def cleanup_rollouts(
+        self, rollouts: list[InferenceRollout]
+    ) -> list[InferenceRollout]:
         """
         Remove padding tokens and trailing repeated EOS tokens from rollouts.
         Keeps the first EOS token and truncates everything after it.
@@ -352,7 +407,9 @@ class InferenceEngine:
         pad_id = self.tokenizer.pad_token_id
         eos_id = self.tokenizer.eos_token_id
 
-        def clean_sequence(tokens: np.ndarray, logprobs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        def clean_sequence(
+            tokens: np.ndarray, logprobs: np.ndarray
+        ) -> tuple[np.ndarray, np.ndarray]:
             non_pad = tokens != pad_id
             tokens = tokens[non_pad]
             logprobs = logprobs[non_pad]
@@ -372,11 +429,15 @@ class InferenceEngine:
                 t, lp = clean_sequence(np.asarray(tokens), np.asarray(lps))
                 new_rollouts.append(t)
                 new_logprobs.append(lp)
-            cleaned.append(InferenceRollout(rollouts=new_rollouts, logprobs=new_logprobs))
+            cleaned.append(
+                InferenceRollout(rollouts=new_rollouts, logprobs=new_logprobs)
+            )
 
         return cleaned
 
-    def detokenizer(self, tokens: list[InferenceRollout] | InferenceRollout) -> list[list[str]]:
+    def detokenizer(
+        self, tokens: list[InferenceRollout] | InferenceRollout
+    ) -> list[list[str]]:
         """
         Detokenize the output rollouts into strings.
         Args:
@@ -389,12 +450,16 @@ class InferenceEngine:
 
         output_strs = []
         for rollout in tokens:
-            rollout_strs = self.tokenizer.batch_decode(rollout.rollouts, skip_special_tokens=False)
+            rollout_strs = self.tokenizer.batch_decode(
+                rollout.rollouts, skip_special_tokens=False
+            )
             output_strs.append(rollout_strs)
 
         return output_strs
 
-    def prefill(self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array) -> InferenceState:
+    def prefill(
+        self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array
+    ) -> InferenceState:
         """
         Run model forward pass for prefill
         Args:
@@ -419,13 +484,24 @@ class InferenceEngine:
                 ),
             )
             logits, out_cache = self.model.apply(
-                params, x=input_tokens[:, :-1], sequence_lens=seq_lens - 1, kv_cache=kv_cache
+                params,
+                x=input_tokens[:, :-1],
+                sequence_lens=seq_lens - 1,
+                kv_cache=kv_cache,
             )
-            out_tokens = jnp.ones((1, self.max_attention_length), dtype=jnp.int32) * self.tokenizer.eos_token_id
+            out_tokens = (
+                jnp.ones((1, self.max_attention_length), dtype=jnp.int32)
+                * self.tokenizer.eos_token_id
+            )
             out_logprobs = jnp.zeros((1, self.max_attention_length), dtype=jnp.float32)
-            out_tokens = jax.lax.dynamic_update_slice_in_dim(out_tokens, input_tokens, 0, axis=1)
+            out_tokens = jax.lax.dynamic_update_slice_in_dim(
+                out_tokens, input_tokens, 0, axis=1
+            )
             out_logprobs = jax.lax.dynamic_update_slice_in_dim(
-                out_logprobs, -jnp.inf * jnp.ones_like(input_tokens, dtype=jnp.float32), 0, axis=1
+                out_logprobs,
+                -jnp.inf * jnp.ones_like(input_tokens, dtype=jnp.float32),
+                0,
+                axis=1,
             )
 
         def bc_to_decode(x: Array) -> Array:
@@ -434,7 +510,10 @@ class InferenceEngine:
         return InferenceState(
             next_token=bc_to_decode(input_tokens[:, -1:]),
             seq_lens=bc_to_decode(seq_lens),
-            kv_cache=[KVCache(k=bc_to_decode(kv.k), v=bc_to_decode(kv.v), length=kv.length) for kv in out_cache],
+            kv_cache=[
+                KVCache(k=bc_to_decode(kv.k), v=bc_to_decode(kv.v), length=kv.length)
+                for kv in out_cache
+            ],
             key=key,
             stop_mask=jnp.zeros((self.decode_size, 1), dtype=bool),
             end_of_think=jnp.zeros((self.decode_size, 1), dtype=bool),
@@ -479,7 +558,9 @@ class InferenceEngine:
         Returns:
             InferenceState: The updated state after the decode step, containing the next token, updated kv cache, and other necessary information for the next step.
         """
-        logger.info(f"Compiling decode step for attention length {state.kv_cache[0].k.shape[1]}")
+        logger.info(
+            f"Compiling decode step for attention length {state.kv_cache[0].k.shape[1]}"
+        )
         key, sample_key = jax.random.split(state.key)
 
         with jax.named_scope("fwd_pass"):
@@ -519,7 +600,9 @@ class InferenceEngine:
                 eos_token_id=self.tokenizer.eos_token_id,
             )
 
-        out_tokens = jax.lax.dynamic_update_index_in_dim(state.out_tokens, next_token, state.kv_cache[0].length, axis=1)
+        out_tokens = jax.lax.dynamic_update_index_in_dim(
+            state.out_tokens, next_token, state.kv_cache[0].length, axis=1
+        )
         out_logprobs = jax.lax.dynamic_update_index_in_dim(
             state.out_logprobs, next_log_prob, state.kv_cache[0].length, axis=1
         )
@@ -542,7 +625,9 @@ class InferenceEngine:
             state,
         )
 
-    def single_rollout(self, state: InferenceState, params: PyTree) -> tuple[Array, Array, dict[str, float]]:
+    def single_rollout(
+        self, state: InferenceState, params: PyTree
+    ) -> tuple[Array, Array, dict[str, float]]:
         """
         Perform a single rollout for the given inference state using an on-device while_loop.
         Args:
@@ -562,9 +647,12 @@ class InferenceEngine:
                 **self.shardings.decode_shardings,
             )
         with Tracker(timer=True) as t:
-            state = self.precompile_dict["decode"][self.max_attention_length](state, params)
+            state = self.precompile_dict["decode"][self.max_attention_length](
+                state, params
+            )
             out_tokens, out_logprobs = jax.tree.map(
-                lambda x: list(jax.device_get(x)), (state.out_tokens, state.out_logprobs)
+                lambda x: list(jax.device_get(x)),
+                (state.out_tokens, state.out_logprobs),
             )
 
         n_steps = (state.kv_cache[0].length - initial_cache_length).item()
@@ -588,7 +676,9 @@ class InferenceEngine:
             decode_metrics,
         )
 
-    def rollout_group(self, x: Array, seq_lens: Array, params: PyTree, key: Array) -> tuple[InferenceRollout, PyTree]:
+    def rollout_group(
+        self, x: Array, seq_lens: Array, params: PyTree, key: Array
+    ) -> tuple[InferenceRollout, PyTree]:
         """
         Perform rollouts for a group of inputs, where the group size is determined by the config.
         Args:
@@ -600,7 +690,9 @@ class InferenceEngine:
             InferenceRollout: The rollouts generated for the group, containing the output tokens and log probabilities.
             PyTree: Metrics collected during the rollouts, such as time taken and tokens per second.
         """
-        assert (B := x.shape[0]) == 1, f"Expected batch size {self.decode_size}, got {B}"
+        assert (
+            B := x.shape[0]
+        ) == 1, f"Expected batch size {self.decode_size}, got {B}"
         rollout_output = InferenceRollout(rollouts=[], logprobs=[])
         decode_metrics_collected = []
         prefill_metrics_collected = []
@@ -614,7 +706,9 @@ class InferenceEngine:
             # since then we do not need to keep a copy of a kv cache
             # prefill is very fast and so this save 2x memory
             state, prefill_metrics = self.prefill_step(x, seq_lens, params, prefill_key)
-            output_tokens, output_logprobs, decode_metrics = self.single_rollout(state, params)
+            output_tokens, output_logprobs, decode_metrics = self.single_rollout(
+                state, params
+            )
 
             rollout_output.rollouts.extend(output_tokens)
             rollout_output.logprobs.extend(output_logprobs)
@@ -653,8 +747,8 @@ class InferenceEngine:
         output: list[InferenceRollout] = []
         metrics: list[dict[str, float]] = []
 
-        x_batch_sharded, seq_lens_sharded, params_sharded, key_sharded = self.put_batch_on_device(
-            batch_tokens, seq_lens, params, key
+        x_batch_sharded, seq_lens_sharded, params_sharded, key_sharded = (
+            self.put_batch_on_device(batch_tokens, seq_lens, params, key)
         )
 
         for i in range(B):
@@ -687,7 +781,9 @@ class InferenceEngine:
         params = self.setup_parameters(params)
         return key, params
 
-    def __call__(self, samples: list[Sample], key: Array, params: PyTree) -> InferenceResults:
+    def __call__(
+        self, samples: list[Sample], key: Array, params: PyTree
+    ) -> InferenceResults:
         """
         Perform inference for the given input prompts, random key, and model parameters.
         Args:
@@ -702,17 +798,31 @@ class InferenceEngine:
             key, params = self.multihost_prep(key, params)
             inp_tokens, seq_lens = self.tokenize(
                 texts=[sample.prompt for sample in samples],
-                annealing_traces=[sample.solution if sample.solution is not None else "" for sample in samples],
-                annealing_percentages=[sample.annealing_percentage if sample.annealing_percentage is not None else -1.0 for sample in samples], # can be used for error check
+                annealing_traces=[
+                    sample.solution if sample.solution is not None else ""
+                    for sample in samples
+                ],
+                annealing_percentages=[
+                    (
+                        sample.annealing_percentage
+                        if sample.annealing_percentage is not None
+                        else -1.0
+                    )
+                    for sample in samples
+                ],  # can be used for error check
             )
             # use inference engine mesh context not STAX context
             with jax.set_mesh(self.shardings.mesh):
-                output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
+                output_rollouts, metrics = self.batch_rollout(
+                    inp_tokens, seq_lens, key, params
+                )
             output_strs = self.detokenizer(output_rollouts)
             sync_global_devices("inference_engine_sync")
         metrics |= {"total_inference_time": t.data["time"]}
         metrics = {f"inference_metrics/{k}": v for k, v in metrics.items()}
-        return InferenceResults(rollouts=output_rollouts, output_strs=output_strs, metrics=metrics)
+        return InferenceResults(
+            rollouts=output_rollouts, output_strs=output_strs, metrics=metrics
+        )
 
     @property
     def max_attention_length(self) -> int:
