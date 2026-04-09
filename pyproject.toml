@@ -24,7 +24,8 @@ dependencies = [
     "tensorboard>=2.20.0",
     "tensorboard-plugin-profile>=2.21.6",
     "pylatexenc>=2.10",
-    "vllm-tpu==0.12.0; platform_system == 'Linux'"
+    "vllm-tpu==0.12.0; platform_system == 'Linux'",
+    "rich>=14.3.3",
 ]
 
 [project.optional-dependencies]
