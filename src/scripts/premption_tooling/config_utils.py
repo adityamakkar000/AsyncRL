@@ -1,10 +1,13 @@
 import os
-from rich.live import Live
+
 import yaml
+from dotenv import load_dotenv
+
+load_dotenv()
 
 CLUSTER_FILE = os.path.expanduser("~/.config/mesh/cluster.yaml")
 DEFAULT_USER = os.environ.get("USER")
-IDENTITY_FILE = os.path.expanduser("~/.ssh/id_rsa")
+IDENTITY_FILE = os.path.expanduser(os.environ.get("SSH_IDENTITY_FILE", "~/.ssh/id_rsa"))
 
 
 def update_mesh_config(node_id, ip_list):

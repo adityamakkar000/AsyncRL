@@ -1,30 +1,70 @@
 import subprocess
 import time
-from datetime import datetime  # Added for timestamping
 from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
 
-from config_utils import update_mesh_config
-from gcp_utils import tpu_create_queued, tpu_delete_queued, tpu_describe, tpu_get_ips
 from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 
+from .config_utils import update_mesh_config
+from .gcp_utils import tpu_create_queued, tpu_delete_queued, tpu_describe, tpu_get_ips
+
 UPDATE_TIME = 10
+
+
+class Zone(str, Enum):
+    US_CENTRAL1_A = "us-central1-a"
+    US_EAST5_A = "us-east5-a"
+    US_EAST1_D = "us-east1-d"
+    EUROPE_WEST4_A = "europe-west4-a"
+
+
+class TPUType(str, Enum):
+    V5P_8 = "v5p-8"
+    V5P_32 = "v5p-32"
+    V5P_64 = "v5p-64"
+    V5P_128 = "v5p-128"
+    V6E_8 = "v6e-8"
+    V6E_32 = "v6e-32"
+    V6E_64 = "v6e-64"
+    V6E_128 = "v6e-128"
+
+
+class Runtime(str, Enum):
+    V2_ALPHA_TPUV5 = "v2-alpha-tpuv5"
+    V2_ALPHA_TPUV6E = "v2-alpha-tpuv6e"
+
 
 @dataclass
 class TPUJob:
     node_id: str
-    zone: str
-    tpu_type: str
-    runtime: str
+    zone: Zone
+    tpu_type: TPUType
+    runtime: Runtime
     cmd: str
 
+    def __post_init__(self):
+        is_v5 = self.tpu_type in {TPUType.V5P_8, TPUType.V5P_32, TPUType.V5P_64, TPUType.V5P_128}
+        is_v6 = self.tpu_type in {TPUType.V6E_8, TPUType.V6E_32, TPUType.V6E_64, TPUType.V6E_128}
+        if self.runtime == Runtime.V2_ALPHA_TPUV5 and not is_v5:
+            raise ValueError(f"Invalid TPU type {self.tpu_type} for runtime {self.runtime}")
+        if self.runtime == Runtime.V2_ALPHA_TPUV6E and not is_v6:
+            raise ValueError(f"Invalid TPU type {self.tpu_type} for runtime {self.runtime}")
+        if is_v5 and self.zone in {Zone.US_EAST1_D, Zone.EUROPE_WEST4_A}:
+            raise ValueError(f"TPU type {self.tpu_type} is not available in zone {self.zone}")
+        if is_v6 and self.zone not in {Zone.US_EAST5_A, Zone.US_CENTRAL1_A}:
+            raise ValueError(f"TPU type {self.tpu_type} is not available in zone {self.zone}")
+
+
 console = Console()
+
 
 def generate_table(active_jobs, job_states, job_processes) -> Table:
     current_time: str = datetime.now().strftime("%H:%M:%S")
     title = f"TPU Cluster Dashboard [dim](Last Updated: {current_time})[/dim]"
-    
+
     table = Table(title=title, title_style="bold magenta")
 
     table.add_column("Node ID", style="cyan", no_wrap=True)
@@ -48,13 +88,10 @@ def generate_table(active_jobs, job_states, job_processes) -> Table:
         log_cmd = f"tail -f log_{node_id}.txt"
 
         table.add_row(
-            node_id, 
-            tpu_state, 
-            process_status, 
-            job.cmd[:40] + "..." if len(job.cmd) > 40 else job.cmd, 
-            log_cmd
+            node_id, tpu_state, process_status, job.cmd[:40] + "..." if len(job.cmd) > 40 else job.cmd, log_cmd
         )
     return table
+
 
 def run_session(initial_jobs: list[TPUJob]):
     active_jobs = list(initial_jobs)
@@ -69,7 +106,7 @@ def run_session(initial_jobs: list[TPUJob]):
 
                 state = tpu_describe(node_id, zone)
                 job_states[node_id] = state
-                
+
                 live.update(generate_table(active_jobs, job_states, job_processes))
 
                 proc = job_processes.get(node_id)
@@ -80,7 +117,7 @@ def run_session(initial_jobs: list[TPUJob]):
                         if proc is not None:
                             exit_code = proc.poll()
                             console.print(f"[bold red]CRITICAL:[/bold red] {node_id} exited with code {exit_code}")
-                            
+
                             active_jobs.remove(job)
                             continue
 
@@ -97,7 +134,7 @@ def run_session(initial_jobs: list[TPUJob]):
                         )
 
                 elif state in ["FAILED", "SUSPENDED", "NOT_FOUND"]:
-                    if is_running_locally:
+                    if is_running_locally and proc is not None:
                         proc.terminate()
 
                     job_processes[node_id] = None
@@ -109,21 +146,3 @@ def run_session(initial_jobs: list[TPUJob]):
             time.sleep(UPDATE_TIME)
             live.update(generate_table(active_jobs, job_states, job_processes))
 
-if __name__ == "__main__":
-    MY_RUNS = [
-        TPUJob(
-            node_id="node237",
-            zone="us-central1-a",
-            tpu_type="v5p-8",
-            runtime="v2-alpha-tpuv5",
-            cmd="python -m src.train --config-name debug experiment_name=dtest5",
-        ),
-        TPUJob(
-            node_id="node2024",
-            zone="us-central1-a",
-            tpu_type="v5p-8",
-            runtime="v2-alpha-tpuv5",
-            cmd="python -m src.train --config-name debug experiment_name=dtest6",
-        )
-    ]
-    run_session(MY_RUNS)
