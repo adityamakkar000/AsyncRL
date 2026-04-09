@@ -1,5 +1,5 @@
 import os
-
+from rich.live import Live
 import yaml
 
 CLUSTER_FILE = os.path.expanduser("~/.config/mesh/cluster.yaml")
@@ -20,4 +20,3 @@ def update_mesh_config(node_id, ip_list):
 
     with open(CLUSTER_FILE, "w") as file:
         yaml.dump(full_config, file, sort_keys=False, default_flow_style=False)
-    print(f"[Config] cluster.yaml updated for {node_id}")

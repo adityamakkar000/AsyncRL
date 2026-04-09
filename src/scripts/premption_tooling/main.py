@@ -1,5 +1,6 @@
 import subprocess
 import time
+from datetime import datetime  # Added for timestamping
 from dataclasses import dataclass
 
 from config_utils import update_mesh_config
@@ -8,6 +9,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 
+UPDATE_TIME = 10
 
 @dataclass
 class TPUJob:
@@ -17,13 +19,13 @@ class TPUJob:
     runtime: str
     cmd: str
 
-
 console = Console()
 
-
 def generate_table(active_jobs, job_states, job_processes) -> Table:
-    """Creates a Rich Table UI of current job statuses."""
-    table = Table(title="TPU Cluster Dashboard", title_style="bold magenta")
+    current_time: str = datetime.now().strftime("%H:%M:%S")
+    title = f"TPU Cluster Dashboard [dim](Last Updated: {current_time})[/dim]"
+    
+    table = Table(title=title, title_style="bold magenta")
 
     table.add_column("Node ID", style="cyan", no_wrap=True)
     table.add_column("TPU State", style="yellow")
@@ -46,10 +48,13 @@ def generate_table(active_jobs, job_states, job_processes) -> Table:
         log_cmd = f"tail -f log_{node_id}.txt"
 
         table.add_row(
-            node_id, tpu_state, process_status, job.cmd[:40] + "..." if len(job.cmd) > 40 else job.cmd, log_cmd
+            node_id, 
+            tpu_state, 
+            process_status, 
+            job.cmd[:40] + "..." if len(job.cmd) > 40 else job.cmd, 
+            log_cmd
         )
     return table
-
 
 def run_session(initial_jobs: list[TPUJob]):
     active_jobs = list(initial_jobs)
@@ -64,6 +69,7 @@ def run_session(initial_jobs: list[TPUJob]):
 
                 state = tpu_describe(node_id, zone)
                 job_states[node_id] = state
+                
                 live.update(generate_table(active_jobs, job_states, job_processes))
 
                 proc = job_processes.get(node_id)
@@ -74,8 +80,7 @@ def run_session(initial_jobs: list[TPUJob]):
                         if proc is not None:
                             exit_code = proc.poll()
                             console.print(f"[bold red]CRITICAL:[/bold red] {node_id} exited with code {exit_code}")
-
-                            tpu_delete_queued(node_id, zone)
+                            
                             active_jobs.remove(job)
                             continue
 
@@ -101,9 +106,8 @@ def run_session(initial_jobs: list[TPUJob]):
                         time.sleep(5)
                     tpu_create_queued(node_id, job.tpu_type, job.runtime, zone, spot=True)
 
-            time.sleep(60)
+            time.sleep(UPDATE_TIME)
             live.update(generate_table(active_jobs, job_states, job_processes))
-
 
 if __name__ == "__main__":
     MY_RUNS = [
@@ -112,7 +116,14 @@ if __name__ == "__main__":
             zone="us-central1-a",
             tpu_type="v5p-8",
             runtime="v2-alpha-tpuv5",
-            cmd="python -m src.train --config-name debug experiment_name=stop_clip2",
+            cmd="python -m src.train --config-name debug experiment_name=dtest5",
+        ),
+        TPUJob(
+            node_id="node2024",
+            zone="us-central1-a",
+            tpu_type="v5p-8",
+            runtime="v2-alpha-tpuv5",
+            cmd="python -m src.train --config-name debug experiment_name=dtest6",
         )
     ]
     run_session(MY_RUNS)
