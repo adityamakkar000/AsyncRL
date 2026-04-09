@@ -39,7 +39,7 @@ def run_session(initial_jobs: list[TPUJob]):
                         if exit_code == 0:
                             print(f"[{node_id}] Job finished successfully! Cleaning up TPU...")
                         else:
-                            print(f"[{node_id}] Job CRASHED (Exit Code: {exit_code}). Stopping monitor to save costs.")
+                            print(f"[{node_id}] Job CRASHED (Exit Code: {exit_code}).")
 
                         tpu_delete_queued(node_id, zone)
                         active_jobs.remove(job)
