@@ -15,39 +15,57 @@ class TPUJob:
     cmd: str
 
 
-def run_session(active_jobs: list[TPUJob]):
+def run_session(initial_jobs: list[TPUJob]):
+    active_jobs = list(initial_jobs)
+    job_processes = {job.node_id: None for job in active_jobs}
+
     print(f"Monitoring {len(active_jobs)} active TPU runs...")
 
-    launched_successfully = {job.node_id: False for job in active_jobs}
-
-    while True:
-        print("Checking TPU statuses...")
-        for job in active_jobs:
+    while active_jobs:
+        for job in active_jobs[:]:
             node_id = job.node_id
             zone = job.zone
-
             state = tpu_describe(node_id, zone)
-            print(f"[{node_id} @ {zone}]: {state}")
+
+            proc = job_processes.get(node_id)
+            is_running_locally = proc is not None and proc.poll() is None
+
+            print(f"[{node_id}]: Hardware={state}, Process_Alive={is_running_locally}")
 
             if state == "ACTIVE":
-                if not launched_successfully[node_id]:
+                if not is_running_locally:
+                    if proc is not None:
+                        exit_code = proc.poll()
+                        if exit_code == 0:
+                            print(f"[{node_id}] Job finished successfully! Cleaning up TPU...")
+                        else:
+                            print(f"[{node_id}] Job CRASHED (Exit Code: {exit_code}). Stopping monitor to save costs.")
+
+                        tpu_delete_queued(node_id, zone)
+                        active_jobs.remove(job)
+                        continue
+
                     ips = tpu_get_ips(node_id, zone)
                     update_mesh_config(node_id, ips)
-
                     print(f"[{node_id}] Running mesh setup...")
                     subprocess.run(["mesh", "setup", node_id])
 
                     full_cmd = f'mesh run {node_id} "{job.cmd}"'
                     log_file = f"log_{node_id}.txt"
                     f = open(log_file, "a", buffering=1)
-                    subprocess.Popen(full_cmd, shell=True, stdout=f, stderr=subprocess.STDOUT, text=True)
-                    print(f"[{node_id}] Started! View logs with: tail -f {log_file}")
 
-                    launched_successfully[node_id] = True
+                    job_processes[node_id] = subprocess.Popen(
+                        full_cmd, shell=True, stdout=f, stderr=subprocess.STDOUT, text=True
+                    )
+                    print(f"[{node_id}] Launched. Monitoring for failure...")
 
             elif state in ["FAILED", "SUSPENDED", "NOT_FOUND"]:
-                print(f"[RECOVERY] {node_id} is {state}. Re-allocating...")
-                launched_successfully[node_id] = False
+                print(f"[PREEMPTION] {node_id} hardware is {state}. Attempting recovery...")
+
+                if is_running_locally:
+                    proc.terminate()
+
+                job_processes[node_id] = None
 
                 if state != "NOT_FOUND":
                     tpu_delete_queued(node_id, zone)
