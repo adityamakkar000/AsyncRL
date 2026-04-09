@@ -58,6 +58,7 @@ def run_session(initial_jobs: list[TPUJob]):
                         full_cmd, shell=True, stdout=f, stderr=subprocess.STDOUT, text=True
                     )
                     print(f"[{node_id}] Launched. Monitoring for failure...")
+                    print(f"[{node_id}] Started! View logs with: tail -f {log_file}")
 
             elif state in ["FAILED", "SUSPENDED", "NOT_FOUND"]:
                 print(f"[PREEMPTION] {node_id} hardware is {state}. Attempting recovery...")
