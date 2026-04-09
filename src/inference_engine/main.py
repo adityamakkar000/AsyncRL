@@ -30,8 +30,8 @@ PADDING_BUFFER = 1024
 INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
 
 
-def apply_annealing(tokens: list[int], percent: float) -> list[int]:
-    return tokens[: int(len(tokens) * percent)]
+def apply_annealing(tokens: list[int], percent: float, max_seq_len: int) -> list[int]:
+    return tokens[: max(1, min(int(len(tokens) * percent), max_seq_len * 0.8))] # TODO: fix this mathematically, if solution too long then it will be truncated
 
 
 def apply_prompt_template(text: str) -> str:
@@ -341,7 +341,7 @@ class InferenceEngine:
                 annealing_trace, add_special_tokens=False
             )
             annealed_trace_str = self.tokenizer.decode(
-                apply_annealing(trace_tokens, annealing_percentage)
+                apply_annealing(trace_tokens, annealing_percentage, self.config.max_seq_len)
             )
             annealed_template = annealed_base + annealed_trace_str
 
@@ -372,6 +372,7 @@ class InferenceEngine:
             tokens (Array): The tokenized and padded input texts. Shape: [batch_size, max_seq_len].
             seq_lens (Array): The original sequence lengths before padding. Shape: [batch_size].
         """
+        assert len(texts) == len(annealing_traces) == len(annealing_percentages), f"Lengths of texts, annealing_traces, and annealing_percentages must be equal, got {len(texts)}, {len(annealing_traces)}, {len(annealing_percentages)}"
 
         inputs: list[list[int]] = [
             self.prepare_prompt(text, annealing_trace, annealing_percentage)
@@ -388,6 +389,14 @@ class InferenceEngine:
             (padding_length - len(x)) * [self.tokenizer.pad_token_id] + x
             for x in inputs
         ]
+
+        # for i, x in enumerate(inputs):
+        #     if not isinstance(x, list):
+        #         print("not a list", i, type(x), x)
+        #     elif not all(isinstance(t, (int, np.integer)) for t in x):
+        #         print("bad token list", i, type(x), x[:5], [type(t) for t in x[:5]])
+        #     else:
+        #         print(i, len(x))
         tokens = np.array(inputs, dtype=np.int32)
 
         if (T := tokens.shape[1]) > PADDING_BUFFER:
