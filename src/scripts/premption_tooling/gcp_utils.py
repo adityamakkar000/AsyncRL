@@ -14,7 +14,7 @@ def tpu_describe(node_id, zone):
         "queued-resources",
         "describe",
         node_id,
-        f"--zone={zone}",
+        f"--zone={zone.value}",
         f"--project={PROJECT}",
         "--format=json",
     ]
@@ -27,7 +27,7 @@ def tpu_describe(node_id, zone):
 
 def tpu_get_ips(node_id, zone):
     """Fetches External IPs for a TPU"""
-    cmd = ["gcloud", "compute", "tpus", "tpu-vm", "describe", node_id, f"--zone={zone}", "--format=json"]
+    cmd = ["gcloud", "compute", "tpus", "tpu-vm", "describe", node_id, f"--zone={zone.value}", "--format=json"]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode == 0:
         data = json.loads(res.stdout)
@@ -45,10 +45,10 @@ def tpu_create_queued(node_id, tpu_type, runtime, zone, spot=True):
         "create",
         node_id,
         f"--node-id={node_id}",
-        f"--zone={zone}",
+        f"--zone={zone.value}",
         f"--project={PROJECT}",
-        f"--accelerator-type={tpu_type}",
-        f"--runtime-version={runtime}",
+        f"--accelerator-type={tpu_type.value}",
+        f"--runtime-version={runtime.value}",
     ]
     if spot:
         cmd.append("--spot")
@@ -65,7 +65,7 @@ def tpu_delete_queued(node_id, zone):
             "queued-resources",
             "delete",
             node_id,
-            f"--zone={zone}",
+            f"--zone={zone.value}",
             f"--project={PROJECT}",
             "--force",
             "--quiet",
