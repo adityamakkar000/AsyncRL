@@ -145,4 +145,3 @@ def run_session(initial_jobs: list[TPUJob]):
 
             time.sleep(UPDATE_TIME)
             live.update(generate_table(active_jobs, job_states, job_processes))
-
