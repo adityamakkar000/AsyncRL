@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import random
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -125,6 +126,7 @@ def return_tpu_jobs(
     jobs = []
     for combo in combos:
         NODE_COUNTER += 1
+        rng_combo = random.randint(0, 100000)
 
         name = make_name(combo, EXPERIMENT_PREFIX)
         overrides = {**FIXED_OVERRIDES, **combo}
@@ -139,7 +141,7 @@ def return_tpu_jobs(
             inner_parts.append(f"{k}={v}")
         inner_cmd = " ".join(inner_parts)
         job = TPUJob(
-            node_id=f"node{NODE_COUNTER}",
+            node_id=f"node_{NODE_COUNTER}_{rng_combo}",
             zone=ZONE,
             tpu_type=TPU_TYPE,
             runtime=RUNTIME,
