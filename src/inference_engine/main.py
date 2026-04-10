@@ -93,7 +93,7 @@ class InferenceEngine:
         )
 
         assert (self.config._max_decode_prompts * self.config.group_size) % (self.config._max_decode_batch_size) == 0, (
-            f"group_size * _max_decode_prompts {self.config.group_size * self.config._max_decode_prompts} must be divisible by _max_decode_batch_size * n_replicas {self.config._max_decode_batch_size * self.config.n_replicas}"
+            f"group_size * _max_decode_prompts {self.config.group_size * self.config._max_decode_prompts} must be divisible by _max_decode_batch_size {self.config._max_decode_batch_size}"
         )
 
         assert self.config._max_decode_batch_size % self.config.n_replicas == 0, (
@@ -141,6 +141,8 @@ class InferenceEngine:
             prompt_id=split_sharding,  # type: ignore
         )
 
+        replicate_state_sharding = jax.tree.map(lambda _x: replicate_sharding, state_sharding)
+
         params_sharding = jax.tree.map(lambda _p: replicate_sharding, params)
 
         # NOTE: use replicate sharding since we have to split aftewards into slices of
@@ -152,11 +154,11 @@ class InferenceEngine:
                 replicate_sharding,
                 replicate_sharding,
             ),
-            "out_shardings": state_sharding,
+            "out_shardings": replicate_state_sharding,
         }
 
         decode_any_sharding = {
-            "in_shardings": (state_sharding, params_sharding, state_sharding, replicate_sharding),
+            "in_shardings": (state_sharding, params_sharding, replicate_state_sharding, replicate_sharding),
             "out_shardings": (
                 state_sharding,
                 replicate_sharding,
@@ -479,11 +481,9 @@ class InferenceEngine:
 
             sub_on_this_device = (index >= start_idx) & (index < end_idx)
 
-            state = jax.lax.cond(
-                sub_on_this_device[0], sub, lambda old_state, _n, _i: old_state, old_state, new_state, local_idx
-            )
+            old_state = jax.lax.cond(sub_on_this_device[0], sub, lambda o, _n, _i: o, old_state, new_state, local_idx)
 
-            return state
+            return old_state
 
         state = _sub(state, new_batch, index)
 
@@ -509,7 +509,7 @@ class InferenceEngine:
         @partial(
             jax.shard_map,
             mesh=self.shardings.mesh,
-            in_specs=(jax.tree.map(lambda _x: P(), self.shardings.state_sharding), P("data")),
+            in_specs=(P(), P("data")),
             out_specs=jax.tree.map(lambda x: x.spec, self.shardings.state_sharding),
         )
         def f(prompts, initial_ids):
@@ -530,7 +530,6 @@ class InferenceEngine:
             out_logprobs=stacked_state.out_logprobs[:, 0],
             prompt_id=stacked_state.prompt_id[:, 0],
         )
-
         return stacked_state
 
     def _decode_loop(self, state: InferenceState, params: PyTree) -> tuple[InferenceState, int]:
