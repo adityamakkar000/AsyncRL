@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import secrets
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -79,18 +80,28 @@ def make_combos(RUN: Cross | Zip | Vals) -> list[dict[str, Any]]:
     return RUN.expand()
 
 
-def make_name(combo: dict[str, Any], EXPERIMENT_PREFIX: str) -> str:
+def make_name(
+    combo: dict[str, Any],
+    EXPERIMENT_PREFIX: str,
+    node_counter: int | None = None,
+    suffix: str | None = None,
+) -> str:
     parts = [EXPERIMENT_PREFIX]
     for path, val in combo.items():
         short = path.split(".")[-1][:10]
         parts.append(f"{short}{val:g}" if isinstance(val, float) else f"{short}{val}")
+    if node_counter is not None:
+        parts.append(f"node{node_counter}")
+    if suffix is None:
+        suffix = secrets.token_hex(4)
+    parts.append(suffix)
     return "_".join(parts)
 
 
 def mesh_cmd(
     cluster: str, combo: dict[str, Any], EXPERIMENT_PREFIX: str, FIXED_OVERRIDES: dict[str, Any], BASE_CONFIG: str
 ) -> list[str]:
-    name = make_name(combo, EXPERIMENT_PREFIX)
+    name = make_name(combo, EXPERIMENT_PREFIX, suffix=secrets.token_hex(4))
     overrides = {**FIXED_OVERRIDES, **combo}
     inner_parts = [
         "python",
@@ -126,7 +137,7 @@ def return_tpu_jobs(
     for combo in combos:
         NODE_COUNTER += 1
 
-        name = make_name(combo, EXPERIMENT_PREFIX)
+        name = make_name(combo, EXPERIMENT_PREFIX, node_counter=NODE_COUNTER, suffix=secrets.token_hex(4))
         overrides = {**FIXED_OVERRIDES, **combo}
         inner_parts = [
             "python",
