@@ -2,11 +2,13 @@ import json
 import os
 import subprocess
 
+from dotenv import load_dotenv
+
+load_dotenv()
 PROJECT = os.getenv("GCLOUD_TPU_PROJECT")
 
 
-def tpu_describe(node_id, zone):
-    """Returns the JSON description of a Queued Resource"""
+def tpu_describe(node_id, zone: str):
     cmd = [
         "gcloud",
         "compute",
@@ -14,7 +16,7 @@ def tpu_describe(node_id, zone):
         "queued-resources",
         "describe",
         node_id,
-        f"--zone={zone.value}",
+        f"--zone={zone}",
         f"--project={PROJECT}",
         "--format=json",
     ]
@@ -25,9 +27,8 @@ def tpu_describe(node_id, zone):
     return "NOT_FOUND"
 
 
-def tpu_get_ips(node_id, zone):
-    """Fetches External IPs for a TPU"""
-    cmd = ["gcloud", "compute", "tpus", "tpu-vm", "describe", node_id, f"--zone={zone.value}", "--format=json"]
+def tpu_get_ips(node_id: str, zone: str) -> list[str]:
+    cmd = ["gcloud", "compute", "tpus", "tpu-vm", "describe", node_id, f"--zone={zone}", "--format=json"]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode == 0:
         data = json.loads(res.stdout)
@@ -35,8 +36,7 @@ def tpu_get_ips(node_id, zone):
     return []
 
 
-def tpu_create_queued(node_id, tpu_type, runtime, zone, spot=True):
-    """Wraps tpuq_create logic."""
+def tpu_create_queued(node_id: str, tpu_type: str, runtime: str, zone: str, spot=True) -> subprocess.CompletedProcess:
     cmd = [
         "gcloud",
         "compute",
@@ -45,18 +45,17 @@ def tpu_create_queued(node_id, tpu_type, runtime, zone, spot=True):
         "create",
         node_id,
         f"--node-id={node_id}",
-        f"--zone={zone.value}",
+        f"--zone={zone}",
         f"--project={PROJECT}",
-        f"--accelerator-type={tpu_type.value}",
-        f"--runtime-version={runtime.value}",
+        f"--accelerator-type={tpu_type}",
+        f"--runtime-version={runtime}",
     ]
     if spot:
         cmd.append("--spot")
     return subprocess.run(cmd)
 
 
-def tpu_delete_queued(node_id, zone):
-    """Wraps tpuq_rm logic."""
+def tpu_delete_queued(node_id, zone: str):
     return subprocess.run(
         [
             "gcloud",
@@ -65,7 +64,7 @@ def tpu_delete_queued(node_id, zone):
             "queued-resources",
             "delete",
             node_id,
-            f"--zone={zone.value}",
+            f"--zone={zone}",
             f"--project={PROJECT}",
             "--force",
             "--quiet",

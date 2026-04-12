@@ -22,12 +22,14 @@ def load_jsonl_from_gcs(gs_prefix: str) -> list[dict]:
         prefix += "/"
 
     rows: list[dict] = []
-    for path in fs.ls(prefix):
-        if not path.endswith(".jsonl"):
-            continue
-        with fs.open(path, "r") as f:
-            for line in f:
-                rows.append(json.loads(line.strip()))
+    if fs.exists(prefix):
+        for path in fs.ls(prefix):
+            if not path.endswith(".jsonl"):
+                continue
+            with fs.open(path, "r") as f:
+                for line in f:
+                    rows.append(json.loads(line.strip()))
+
     return rows
 
 

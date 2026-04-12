@@ -1,6 +1,6 @@
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
@@ -12,6 +12,7 @@ from .config_utils import update_mesh_config
 from .gcp_utils import tpu_create_queued, tpu_delete_queued, tpu_describe, tpu_get_ips
 
 UPDATE_TIME = 10
+console = Console()
 
 
 class Zone(str, Enum):
@@ -31,10 +32,34 @@ class TPUType(str, Enum):
     V6E_64 = "v6e-64"
     V6E_128 = "v6e-128"
 
+    @staticmethod
+    def all_v5() -> list["TPUType"]:
+        return [TPUType.V5P_8, TPUType.V5P_32, TPUType.V5P_64, TPUType.V5P_128]
+
+    @staticmethod
+    def all_v6() -> list["TPUType"]:
+        return [TPUType.V6E_8, TPUType.V6E_32, TPUType.V6E_64, TPUType.V6E_128]
+
 
 class Runtime(str, Enum):
     V2_ALPHA_TPUV5 = "v2-alpha-tpuv5"
     V2_ALPHA_TPUV6E = "v2-alpha-tpuv6e"
+
+
+class TPUStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    PREEMPTED = "PREEMPTED"
+    SUSPENDED = "SUSPENDED"
+    FAILED = "FAILED"
+    NOT_FOUND = "NOT_FOUND"
+
+    @staticmethod
+    def failed_states() -> list[str]:
+        return [TPUStatus.FAILED.value, TPUStatus.PREEMPTED.value, TPUStatus.SUSPENDED.value]
+
+    @staticmethod
+    def allocated_states() -> list[str]:
+        return [TPUStatus.ACTIVE.value, TPUStatus.PREEMPTED.value, TPUStatus.SUSPENDED.value, TPUStatus.FAILED.value]
 
 
 @dataclass
@@ -44,10 +69,12 @@ class TPUJob:
     tpu_type: TPUType
     runtime: Runtime
     cmd: str
+    process: subprocess.Popen | None = None
+    _log_file: object = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
-        is_v5 = self.tpu_type in {TPUType.V5P_8, TPUType.V5P_32, TPUType.V5P_64, TPUType.V5P_128}
-        is_v6 = self.tpu_type in {TPUType.V6E_8, TPUType.V6E_32, TPUType.V6E_64, TPUType.V6E_128}
+        is_v5 = self.tpu_type in TPUType.all_v5()
+        is_v6 = self.tpu_type in TPUType.all_v6()
         if self.runtime == Runtime.V2_ALPHA_TPUV5 and not is_v5:
             raise ValueError(f"Invalid TPU type {self.tpu_type} for runtime {self.runtime}")
         if self.runtime == Runtime.V2_ALPHA_TPUV6E and not is_v6:
@@ -56,92 +83,120 @@ class TPUJob:
             raise ValueError(f"TPU type {self.tpu_type} is not available in zone {self.zone}")
         if is_v6 and self.zone not in {Zone.US_EAST5_A, Zone.US_CENTRAL1_A}:
             raise ValueError(f"TPU type {self.tpu_type} is not available in zone {self.zone}")
+        if self.process is not None:
+            raise ValueError("Process should be initialized to None")
+
+    @property
+    def tpu_status(self) -> str:
+        return tpu_describe(self.node_id, self.zone.value)
+
+    @property
+    def job_status(self) -> str:
+        if self.process is None:
+            return "PENDING"
+        if (ec := self.process.poll()) is None:
+            return "RUNNING"
+        return "FINISHED" if ec == 0 else "ERROR"
+
+    @property
+    def is_job_finished(self) -> bool:
+        return self.job_status in {"FINISHED", "ERROR"}
+
+    def setup_tpu(self) -> int:
+        ips = tpu_get_ips(self.node_id, self.zone.value)
+        update_mesh_config(self.node_id, ips)
+        result = subprocess.run(["mesh", "setup", self.node_id], capture_output=True)
+        return result.returncode
+
+    def launch_job(self):
+        tpu_status = self.tpu_status
+
+        if tpu_status != TPUStatus.ACTIVE.value:
+            if tpu_status == TPUStatus.NOT_FOUND.value:
+                self.allocate_tpu()
+            return
+
+        if self.setup_tpu() != 0:
+            console.print(f"[yellow]mesh setup failed for {self.node_id}, will retry[/yellow]")
+            return
+
+        full_cmd = f'mesh run {self.node_id} "{self.cmd}"'
+        log_path = f"log_{self.node_id}.txt"
+
+        self._log_file = open(log_path, "a", buffering=1)
+        self.process = subprocess.Popen(
+            full_cmd, shell=True, stdout=self._log_file, stderr=subprocess.STDOUT, text=True
+        )
+
+    def allocate_tpu(self):
+        tpu_create_queued(self.node_id, self.tpu_type.value, self.runtime.value, self.zone.value, spot=True)
+
+    def delete_tpu(self):
+        if self.process is not None and self.process.poll() is None:
+            self.process.terminate()
+
+        if self._log_file is not None:
+            self._log_file.close()
+            self._log_file = None
+
+        if self.tpu_status in TPUStatus.allocated_states():
+            tpu_delete_queued(self.node_id, self.zone.value)
+
+    def check_and_handle_preemption(self):
+        js = self.job_status
+        tpu_status = self.tpu_status
+
+        if tpu_status in TPUStatus.failed_states():
+            console.print(f"[yellow]{self.node_id} preempted/failed (TPU: {tpu_status}), re-queuing...[/yellow]")
+            self.delete_tpu()
+            self.process = None
+
+        elif js == "ERROR":
+            console.print(f"[red]{self.node_id} job errored, releasing TPU[/red]")
+            self.delete_tpu()
+
+        elif js == "PENDING":
+            self.launch_job()
+
+        elif js == "FINISHED" and tpu_status in TPUStatus.allocated_states():
+            console.print(f"[green]{self.node_id} job finished, releasing TPU[/green]")
+            self.delete_tpu()
 
 
-console = Console()
-
-
-def generate_table(active_jobs, job_states, job_processes) -> Table:
-    current_time: str = datetime.now().strftime("%H:%M:%S")
+def generate_table(jobs: list[TPUJob]) -> Table:
+    current_time = datetime.now().strftime("%H:%M:%S")
     title = f"TPU Cluster Dashboard [dim](Last Updated: {current_time})[/dim]"
 
     table = Table(title=title, title_style="bold magenta")
-
     table.add_column("Node ID", style="cyan", no_wrap=True)
-    table.add_column("TPU State", style="yellow")
-    table.add_column("Process", style="green")
+    table.add_column("TPU Status", style="yellow")
+    table.add_column("Job Status", style="green")
     table.add_column("Command", style="dim", overflow="ellipsis")
     table.add_column("Log Tail Command", style="blue")
 
-    for job in active_jobs:
-        node_id = job.node_id
-        tpu_state = job_states.get(node_id, "Unknown")
-
-        proc = job_processes.get(node_id)
-        if proc is None:
-            process_status = "[bold red]Not Started[/bold red]"
-        elif proc.poll() is None:
-            process_status = "[bold green]Running[/bold green]"
-        else:
-            process_status = f"[bold white]Exited ({proc.returncode})[/bold white]"
-
-        log_cmd = f"tail -f log_{node_id}.txt"
-
+    for job in jobs:
+        log_cmd = f"tail -f log_{job.node_id}.txt"
+        cmd_display = job.cmd[:40] + "..." if len(job.cmd) > 40 else job.cmd
         table.add_row(
-            node_id, tpu_state, process_status, job.cmd[:40] + "..." if len(job.cmd) > 40 else job.cmd, log_cmd
+            job.node_id,
+            job.tpu_status,
+            job.job_status,
+            cmd_display,
+            log_cmd,
         )
     return table
 
 
-def run_session(initial_jobs: list[TPUJob]):
-    active_jobs = list(initial_jobs)
-    job_processes = {job.node_id: None for job in active_jobs}
-    job_states = {job.node_id: "INIT" for job in active_jobs}
-
-    with Live(generate_table(active_jobs, job_states, job_processes), refresh_per_second=1) as live:
-        while active_jobs:
-            for job in active_jobs[:]:
-                node_id = job.node_id
-                zone = job.zone
-
-                state = tpu_describe(node_id, zone)
-                job_states[node_id] = state
-
-                live.update(generate_table(active_jobs, job_states, job_processes))
-
-                proc = job_processes.get(node_id)
-                is_running_locally = proc is not None and proc.poll() is None
-
-                if state == "ACTIVE":
-                    if not is_running_locally:
-                        if proc is not None:
-                            exit_code = proc.poll()
-                            console.print(f"[bold red]CRITICAL:[/bold red] {node_id} exited with code {exit_code}")
-
-                            active_jobs.remove(job)
-                            continue
-
-                        ips = tpu_get_ips(node_id, zone)
-                        update_mesh_config(node_id, ips)
-                        subprocess.run(["mesh", "setup", node_id], capture_output=True)
-
-                        full_cmd = f'mesh run {node_id} "{job.cmd}"'
-                        log_file = f"log_{node_id}.txt"
-                        f = open(log_file, "a", buffering=1)
-
-                        job_processes[node_id] = subprocess.Popen(
-                            full_cmd, shell=True, stdout=f, stderr=subprocess.STDOUT, text=True
-                        )
-
-                elif state in ["FAILED", "SUSPENDED", "NOT_FOUND"]:
-                    if is_running_locally and proc is not None:
-                        proc.terminate()
-
-                    job_processes[node_id] = None
-                    if state != "NOT_FOUND":
-                        tpu_delete_queued(node_id, zone)
-                        time.sleep(5)
-                    tpu_create_queued(node_id, job.tpu_type, job.runtime, zone, spot=True)
-
-            time.sleep(UPDATE_TIME)
-            live.update(generate_table(active_jobs, job_states, job_processes))
+def run_session(jobs: list[TPUJob]):
+    try:
+        with Live(generate_table(jobs), refresh_per_second=1) as live:
+            while any(not j.is_job_finished for j in jobs):
+                for j in jobs:
+                    j.check_and_handle_preemption()
+                live.update(generate_table(jobs))
+                time.sleep(UPDATE_TIME)
+    finally:
+        console.print("[bold red]Cleaning up...[/bold red]")
+        for j in jobs:
+            j.delete_tpu()
+        console.print("[bold green]Cleanup complete.[/bold green]")

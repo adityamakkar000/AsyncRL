@@ -5,8 +5,9 @@ import time
 
 from loguru import logger
 from openai import AsyncOpenAI
+from PIL.ImImagePlugin import OPEN
 
-from src.constants import GPU_MEMORY_UTILIZATION, IP, PORT, SERVED_MODEL_NAME, VLLM_SERVER_TIMEOUT
+from src.constants import GPU_MEMORY_UTILIZATION, IP, OPENAI_TIMEOUT, PORT, SERVED_MODEL_NAME, VLLM_SERVER_TIMEOUT
 
 from .config import SamplingParams, vLLMConfig, vLLMOutput
 from .utils import format_command, ping_server, terminate_process
@@ -20,6 +21,7 @@ class vLLMEngine:
         self.client = AsyncOpenAI(
             base_url=f"http://{IP}:{PORT}/v1",
             api_key="",
+            timeout=OPENAI_TIMEOUT,
         )
         self.check_config()
         self.rejection_semaphore = asyncio.Semaphore(max_workers)
