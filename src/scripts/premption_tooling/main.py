@@ -13,7 +13,7 @@ from rich.table import Table
 from .config_utils import delete_mesh_config, update_mesh_config
 from .gcp_utils import tpu_create_queued, tpu_delete_queued, tpu_describe, tpu_get_ips
 
-UPDATE_TIME = 10
+update_time = 10
 console = Console()
 
 
@@ -84,7 +84,7 @@ class TPUJob:
             raise ValueError(f"Invalid TPU type {self.tpu_type} for runtime {self.runtime}")
         if is_v5 and self.zone in {Zone.US_EAST1_D, Zone.EUROPE_WEST4_A}:
             raise ValueError(f"TPU type {self.tpu_type} is not available in zone {self.zone}")
-        if is_v6 and self.zone not in {Zone.US_EAST5_A, Zone.US_CENTRAL1_A}:
+        if is_v6 and self.zone in {Zone.US_EAST5_A, Zone.US_CENTRAL1_A}:
             raise ValueError(f"TPU type {self.tpu_type} is not available in zone {self.zone}")
         if self.process is not None:
             raise ValueError("Process should be initialized to None")
@@ -203,7 +203,7 @@ def run_session(jobs: list[TPUJob]):
                 for t in threads:
                     t.join()
                 live.update(generate_table(jobs))
-                time.sleep(UPDATE_TIME)
+                time.sleep(update_time)
     finally:
         console.print("[bold red]Cleaning up...[/bold red]")
         for j in jobs:

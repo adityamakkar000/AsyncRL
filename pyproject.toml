@@ -29,6 +29,7 @@ dependencies = [
     "optax==0.2.7",
     "wandb==0.25.0",
     "rich<14.0.0",
+    "lm-eval>=0.4.11",
 ]
 
 [project.optional-dependencies]

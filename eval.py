@@ -1,10 +1,10 @@
-import src.scripts.premption_tooling as tpujob
+import src.scripts.premption_tooling as TPUJOB
 
 max_seq_len = [4096, 8192]
 batch_size = [1024, 1024]
 group_size = [8, 16]
 
-# run: Cross | Zip | Vals = Cross(
+# RUN: Cross | Zip | Vals = Cross(
 #     [
 #         Vals("loss_config.inference_config.max_seq_len", max_seq_len),
 #         Zip(
@@ -18,22 +18,22 @@ group_size = [8, 16]
 # )
 
 
-base_config = "debug"
-name = "debug"
-run = tpujob.Cross()
-job_type = tpujob.JOB_TYPE.TRAIN
+BASE_CONFIG = "main"
+NAME = "eval_gsm8k"
+RUN = TPUJOB.Cross()
+TYPE = TPUJOB.JOB_TYPE.EVAL
 
-job = tpujob.LaunchJob(
-    run=run,
-    job_type=job_type,
-    experiment_prefix=name,
-    fixed_overrides=dict(),
-    base_config=base_config,
-    zone=tpujob.Zone.US_EAST5_A,
-    tpu_type=tpujob.TPUType.V5P_32,
-    runtime=tpujob.Runtime.V2_ALPHA_TPUV5,
+job = TPUJOB.LaunchJob(
+    run=RUN,
+    job_type=TYPE,
+    experiment_prefix=NAME,
+    fixed_overrides={"tasks": ["gsm8k"]},
+    base_config=BASE_CONFIG,
+    zone=TPUJOB.Zone.EUROPE_WEST4_A,
+    tpu_type=TPUJOB.TPUType.V6E_8,
+    runtime=TPUJOB.Runtime.V2_ALPHA_TPUV6E,
     retries=5,
 )
 
 if __name__ == "__main__":
-    tpujob.launch(job)
+    TPUJOB.launch(job)

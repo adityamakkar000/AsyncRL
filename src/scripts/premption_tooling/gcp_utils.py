@@ -5,7 +5,7 @@ import subprocess
 from dotenv import load_dotenv
 
 load_dotenv()
-PROJECT = os.getenv("GCLOUD_TPU_PROJECT")
+project = os.getenv("GCLOUD_TPU_PROJECT")
 
 
 def tpu_describe(node_id, zone: str):
@@ -17,7 +17,7 @@ def tpu_describe(node_id, zone: str):
         "describe",
         node_id,
         f"--zone={zone}",
-        f"--project={PROJECT}",
+        f"--project={project}",
         "--format=json",
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
@@ -46,7 +46,7 @@ def tpu_create_queued(node_id: str, tpu_type: str, runtime: str, zone: str, spot
         node_id,
         f"--node-id={node_id}",
         f"--zone={zone}",
-        f"--project={PROJECT}",
+        f"--project={project}",
         f"--accelerator-type={tpu_type}",
         f"--runtime-version={runtime}",
     ]
@@ -65,7 +65,7 @@ def tpu_delete_queued(node_id, zone: str):
             "delete",
             node_id,
             f"--zone={zone}",
-            f"--project={PROJECT}",
+            f"--project={project}",
             "--force",
             "--quiet",
         ]

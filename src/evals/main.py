@@ -1,21 +1,18 @@
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
 
 import gcsfs
+import lm_eval
 from dotenv import load_dotenv
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from stax import TextWriter, WandBWriter
 
-from src.constants import GS_BUCKET, HF_CHECKPOINT_PATH
-from src.data import Sample, Verifier, VerifierInput
+from src.constants import GS_BUCKET, HF_CHECKPOINT_PATH, IP, PORT, SERVED_MODEL_NAME
 from src.model import Model
 from src.vllm_engine.main import vLLMEngine
 
 from .config import evalConfig
-from .utils import fetch_eval_samples
 
 load_dotenv()
 
@@ -25,10 +22,9 @@ class EvalRunner:
         self.config = config
         self.vllm_config = config.vllm_config
         self.model_config = config.model_config
-        self.verifier = Verifier()
 
         self.check_config()
-        self.vllm_engine = vLLMEngine(self.vllm_config, self.config.max_connections, debug=config.debug)
+        self.vllm_engine = vLLMEngine(self.vllm_config, max_workers=100, debug=config.debug)
 
     def check_config(self):
         if self.model_config.use_best_ckpt and self.model_config.step_number is not None:
@@ -77,31 +73,20 @@ class EvalRunner:
     def launch_vllm(self):
         self.vllm_engine.launch_vllm(HF_CHECKPOINT_PATH)
 
-    def run_task(self, task: str) -> dict[str, float]:
-        task_samples: list[Sample] = fetch_eval_samples(task)
-        outputs = self.vllm_engine.generate_completions(
-            prompts=[sample.prompt for sample in task_samples],
-            max_sequence_len=self.config.max_tokens,
-            pass_at=self.config.epochs,
-            temperature=self.config.temperature,
-            top_p=self.config.top_p,
+    def run_lm_eval_task(self, tasks: list[str]):
+        model_args = (
+            f"model={SERVED_MODEL_NAME},base_url=http://{IP}:{PORT}/v1/completions,tokenizer={HF_CHECKPOINT_PATH}"
         )
 
-        prompt_to_answer = {sample.prompt: sample.answer for sample in task_samples}
-
-        def flatten_2d_list(lst: list[list[Any]]) -> list[float]:
-            return [item for sublist in lst for item in sublist]
-
-        rewards = flatten_2d_list(
-            [
-                [self.verifier(VerifierInput(completion, prompt_to_answer[prompt])) for completion in rollouts]
-                for prompt, rollouts in zip(outputs.prompts, outputs.completions)
-            ]
+        results = lm_eval.simple_evaluate(
+            model="local-completions",
+            model_args=model_args,
+            tasks=tasks,
+            num_fewshot=0,
+            batch_size=100,
+            repeats=self.config.epochs,
         )
-        valid_rewards = [r for r in rewards if r is not None]
-        avg_reward = sum(valid_rewards) / len(valid_rewards) if valid_rewards else 0
-
-        return {"average": avg_reward}
+        logger.info(f"{lm_eval.utils.make_table(results)}")
 
     def process_results(self, results: dict[str, dict[str, float]]):
         logger.info("Evaluation results:")
@@ -117,15 +102,8 @@ class EvalRunner:
                 logger.info(f"\t\t{metric}: {value:.4f}")
 
     def launch_eval(self):
-        eval_results = dict()
-
-        with ThreadPoolExecutor(max_workers=self.config.max_connections) as executor:
-            futures = {executor.submit(self.run_task, task): task for task in self.config.tasks}
-            for future in as_completed(futures):
-                task = futures[future]
-                eval_results[task] = future.result()
-
-        self.process_results(eval_results)
+        eval_results = self.run_lm_eval_task(self.config.tasks)
+        # self.process_results(eval_results)
 
     def cleanup(self):
         self.vllm_engine.cleanup()
@@ -134,4 +112,7 @@ class EvalRunner:
     def run_evaluation(self):
         self.setup_model()
         self.launch_vllm()
-        self.launch_eval()
+        try:
+            self.launch_eval()
+        finally:
+            self.cleanup()

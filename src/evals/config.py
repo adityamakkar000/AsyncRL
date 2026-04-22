@@ -23,6 +23,3 @@ class evalConfig:
     max_tokens: int = 8192
     debug: bool = False
     epochs: int = 4
-
-    max_connections: int = 100
-    max_tasks: int = 5

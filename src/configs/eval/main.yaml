@@ -7,6 +7,5 @@ defaults:
 tasks:
   - "aime"
 
-max_connections: 100 
 temperature: 1.0
 top_p: 1.0

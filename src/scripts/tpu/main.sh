@@ -90,4 +90,14 @@ tpu_ls () {
       state,
       networkEndpoints[].accessConfig.externalIp
     )"
-gcloud projects list}
+}
+
+tpu_ls_all() {
+  for zone in us-central1-a us-central1-b us-central1-c us-central1-f us-central2-b us-central2-c us-central2-d us-east1-c us-east1-d us-east4-a us-east4-b us-east4-c us-east5-b us-east5-c us-south1-a us-west1-a us-west1-b us-west1-c us-west4-a us-west4-b europe-west4-a europe-west4-b europe-west4-c; do
+    tpus=$(gcloud compute tpus tpu-vm list --zone="$zone" --project="$GCLOUD_TPU_PROJECT" --format="table(name,acceleratorType,state)" 2>/dev/null)
+    if [[ -n "$tpus" && "$tpus" != "Listed 0 items." ]]; then
+      echo "--- Zone: $zone ---"
+      echo "$tpus"
+    fi
+  done
+}
