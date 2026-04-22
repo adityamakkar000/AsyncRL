@@ -74,6 +74,7 @@ class LAUNCH_JOB:
     ZONE: Zone
     TPU_TYPE: TPUType
     RUNTIME: Runtime
+    RETRIES: int = 3
 
 
 def make_combos(RUN: Cross | Zip | Vals) -> list[dict[str, Any]]:
@@ -120,6 +121,7 @@ def return_tpu_jobs(
     ZONE: Zone,
     TPU_TYPE: TPUType,
     RUNTIME: Runtime,
+    RETRIES: int,
 ) -> list[TPUJob]:
     NODE_COUNTER = 0
 
@@ -146,6 +148,7 @@ def return_tpu_jobs(
             tpu_type=TPU_TYPE,
             runtime=RUNTIME,
             cmd=inner_cmd,
+            retries=RETRIES,
         )
         jobs.append(job)
     return jobs
@@ -155,7 +158,14 @@ def launch(job: LAUNCH_JOB) -> None:
     combos = make_combos(job.RUN)
 
     tpu_jobs = return_tpu_jobs(
-        combos, job.EXPERIMENT_PREFIX, job.FIXED_OVERRIDES, job.BASE_CONFIG, job.ZONE, job.TPU_TYPE, job.RUNTIME
+        combos,
+        job.EXPERIMENT_PREFIX,
+        job.FIXED_OVERRIDES,
+        job.BASE_CONFIG,
+        job.ZONE,
+        job.TPU_TYPE,
+        job.RUNTIME,
+        job.RETRIES,
     )
 
     run_session(tpu_jobs)

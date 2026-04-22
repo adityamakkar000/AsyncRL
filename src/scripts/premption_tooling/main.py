@@ -1,4 +1,6 @@
+import os
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -8,7 +10,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 
-from .config_utils import update_mesh_config
+from .config_utils import delete_mesh_config, update_mesh_config
 from .gcp_utils import tpu_create_queued, tpu_delete_queued, tpu_describe, tpu_get_ips
 
 UPDATE_TIME = 10
@@ -71,6 +73,7 @@ class TPUJob:
     cmd: str
     process: subprocess.Popen | None = None
     _log_file: object = field(default=None, init=False, repr=False)
+    retries: int = 3
 
     def __post_init__(self):
         is_v5 = self.tpu_type in TPUType.all_v5()
@@ -121,7 +124,7 @@ class TPUJob:
             return
 
         full_cmd = f'mesh run {self.node_id} "{self.cmd}"'
-        log_path = f"log_{self.node_id}.txt"
+        log_path = f"logs/log_{self.node_id}.txt"
 
         self._log_file = open(log_path, "a", buffering=1)
         self.process = subprocess.Popen(
@@ -141,6 +144,7 @@ class TPUJob:
 
         if self.tpu_status in TPUStatus.allocated_states():
             tpu_delete_queued(self.node_id, self.zone.value)
+            delete_mesh_config(self.node_id)
 
     def check_and_handle_preemption(self):
         js = self.job_status
@@ -153,7 +157,12 @@ class TPUJob:
 
         elif js == "ERROR":
             console.print(f"[red]{self.node_id} job errored, releasing TPU[/red]")
-            self.delete_tpu()
+            if self.retries > 0:
+                console.print(f"[yellow]Retrying {self.node_id} (retries left: {self.retries})[/yellow]")
+                self.retries -= 1
+                self.process = None
+            else:
+                self.delete_tpu()
 
         elif js == "PENDING":
             self.launch_job()
@@ -173,26 +182,26 @@ def generate_table(jobs: list[TPUJob]) -> Table:
     table.add_column("Job Status", style="green")
     table.add_column("Command", style="dim", overflow="ellipsis")
     table.add_column("Log Tail Command", style="blue")
+    table.add_column("Retries Left", style="red")
 
     for job in jobs:
-        log_cmd = f"tail -f log_{job.node_id}.txt"
+        log_cmd = f"tail -f logs/log_{job.node_id}.txt"
         cmd_display = job.cmd[:40] + "..." if len(job.cmd) > 40 else job.cmd
-        table.add_row(
-            job.node_id,
-            job.tpu_status,
-            job.job_status,
-            cmd_display,
-            log_cmd,
-        )
+        table.add_row(job.node_id, job.tpu_status, job.job_status, cmd_display, log_cmd, str(job.retries))
     return table
 
 
 def run_session(jobs: list[TPUJob]):
+    if not os.path.exists("logs"):
+        os.makedirs("logs")
     try:
         with Live(generate_table(jobs), refresh_per_second=1) as live:
             while any(not j.is_job_finished for j in jobs):
-                for j in jobs:
-                    j.check_and_handle_preemption()
+                threads = [threading.Thread(target=j.check_and_handle_preemption) for j in jobs]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
                 live.update(generate_table(jobs))
                 time.sleep(UPDATE_TIME)
     finally:

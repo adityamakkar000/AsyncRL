@@ -5,7 +5,6 @@ import time
 
 from loguru import logger
 from openai import AsyncOpenAI
-from PIL.ImImagePlugin import OPEN
 
 from src.constants import GPU_MEMORY_UTILIZATION, IP, OPENAI_TIMEOUT, PORT, SERVED_MODEL_NAME, VLLM_SERVER_TIMEOUT
 
