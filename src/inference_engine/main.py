@@ -17,7 +17,7 @@ from .config import InferenceConfig, InferenceResults, InferenceRollout, Inferen
 from .utils import _maybe_force_eos, _maybe_force_eot, naive_sample
 
 AXIS_NAME = "data"
-PADDING_BUFFER = 512
+PADDING_BUFFER = 2048
 
 INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
 
