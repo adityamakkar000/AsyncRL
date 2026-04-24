@@ -31,7 +31,7 @@ INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate
 
 
 def apply_annealing(tokens: list[int], percent: float, max_seq_len: int) -> list[int]:
-    return tokens[: max(1, min(int(len(tokens) * percent), max_seq_len * 0.8))] # TODO: fix this mathematically, if solution too long then it will be truncated
+    return tokens[: max(1, int(len(tokens) * percent))] # TODO: fix this mathematically, if solution too long then it will be truncated
 
 
 def apply_prompt_template(text: str) -> str:

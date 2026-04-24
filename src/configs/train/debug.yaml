@@ -45,7 +45,7 @@ loss_config:
     n_replicas: 4
     group_size: 8
     temperature: 1.0
-    reasoning_budget: 150
+    reasoning_budget: null
     think_mode: true
     precompile: false
     system_prompt: false
