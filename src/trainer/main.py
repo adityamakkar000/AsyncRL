@@ -67,9 +67,7 @@ class Trainer:
 
             sync_global_devices("Trainer initialization")
 
-        logger.info(
-            f"Trainer initialization complete in {tracker.data['time']:.2f} seconds"
-        )
+        logger.info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds")
 
     def validate_config(self):
         """Method to validate the TrainerConfig parameters."""
@@ -79,11 +77,7 @@ class Trainer:
             raise ValueError("grad_accumulation must be at least 1")
         if cfg.num_steps < 1:
             raise ValueError("num_steps must be at least 1")
-        if (
-            cfg.learning_rate_init < 0
-            or cfg.learning_rate_peak < 0
-            or cfg.learning_rate_end < 0
-        ):
+        if cfg.learning_rate_init < 0 or cfg.learning_rate_peak < 0 or cfg.learning_rate_end < 0:
             raise ValueError("learning rates must be non-negative")
         if cfg.optimizer not in ["adam", "adamw", "sgd"]:
             raise ValueError(f"Unsupported optimizer: {cfg.optimizer}")
@@ -93,11 +87,7 @@ class Trainer:
             raise ValueError("warmup_steps and decay_steps must sum to at most 1.0")
         if cfg.sharding_config.sharding_type not in ["single", "dp", "fsdp"]:
             raise ValueError("sharding_type must be one of 'single', 'dp', or 'fsdp'")
-        if (
-            cfg.data_config.train_config.batch_size
-            % cfg.loss_config.inference_config.group_size
-            != 0
-        ):
+        if cfg.data_config.train_config.batch_size % cfg.loss_config.inference_config.group_size != 0:
             raise ValueError(
                 f"Batch size must be divisible by group size for proper batching in inference, got {cfg.data_config.train_config.batch_size} batch size and {cfg.loss_config.inference_config.group_size} group size."
             )
@@ -105,40 +95,34 @@ class Trainer:
         n_hosts = jax.process_count()
         train_batch_size = cfg.data_config.train_config.batch_size
         val_batch_size = cfg.data_config.val_config.batch_size
-        assert (
-            train_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts)
-            == 0
-        ), f"Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {train_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
-        assert (
-            val_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts)
-            == 0
-        ), f"Validation batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {val_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
-
-        n_devices = (
-            jax.device_count()
-            if cfg.sharding_config.sharding_type in ["fsdp", "dp"]
-            else 1
+        assert train_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
+            f"Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {train_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
+        )
+        assert val_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
+            f"Validation batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {val_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
         )
 
+        n_devices = jax.device_count() if cfg.sharding_config.sharding_type in ["fsdp", "dp"] else 1
+
         if cfg.sharding_config.sharding_type == "single":
-            assert (
-                jax.process_count() == 1
-            ), "Single sharding type does not support distributed training across multiple hosts."
+            assert jax.process_count() == 1, (
+                "Single sharding type does not support distributed training across multiple hosts."
+            )
 
         ppo_minibatch_size = cfg.loss_config.rl_config.ppo_minibatch_size
-        assert (
-            train_batch_size % ppo_minibatch_size == 0
-        ), f"Train batch size must be divisible by PPO minibatch size for proper PPO updates, got {train_batch_size} batch size and {ppo_minibatch_size} PPO minibatch size."
-        assert (
-            ppo_minibatch_size % (n_devices * cfg.grad_accum_steps) == 0
-        ), f"PPO minibatch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation, got {ppo_minibatch_size} PPO minibatch size, {n_devices} devices, and {cfg.grad_accum_steps} grad_accum_steps."
+        assert train_batch_size % ppo_minibatch_size == 0, (
+            f"Train batch size must be divisible by PPO minibatch size for proper PPO updates, got {train_batch_size} batch size and {ppo_minibatch_size} PPO minibatch size."
+        )
+        assert ppo_minibatch_size % (n_devices * cfg.grad_accum_steps) == 0, (
+            f"PPO minibatch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation, got {ppo_minibatch_size} PPO minibatch size, {n_devices} devices, and {cfg.grad_accum_steps} grad_accum_steps."
+        )
 
-        assert (
-            train_batch_size // cfg.loss_config.inference_config.group_size
-        ) % jax.process_count() == 0, f"Number of groups per step must be divisible by number of hosts for proper distribution of groups, got {train_batch_size} train batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
-        assert (
-            val_batch_size // cfg.loss_config.inference_config.group_size
-        ) % jax.process_count() == 0, f"Number of groups per validation step must be divisible by number of hosts for proper distribution of groups, got {val_batch_size} val batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
+        assert (train_batch_size // cfg.loss_config.inference_config.group_size) % jax.process_count() == 0, (
+            f"Number of groups per step must be divisible by number of hosts for proper distribution of groups, got {train_batch_size} train batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
+        )
+        assert (val_batch_size // cfg.loss_config.inference_config.group_size) % jax.process_count() == 0, (
+            f"Number of groups per validation step must be divisible by number of hosts for proper distribution of groups, got {val_batch_size} val batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
+        )
 
     @partial(setup, component="initialized state")
     def _init_state(self):
@@ -172,9 +156,7 @@ class Trainer:
     @partial(setup, component="metric logger")
     def _setup_writer(self):
         if writer_config := self.config.wandb_config:
-            writer_kwargs: dict[str, Any] = {
-                "metrics_to_print": self.config.metrics_to_log
-            }
+            writer_kwargs: dict[str, Any] = {"metrics_to_print": self.config.metrics_to_log}
             if self.writer_id is not None:
                 writer_kwargs["run_id"] = self.writer_id
             else:
@@ -202,9 +184,7 @@ class Trainer:
         assert self.tx is not None, "self.tx is None"
         assert self.model is not None, "self.model is None"
 
-        abstract_state = self.model.init_state(
-            jax.random.PRNGKey(0), tx=self.tx, abstract=True
-        )
+        abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx, abstract=True)
         params_shape, opt_state_shape = (
             abstract_state["params"],
             abstract_state["opt_state"],
@@ -223,9 +203,7 @@ class Trainer:
             sharding=stax.ShardingConfig(
                 params_shape=params_shape,
                 opt_state_shape=opt_state_shape,
-                sharding_type=stax.ShardingType(
-                    self.config.sharding_config.sharding_type
-                ),
+                sharding_type=stax.ShardingType(self.config.sharding_config.sharding_type),
                 opt_state_offload=self.config.sharding_config.opt_state_offload,
                 min_bytes_for_fsdp=self.config.sharding_config.min_bytes_for_fsdp,
                 data_shard_dim=self.config.sharding_config.data_shard_dim,
@@ -243,9 +221,7 @@ class Trainer:
         ppo_k_steps = train_batch_size // ppo_minibatch_size
         grad_accum_steps = self.config.grad_accum_steps
 
-        def train_step(
-            params: PyTree, opt_state: PyTree, batch: RLBatch
-        ) -> Dict[str, PyTree]:
+        def train_step(params: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
             """
             Takes single step and implments PPO-k loss (k steps off-policy)
             Args:
@@ -279,15 +255,11 @@ class Trainer:
 
             for step in range(ppo_k_steps):
                 current_batch = jax.tree.map(
-                    lambda x: x[
-                        step
-                    ],  # [grad_accum_steps, ppo_minibatch_size // grad_accum_steps, T]
+                    lambda x: x[step],  # [grad_accum_steps, ppo_minibatch_size // grad_accum_steps, T]
                     ppo_global_batch,
                 )
                 out = train_fn(out["params"], out["opt_state"], current_batch)
-                aux_metrics |= {
-                    f"{k}_step_{step}": v for k, v in out["metrics"].items()
-                }
+                aux_metrics |= {f"{k}_step_{step}": v for k, v in out["metrics"].items()}
 
             return {
                 "params": out["params"],
@@ -330,17 +302,13 @@ class Trainer:
     def _setup_train_state(self):
         assert self.model is not None, "Model must be set up before train state init."
         assert self.tx is not None, "Optimizer must be set up before train state init."
-        assert (
-            self.params_sharding is not None and self.opt_state_sharding is not None
-        ), "Sharding must be set up before train state init."
-        assert (
-            self.checkpointer is not None
-        ), "checkpointer must be set up before initializing train state"
+        assert self.params_sharding is not None and self.opt_state_sharding is not None, (
+            "Sharding must be set up before train state init."
+        )
+        assert self.checkpointer is not None, "checkpointer must be set up before initializing train state"
 
         if self.resumed:
-            logger.info(
-                "Spot training enabled and checkpoint found, skipping parameter initialization."
-            )
+            logger.info("Spot training enabled and checkpoint found, skipping parameter initialization.")
             self.restore_save_tree()
             return
 
@@ -349,31 +317,21 @@ class Trainer:
             "params": self.params_sharding,
             "opt_state": self.opt_state_sharding,
         }
-        out_state = self.model.init_state(
-            rng=self.key(), tx=self.tx, sharding=sharding, abstract=False
-        )
+        out_state = self.model.init_state(rng=self.key(), tx=self.tx, sharding=sharding, abstract=False)
         self.params = out_state["params"]
         self.opt_state = out_state["opt_state"]
 
-        logger.info(
-            f"Params intialized with total size: {self.model.count_params(self.params):_} parameters."
-        )
+        logger.info(f"Params intialized with total size: {self.model.count_params(self.params):_} parameters.")
 
     @partial(setup, component="inference engine")
     def _setup_inference_engine(self):
         """Setup the inference engine for evaluation and generation rollouts."""
         if self.config.loss_config.inference_config is None:
-            logger.info(
-                "No inference config provided, skipping inference engine setup."
-            )
+            logger.info("No inference config provided, skipping inference engine setup.")
             return
 
-        assert (
-            self.model is not None
-        ), "Model must be set up before inference engine init."
-        assert (
-            self.params is not None
-        ), "Train state must be initialized before inference engine init."
+        assert self.model is not None, "Model must be set up before inference engine init."
+        assert self.params is not None, "Train state must be initialized before inference engine init."
 
         inference_params = {"params": self.params}
         # inference_engine requires {params: params...}
@@ -388,14 +346,10 @@ class Trainer:
         """Build annealing rate schedule from config. Same rate applies to whole batch; schedule is over num_steps."""
         ac = self.config.loss_config.annealing_config
         if ac is not None:
-            self.annealing_schedule = (
-                optax.linear_schedule(  # TODO: change schedule later, linear for now
-                    init_value=ac.init_value,
-                    end_value=ac.end_value,
-                    transition_steps=max(
-                        1, int(ac.annealing_steps * self.config.num_steps)
-                    ),
-                )
+            self.annealing_schedule = optax.linear_schedule(  # TODO: change schedule later, linear for now
+                init_value=ac.init_value,
+                end_value=ac.end_value,
+                transition_steps=max(1, int(ac.annealing_steps * self.config.num_steps)),
             )
         else:
             self.annealing_schedule = None
@@ -422,9 +376,7 @@ class Trainer:
                 raise ValueError(f"Unsupported optimizer: {self.config.optimizer}")
 
         clip = (
-            optax.clip_by_global_norm(self.config.grad_clip)
-            if self.config.grad_clip is not None
-            else optax.identity()
+            optax.clip_by_global_norm(self.config.grad_clip) if self.config.grad_clip is not None else optax.identity()
         )
 
         optimizer_args = {
@@ -489,9 +441,7 @@ class Trainer:
 
         return state, metadata
 
-    def save_checkpoint(
-        self, step: int, metadata_metrics: Optional[dict[str, float]] = None
-    ):
+    def save_checkpoint(self, step: int, metadata_metrics: Optional[dict[str, float]] = None):
         assert self.checkpointer is not None, "Checkpointer not set up."
         state, metadata = self.make_save_tree(step, metadata_metrics=metadata_metrics)
         logger.info(f"Saving checkpoint at step {step} ...")
@@ -499,9 +449,7 @@ class Trainer:
 
     def block_until_checkpoints_saved(self):
         if not self.checkpointer:
-            logger.warning(
-                "Checkpointer not set up, cannot block until checkpoints are saved."
-            )
+            logger.warning("Checkpointer not set up, cannot block until checkpoints are saved.")
             return
         self.checkpointer.wait_until_finished()
 
@@ -526,9 +474,7 @@ class Trainer:
             "params": self.params_sharding,
             "opt_state": self.opt_state_sharding,
         }
-        out = self.model.init_state(
-            rng=jax.random.PRNGKey(0), tx=self.tx, sharding=shardings, abstract=True
-        )
+        out = self.model.init_state(rng=jax.random.PRNGKey(0), tx=self.tx, sharding=shardings, abstract=True)
 
         # don't need metadata
         save_tree, _ = self.make_save_tree(
@@ -568,21 +514,13 @@ class Trainer:
                 annealing_schedule=self.annealing_schedule,
                 step=self.global_step,
             )
-            generations = self.inference_engine(
-                samples, self.key(), {"params": self.params}
-            )
-            train_batch, train_data_metrics = self.train_dataset.prepare_batch(
-                samples, generations, train=True
-            )
+            generations = self.inference_engine(samples, self.key(), {"params": self.params})
+            train_batch, train_data_metrics = self.train_dataset.prepare_batch(samples, generations, train=True)
 
             out = self.train_step(self.params, self.opt_state, train_batch)
 
             self.params, self.opt_state = out["params"], out["opt_state"]
-            metrics = (
-                out["metrics"]
-                | metrics_all_reduce(generations.metrics)
-                | metrics_all_reduce(train_data_metrics)
-            )
+            metrics = out["metrics"] | metrics_all_reduce(generations.metrics) | metrics_all_reduce(train_data_metrics)
 
             if self.global_step % self.config.val_interval == 0:
                 val_samples = self.val_dataset(
@@ -590,12 +528,8 @@ class Trainer:
                     annealing_schedule=self.annealing_schedule,
                     step=self.global_step,
                 )
-                val_generations = self.inference_engine(
-                    val_samples, self.key(), {"params": self.params}
-                )
-                _val_batch, val_metrics = self.val_dataset.prepare_batch(
-                    val_samples, val_generations, train=False
-                )
+                val_generations = self.inference_engine(val_samples, self.key(), {"params": self.params})
+                _val_batch, val_metrics = self.val_dataset.prepare_batch(val_samples, val_generations, train=False)
 
                 metrics |= val_metrics
 
@@ -610,19 +544,14 @@ class Trainer:
             if self.global_step % self.config.log_generations_every_n_steps == 0:
                 # do this to save storage on wandb
                 # since we can't log too much
-                generations_to_log = [
-                    (g, s.answer) for g, s in zip(generations.output_strs, samples)
-                ]
+                generations_to_log = [(g, s.answer) for g, s in zip(generations.output_strs, samples)]
 
             self.writer(self.global_step, metrics, generations=generations_to_log)
             self.global_step += 1
 
             # save after you update state since if you want to save every 10 steps
             # you want to save after you have done 10 steps and resume at the 11th step
-            if (
-                self.global_step % self.config.checkpoint_interval == 0
-                or self.global_step == self.total_steps
-            ):
+            if self.global_step % self.config.checkpoint_interval == 0 or self.global_step == self.total_steps:
                 self.save_checkpoint(step=self.global_step, metadata_metrics=metrics)
 
         logger.info("Training complete.")

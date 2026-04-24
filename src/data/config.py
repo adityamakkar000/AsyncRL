@@ -24,7 +24,12 @@ class Sample:
         return cls(prompt=prompt, answer=answer, solution=solution, annealing_percentage=annealing_percentage)
 
     def get_dict(self) -> dict:
-        return {"prompt": self.prompt, "answer": self.answer, "solution": self.solution, "annealing_percentage": self.annealing_percentage}
+        return {
+            "prompt": self.prompt,
+            "answer": self.answer,
+            "solution": self.solution,
+            "annealing_percentage": self.annealing_percentage,
+        }
 
 
 @dataclass
