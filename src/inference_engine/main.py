@@ -13,13 +13,7 @@ from transformers import AutoTokenizer
 
 from src.model import KVCache, Model
 
-from .config import (
-    InferenceConfig,
-    InferenceResults,
-    InferenceRollout,
-    InferenceShardings,
-    InferenceState,
-)
+from .config import (InferenceConfig, InferenceResults, InferenceRollout, InferenceShardings, InferenceState)
 from .utils import _maybe_force_eos, _maybe_force_eot, naive_sample
 
 AXIS_NAME = "data"
@@ -383,6 +377,7 @@ class InferenceEngine:
                 dtype=self.config.kv_cache_dtype,
                 sharding=KVCache(
                     k=self.shardings.replicate_sharding,  # type: ignore
+                    v=self.shardings.replicate_sharding,  # type: ignore
                     length=self.shardings.replicate_sharding,  # type: ignore
                 ),
             )

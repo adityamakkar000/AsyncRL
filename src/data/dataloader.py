@@ -1,8 +1,7 @@
-from typing import Any, Optional
+from typing import Any
 
 import jax
 import numpy as np
-import optax
 import stax
 from transformers import AutoTokenizer
 
@@ -48,10 +47,7 @@ class DataLoader:
         """Return examples aligned with last batch."""
         return self._last_samples
 
-    def __call__(
-        self,
-        num_prompts: int,
-    ) -> list[Sample]:
+    def __call__(self, num_prompts: int) -> list[Sample]:
         self.total_per_device = num_prompts // jax.process_count()
         self.start_idx = self._current_idx + self.rank * self.total_per_device
         self.process_end_idx = self.start_idx + self.total_per_device
