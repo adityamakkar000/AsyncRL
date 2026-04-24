@@ -11,7 +11,7 @@ grad_accum_steps: 1
 seed: 0
 num_steps: 250
 val_steps: 1
-val_interval: 10
+val_interval: 50
 
 optimizer: "adamw"
 weight_decay: 0.01
@@ -24,7 +24,7 @@ warmup_steps: 0.0
 decay_steps: 1.0
 
 spot_training: true 
-checkpoint_interval: 5
+checkpoint_interval: 50
 best_metric: null
 max_checkpoints_to_keep: 1
 
@@ -41,13 +41,13 @@ data_config:
 loss_config:
   inference_config:
     max_seq_len: 512
-    batch_size: 2
+    _max_decode_prompts: 32
+    _max_decode_batch_size: 128
     n_replicas: 4
     group_size: 8
     temperature: 1.0
     reasoning_budget: 150
     think_mode: true
-    precompile: false
     system_prompt: false
   rl_config:
     ppo_minibatch_size: 64

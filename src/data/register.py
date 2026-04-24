@@ -15,6 +15,7 @@ Helper functions:
 from typing import Callable
 
 from datasets import load_dataset
+from transformers import AutoTokenizer
 
 from src.data.config import Sample
 
@@ -197,4 +198,39 @@ def load_amc_23() -> list[Sample]:
     ds = load_dataset("zwhe99/amc23")["test"]
     samples = [Sample(prompt=example["question"], answer=str(example["answer"]), solution=None) for example in ds]
     ds.cleanup_cache_files()
+    return samples
+
+
+@register_dataset("polaris")
+def load_polaris() -> list[Sample]:
+    ds = load_dataset("POLARIS-Project/Polaris-Dataset-53K")["train"]
+    samples = [Sample(prompt=example["problem"], answer=str(example["answer"]), solution=None) for example in ds]
+    ds.cleanup_cache_files()
+    return samples
+
+
+@register_dataset("polaris-1024-filtered")
+def load_polaris_1024_filtered() -> list[Sample]:
+    ds = load_dataset("POLARIS-Project/Polaris-Dataset-53K")["train"]
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B", trust_remote_code=True)
+
+    prompts = list(ds["problem"])
+    encoded = tokenizer(
+        prompts,
+        add_special_tokens=False,
+        truncation=False,
+        return_attention_mask=False,
+    )
+
+    samples = [
+        Sample(prompt=example["problem"], answer=str(example["answer"]), solution=None)
+        for example, ids in zip(ds, encoded["input_ids"])
+        if len(ids) < 1024
+    ]
+    print(
+        f"Filtered {len(ds) - len(samples)} samples that were too long for the model. Remaining samples: {len(samples)}"
+    )
+
+    ds.cleanup_cache_files()
+
     return samples

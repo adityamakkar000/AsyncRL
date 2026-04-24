@@ -15,11 +15,11 @@ class InferenceConfig:
     top_k: Optional[int] = MISSING
     top_p: Optional[float] = MISSING
     max_seq_len: int = MISSING
-    batch_size: int = MISSING
+    _max_decode_prompts: int = MISSING  # number of prompts to take during each continous run of the engine
+    _max_decode_batch_size: int = MISSING  # at decode time how many samples to take for each device
     group_size: int = MISSING
     n_replicas: int = 1
-    intial_sequence_len: int = 64
-    precompile: bool = True
+    initial_sequence_len: int = 64
     kv_cache_dtype: str = "bfloat16"
     reasoning_budget: Optional[int] = None
     think_mode: bool = True
@@ -37,6 +37,7 @@ class InferenceState:
     end_of_think: Array
     out_tokens: Array
     out_logprobs: Array
+    prompt_id: Array
 
 
 @dataclass
@@ -48,7 +49,8 @@ class InferenceShardings:
     state_sharding: InferenceState
     params_sharding: PyTree
     prefill_shardings: dict[str, PyTree]
-    decode_shardings: dict[str, PyTree]
+    decode_any_shardings: dict[str, PyTree]
+    decode_all_shardings: dict[str, PyTree]
 
 
 @dataclass

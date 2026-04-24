@@ -161,9 +161,7 @@ class Trainer:
                 writer_kwargs["config"] = OmegaConf.to_object(self.config)
 
             writer = stax.WandBWriter(
-                entity=os.getenv("WANDB_ENTITY", ""),
-                project=writer_config.project,
-                **writer_kwargs,
+                entity=os.getenv("WANDB_ENTITY", ""), project=writer_config.project, **writer_kwargs
             )
         else:
             writer = stax.TextWriter(metrics_to_print=self.config.metrics_to_log)
@@ -183,10 +181,7 @@ class Trainer:
         assert self.model is not None, "self.model is None"
 
         abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx, abstract=True)
-        params_shape, opt_state_shape = (
-            abstract_state["params"],
-            abstract_state["opt_state"],
-        )
+        params_shape, opt_state_shape = abstract_state["params"], abstract_state["opt_state"]
 
         step_fn = get_single_step(self.config.loss_config)
 
@@ -209,10 +204,7 @@ class Trainer:
             ),
         )
 
-        self.params_sharding, self.opt_state_sharding = (
-            shardings.param_sharding,
-            shardings.opt_state_sharding,
-        )
+        self.params_sharding, self.opt_state_sharding = shardings.param_sharding, shardings.opt_state_sharding
 
         train_batch_size = self.config.data_config.train_config.batch_size
         ppo_minibatch_size = self.config.loss_config.rl_config.ppo_minibatch_size
@@ -301,10 +293,7 @@ class Trainer:
             return
 
         logger.info("Initializing new run ...")
-        sharding = {
-            "params": self.params_sharding,
-            "opt_state": self.opt_state_sharding,
-        }
+        sharding = {"params": self.params_sharding, "opt_state": self.opt_state_sharding}
         out_state = self.model.init_state(rng=self.key(), tx=self.tx, sharding=sharding, abstract=False)
         self.params = out_state["params"]
         self.opt_state = out_state["opt_state"]
@@ -324,9 +313,7 @@ class Trainer:
         inference_params = {"params": self.params}
         # inference_engine requires {params: params...}
         self.inference_engine = InferenceEngine(
-            model=self.model,
-            params=inference_params,
-            config=self.config.loss_config.inference_config,
+            model=self.model, params=inference_params, config=self.config.loss_config.inference_config
         )
 
     @partial(setup, component="optimizer")
@@ -485,7 +472,7 @@ class Trainer:
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
             samples = self.train_dataset(num_prompts=self.train_n_prompts)
-            prompts = [sample.prompt for sample in samples]
+            prompts = [s.prompt for s in samples]
             generations = self.inference_engine(prompts, self.key(), {"params": self.params})
             train_batch, train_data_metrics = self.train_dataset.prepare_batch(samples, generations, train=True)
 
@@ -496,7 +483,7 @@ class Trainer:
 
             if self.global_step % self.config.val_interval == 0:
                 val_samples = self.val_dataset(num_prompts=self.val_n_prompts)
-                val_prompts = [sample.prompt for sample in val_samples]
+                val_prompts = [s.prompt for s in val_samples]
                 val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})
                 _val_batch, val_metrics = self.val_dataset.prepare_batch(val_samples, val_generations, train=False)
 

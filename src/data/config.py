@@ -22,11 +22,7 @@ class Sample:
         return cls(prompt=prompt, answer=answer, solution=solution)
 
     def get_dict(self) -> dict:
-        return {
-            "prompt": self.prompt,
-            "answer": self.answer,
-            "solution": self.solution,
-        }
+        return {"prompt": self.prompt, "answer": self.answer, "solution": self.solution}
 
 
 @dataclass
