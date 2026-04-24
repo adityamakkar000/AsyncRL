@@ -383,7 +383,7 @@ class InferenceEngine:
                 dtype=self.config.kv_cache_dtype,
                 sharding=KVCache(
                     k=self.shardings.replicate_sharding,  # type: ignore
-        length=self.shardings.replicate_sharding,  # type: ignore
+                    length=self.shardings.replicate_sharding,  # type: ignore
                 ),
             )
             logits, out_cache = self.model.apply(
