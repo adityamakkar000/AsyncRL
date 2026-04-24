@@ -45,13 +45,7 @@ class WandBConfig:
 
 # TODO: actual experiment config
 @dataclass
-class AnnealedLoss:
-    """Config for annealing the fraction of reasoning trace injected into prompts. Currently linear schedule runs over num_steps."""
-
-    init_value: float = 1.0  # Fraction of trace at start of training (e.g. 1.0 = full trace)
-    end_value: float = 0.0  # Fraction of trace at end of training (e.g. 0.0 = no trace)
-    annealing_steps: float = 0.1  # currently anneal over 10% of steps
-
+class AnnealedLoss: ...
 
 @dataclass
 class BestMetric:
@@ -71,7 +65,7 @@ class RLConfig:
 class LossConfig:
     rl_config: RLConfig = field(default_factory=RLConfig)
     inference_config: InferenceConfig = field(default_factory=InferenceConfig)
-    annealing_config: AnnealedLoss = field(default_factory=AnnealedLoss)
+    annealing_config: Optional[AnnealedLoss] = None # TODO: annealed RL config will go here
 
 
 @dataclass

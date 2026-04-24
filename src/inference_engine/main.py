@@ -11,7 +11,6 @@ from stax import Tracker
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
-from src.data.config import Sample
 from src.model import KVCache, Model
 
 from .config import (
@@ -28,12 +27,6 @@ PADDING_BUFFER = 1024
 
 
 INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
-
-
-def apply_annealing(tokens: list[int], percent: float, max_seq_len: int) -> list[int]:
-    return tokens[
-        : max(1, int(len(tokens) * percent))
-    ]  # TODO: fix this mathematically, if solution too long then it will be truncated
 
 
 def apply_prompt_template(text: str) -> str:
@@ -289,82 +282,28 @@ class InferenceEngine:
         """Compute the maximum padding length for the input batch based on the sequence lengths and the maximum sequence length."""
         return self.compute_max_power_of_two(max(seq_lens).item(), self.config.max_seq_len)
 
-    def prepare_prompt(self, text: str, annealing_trace: str, annealing_percentage: float) -> list[int]:
-        assert annealing_percentage != -1.0, "Annealing percentage must be provided"
-
-        annealed_base = self.tokenizer.apply_chat_template(
-            [
-                {"role": "user", "content": apply_prompt_template(text)},
-                {"role": "assistant", "content": ""},
-            ],
-            add_generation_prompt=True,
-            tokenize=False,
-            enable_thinking=True,
-        ).split("\n</think>\n")[0]
-
-        chat_base = self.tokenizer.apply_chat_template(
-            [{"role": "user", "content": apply_prompt_template(text)}],
-            add_generation_prompt=True,
-            tokenize=False,
-            enable_thinking=True,
-        )
-
-        if not annealing_trace or annealing_percentage <= 1e-6:
-            annealed_template = chat_base
-        else:
-            trace_tokens = self.tokenizer.encode(annealing_trace, add_special_tokens=False)
-            annealed_trace_str = self.tokenizer.decode(
-                apply_annealing(trace_tokens, annealing_percentage, self.config.max_seq_len)
-            )
-            annealed_template = annealed_base + annealed_trace_str
-
-        # TODO: implement this after consulting with @adityamakkar000
-        # self.tokenizer.apply_chat_template(
-        #         get_chat_template(self.config.system_prompt, text),
-        #         add_generation_prompt=True,
-        #         enable_thinking=self.config.think_mode,
-        #         tokenize=True,
-        #     )
-        #     for text in texts
-
-        return self.tokenizer.encode(annealed_template, add_special_tokens=False)
-
-    def tokenize(
-        self,
-        texts: list[str],
-        annealing_traces: list[str],
-        annealing_percentages: list[float],
-    ) -> tuple[np.ndarray, np.ndarray]:
+    def tokenize(self, texts: list[str]) -> tuple[np.ndarray, np.ndarray]:
         """
         Tokenize the input texts and pad them to the maximum sequence length in the batch.
         Args:
             texts (list[str]): The list of input texts to tokenize.
-            annealing_traces (list[str]): The list of annealing traces to tokenize.
-            annealing_percentages (list[float]): The list of annealing percentages to tokenize.
         Returns:
             tokens (Array): The tokenized and padded input texts. Shape: [batch_size, max_seq_len].
             seq_lens (Array): The original sequence lengths before padding. Shape: [batch_size].
         """
-        assert len(texts) == len(annealing_traces) == len(annealing_percentages), (
-            f"Lengths of texts, annealing_traces, and annealing_percentages must be equal, got {len(texts)}, {len(annealing_traces)}, {len(annealing_percentages)}"
-        )
-
         inputs: list[list[int]] = [
-            self.prepare_prompt(text, annealing_trace, annealing_percentage)
-            for text, annealing_trace, annealing_percentage in zip(texts, annealing_traces, annealing_percentages)
+            self.tokenizer.apply_chat_template(
+                get_chat_template(self.config.system_prompt, text),
+                add_generation_prompt=True,
+                enable_thinking=self.config.think_mode,
+                tokenize=True,
+            )
+            for text in texts
         ]
-
         seq_lens = np.array([len(x) for x in inputs], dtype=np.int32)
         padding_length = max(self.compute_max_padding_length(seq_lens), self.config.intial_sequence_len)
         inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
 
-        # for i, x in enumerate(inputs):
-        #     if not isinstance(x, list):
-        #         print("not a list", i, type(x), x)
-        #     elif not all(isinstance(t, (int, np.integer)) for t in x):
-        #         print("bad token list", i, type(x), x[:5], [type(t) for t in x[:5]])
-        #     else:
-        #         print(i, len(x))
         tokens = np.array(inputs, dtype=np.int32)
 
         if (T := tokens.shape[1]) > PADDING_BUFFER:
@@ -444,8 +383,7 @@ class InferenceEngine:
                 dtype=self.config.kv_cache_dtype,
                 sharding=KVCache(
                     k=self.shardings.replicate_sharding,  # type: ignore
-                    v=self.shardings.replicate_sharding,  # type: ignore
-                    length=self.shardings.replicate_sharding,  # type: ignore
+        length=self.shardings.replicate_sharding,  # type: ignore
                 ),
             )
             logits, out_cache = self.model.apply(
@@ -724,11 +662,11 @@ class InferenceEngine:
         params = self.setup_parameters(params)
         return key, params
 
-    def __call__(self, samples: list[Sample], key: Array, params: PyTree) -> InferenceResults:
+    def __call__(self, prompts: list[str], key: Array, params: PyTree) -> InferenceResults:
         """
         Perform inference for the given input prompts, random key, and model parameters.
         Args:
-            samples (list[Sample]): The list of input samples to perform inference on.
+            prompts (list[str]): The list of input prompts to perform inference on.
             key (Array): The random key for any stochastic operations during inference.
             params (PyTree): The model parameters to use for inference.
             detokenize (bool): Whether to detokenize the output rollouts into strings. Default is False.
@@ -737,14 +675,7 @@ class InferenceEngine:
         """
         with Tracker(timer=True) as t:
             key, params = self.multihost_prep(key, params)
-            inp_tokens, seq_lens = self.tokenize(
-                texts=[sample.prompt for sample in samples],
-                annealing_traces=[sample.solution if sample.solution is not None else "" for sample in samples],
-                annealing_percentages=[
-                    (sample.annealing_percentage if sample.annealing_percentage is not None else -1.0)
-                    for sample in samples
-                ],  # can be used for error check
-            )
+            inp_tokens, seq_lens = self.tokenize(prompts)
             # use inference engine mesh context not STAX context
             with jax.set_mesh(self.shardings.mesh):
                 output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)

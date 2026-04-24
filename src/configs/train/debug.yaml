@@ -40,12 +40,12 @@ data_config:
     batch_size: 1024
 loss_config:
   inference_config:
-    max_seq_len: 1024
+    max_seq_len: 512 
     batch_size: 2
     n_replicas: 4
     group_size: 8
     temperature: 1.0
-    reasoning_budget: null
+    reasoning_budget: 150
     think_mode: true
     precompile: false
     system_prompt: false
