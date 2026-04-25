@@ -1,4 +1,5 @@
-use_annealing: true
+use_annealing: 0
 init_value: 1.0 # start at 100% trace
 end_value: 0.0 # end at 0% trace (normal RL)
-annealing_percentage: 0.1 # anneal over 10% of total steps
+annealing_steps: 0.1 # anneal over % of total steps
+schedule: "linear" # "linear", "cosine"

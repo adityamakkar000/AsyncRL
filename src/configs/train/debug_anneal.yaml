@@ -52,7 +52,7 @@ loss_config:
     system_prompt: true
   rl_config:
     epsilon_high: 4.0
-    epsilon_low: 4.0 # does
+    epsilon_low: 4.0
     ppo_minibatch_size: 64
 
 metrics_to_log:
@@ -61,3 +61,5 @@ metrics_to_log:
   - "train/mean_reward"
   - "val/mean_reward"
   - "train/num_unparsable"
+  - "train/annealing_percentage"
+  - "val/annealing_percentage"

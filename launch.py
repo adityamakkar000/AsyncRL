@@ -1,8 +1,15 @@
 import src.scripts.premption_tooling as TPUJOB
+from src.scripts.premption_tooling import Vals, Cross, Zip
 
-max_seq_len = [4096, 8192]
-batch_size = [1024, 1024]
-group_size = [8, 16]
+# max_seq_len = [4096, 8192]
+# batch_size = [1024, 1024]
+# group_size = [8, 16]
+
+
+RUN = Cross([
+    Vals("loss_config.annealing_config.use_annealing", [0, 1]),
+    Vals("loss_config.annealing_config.schedule", ["linear", "cosine"]),
+])
 
 # RUN: Cross | Zip | Vals = Cross(
 #     [
@@ -18,8 +25,8 @@ group_size = [8, 16]
 # )
 
 
-BASE_CONFIG = "debug"
-RUN = TPUJOB.Cross()
+BASE_CONFIG = "debug_anneal"
+# RUN = TPUJOB.Cross()
 
 
 job = TPUJOB.LAUNCH_JOB(

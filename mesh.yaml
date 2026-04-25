@@ -11,7 +11,7 @@ ignore:
   - "profile/*"
 
 prerun:
-  # - sudo chown -R $USER:$USER /tmp/tpu_logs
+  - sudo chown -R $USER:$USER /tmp/tpu_logs
   - uv venv --clear
   - source .venv/bin/activate
   - source .env

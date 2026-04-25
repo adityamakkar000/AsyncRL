@@ -248,17 +248,18 @@ class InferenceEngine:
         )
 
         if annealing_percentage == 0.0:
+            # base = base + self.tokenizer.encode("<no trace inserted>", add_special_tokens=False)
             return base
 
         trace_tokens = self.tokenizer.encode(trace, add_special_tokens=False)
-        annealed_trace = apply_annealing(trace_tokens, annealing_percentage)
+        annealed_trace = apply_annealing(trace_tokens, annealing_percentage)# + self.tokenizer.encode(f"<trace {annealing_percentage * 100}% inserted ends here>", add_special_tokens=False)
 
         return base + annealed_trace
 
     def tokenize(self, samples: list[Sample]) -> tuple[np.ndarray, np.ndarray]:
         
-        texts = [s.text for s in samples]
-        traces = [s.trace if s.trace is not None else "" for s in samples]
+        texts = [s.prompt for s in samples]
+        traces = [s.solution if s.solution is not None else "" for s in samples]
         annealing_percentages = [s.annealing_percentage if s.annealing_percentage is not None else 0.0 for s in samples]
 
         assert len(texts) == len(traces) == len(annealing_percentages), "texts, traces, and annealing_percentages must have the same length"
