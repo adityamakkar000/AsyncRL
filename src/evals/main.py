@@ -112,7 +112,7 @@ class EvalRunner:
 
     def run_evaluation(self):
         self.setup_model()
-        self.launch_vllm()
+        # self.launch_vllm()
         try:
             self.run_evals()
         finally:
