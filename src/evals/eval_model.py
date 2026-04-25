@@ -1,3 +1,12 @@
+"""
+
+This file is here because the local completions from the lm harnesses doesn't works since it
+sends a seed in the paylod which breaks vllm tpu. Thus this is just a copy paste that removes
+the seed in the payload. Orginal code is here:
+https://github.com/EleutherAI/lm-evaluation-harness/blob/c1c4bea3777f73e188395264083adcf454913344/lm_eval/models/openai_completions.py#L16-L138
+
+"""
+
 import os
 from operator import itemgetter
 from typing import Dict, List, Optional, Tuple, Union
