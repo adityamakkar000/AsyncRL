@@ -19,7 +19,6 @@ class DataLoader:
         dataset_config: DatasetConfig,
         max_seq_length: int,
         hf_model: str,
-        num_steps: int,
         annealing_schedule: Optional[optax.Schedule],
     ) -> None:
         self.dataset_config = dataset_config
@@ -31,7 +30,6 @@ class DataLoader:
         self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
         self.rank = stax.get_rank()
         self.total_samples = len(self.samples)
-        self.num_steps = num_steps
         self.annealing_schedule = annealing_schedule
 
     def _resolve_gcs_path(self) -> str:
@@ -47,10 +45,9 @@ class DataLoader:
         samples = [Sample.from_dict(r) for r in rows]
         return samples
     
-    def _get_annealing_rate(self, step: int, num_steps: int) -> float:
+    def _get_annealing_rate(self, step: int) -> float:
         if self.annealing_schedule is None: # we will initialize the schedule to none if not using annealing in the trainer
             return 0.0
-        step = min(step, num_steps - 1)
         return self.annealing_schedule(step).item()
 
     @property
@@ -64,7 +61,7 @@ class DataLoader:
         self.process_end_idx = self.start_idx + self.total_per_device
         samples = [self.samples[i % self.total_samples] for i in range(self.start_idx, self.process_end_idx)]
 
-        annealing_percentage = self._get_annealing_rate(step, self.num_steps)
+        annealing_percentage = self._get_annealing_rate(step)
         for sample in samples:
             sample.annealing_percentage = annealing_percentage
 

@@ -271,8 +271,8 @@ class Trainer:
 
         max_seq_length = self.config.loss_config.inference_config.max_seq_len
         hf_model = self.config.model_config.hf_model_name
-        self.train_dataset = DataLoader(self.config.data_config.train_config, max_seq_length, hf_model, self.config.num_steps, self.annealing_schedule)
-        self.val_dataset = DataLoader(self.config.data_config.val_config, max_seq_length, hf_model, self.config.num_steps, self.annealing_schedule)
+        self.train_dataset = DataLoader(self.config.data_config.train_config, max_seq_length, hf_model, self.annealing_schedule)
+        self.val_dataset = DataLoader(self.config.data_config.val_config, max_seq_length, hf_model, self.annealing_schedule)
 
     @partial(setup, component="model")
     def _setup_model(self):
@@ -321,7 +321,7 @@ class Trainer:
     def _setup_annealing_schedule(self):
         anneal_config= self.config.loss_config.annealing_config
         if anneal_config.use_annealing:
-            self.annealing_schedule = optax.linear_schedule(
+            self.annealing_schedule = optax.linear_schedule( # TODO: experiment with different schedules
                 init_value=anneal_config.init_value,
                 end_value=anneal_config.end_value,
                 transition_steps=max(1, int(anneal_config.annealing_steps * self.config.num_steps)),
