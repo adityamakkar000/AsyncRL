@@ -1,7 +1,8 @@
-from typing import Any
+from typing import Any, Optional
 
 import jax
 import numpy as np
+import optax
 import stax
 from transformers import AutoTokenizer
 
@@ -18,6 +19,8 @@ class DataLoader:
         dataset_config: DatasetConfig,
         max_seq_length: int,
         hf_model: str,
+        num_steps: int,
+        annealing_schedule: Optional[optax.Schedule],
     ) -> None:
         self.dataset_config = dataset_config
         self.max_seq_length = max_seq_length
@@ -28,6 +31,8 @@ class DataLoader:
         self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
         self.rank = stax.get_rank()
         self.total_samples = len(self.samples)
+        self.num_steps = num_steps
+        self.annealing_schedule = annealing_schedule
 
     def _resolve_gcs_path(self) -> str:
         if self.dataset_config.gcs_path:
@@ -41,17 +46,28 @@ class DataLoader:
             raise ValueError(f"No rows found at {gs_path}")
         samples = [Sample.from_dict(r) for r in rows]
         return samples
+    
+    def _get_annealing_rate(self, step: int, num_steps: int) -> float:
+        if self.annealing_schedule is None: # we will initialize the schedule to none if not using annealing in the trainer
+            return 0.0
+        step = min(step, num_steps - 1)
+        return self.annealing_schedule(step).item()
 
     @property
     def last_samples(self) -> list[Sample]:
         """Return examples aligned with last batch."""
         return self._last_samples
 
-    def __call__(self, num_prompts: int) -> list[Sample]:
+    def __call__(self, num_prompts: int, step: int) -> list[Sample]:
         self.total_per_device = num_prompts // jax.process_count()
         self.start_idx = self._current_idx + self.rank * self.total_per_device
         self.process_end_idx = self.start_idx + self.total_per_device
         samples = [self.samples[i % self.total_samples] for i in range(self.start_idx, self.process_end_idx)]
+
+        annealing_percentage = self._get_annealing_rate(step, self.num_steps)
+        for sample in samples:
+            sample.annealing_percentage = annealing_percentage
+
         self._last_samples = samples
         self._current_idx = (self._current_idx + num_prompts) % self.total_samples
 
