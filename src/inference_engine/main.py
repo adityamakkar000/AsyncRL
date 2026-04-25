@@ -22,7 +22,8 @@ PADDING_BUFFER = 2048
 
 INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
 
-def apply_annealing(tokens: list[int], percent: float) -> list[int]: # only applied to thinking trace
+
+def apply_annealing(tokens: list[int], percent: float) -> list[int]:  # only applied to thinking trace
     num_tokens = len(tokens)
     assert percent >= 0.0 and percent <= 1.0, "Annealing percentage must be between 0.0 and 1.0"
     num_annealing_tokens = int(num_tokens * percent)
@@ -235,10 +236,12 @@ class InferenceEngine:
     def compute_max_padding_length(self, seq_lens: np.ndarray) -> int:
         """Compute the maximum padding length for the input batch based on the sequence lengths and the maximum sequence length."""
         return self.compute_max_power_of_two(max(seq_lens).item(), self.config.max_seq_len)
-    
+
     def prepare_prompt(self, text: str, trace: str, annealing_percentage: float) -> list[int]:
         assert annealing_percentage is not None, "Annealing percentage must be provided"
-        assert annealing_percentage >= 0.0 and annealing_percentage <= 1.0, "Annealing percentage must be between 0.0 and 1.0"
+        assert annealing_percentage >= 0.0 and annealing_percentage <= 1.0, (
+            "Annealing percentage must be between 0.0 and 1.0"
+        )
 
         base = self.tokenizer.apply_chat_template(
             get_chat_template(self.config.system_prompt, text),
@@ -252,20 +255,23 @@ class InferenceEngine:
             return base
 
         trace_tokens = self.tokenizer.encode(trace, add_special_tokens=False)
-        annealed_trace = apply_annealing(trace_tokens, annealing_percentage)# + self.tokenizer.encode(f"<trace {annealing_percentage * 100}% inserted ends here>", add_special_tokens=False)
+        annealed_trace = apply_annealing(
+            trace_tokens, annealing_percentage
+        )  # + self.tokenizer.encode(f"<trace {annealing_percentage * 100}% inserted ends here>", add_special_tokens=False)
 
         return base + annealed_trace
 
     def tokenize(self, samples: list[Sample]) -> tuple[np.ndarray, np.ndarray]:
-        
         texts = [s.prompt for s in samples]
         traces = [s.solution if s.solution is not None else "" for s in samples]
         annealing_percentages = [s.annealing_percentage if s.annealing_percentage is not None else 0.0 for s in samples]
 
-        assert len(texts) == len(traces) == len(annealing_percentages), "texts, traces, and annealing_percentages must have the same length"
+        assert len(texts) == len(traces) == len(annealing_percentages), (
+            "texts, traces, and annealing_percentages must have the same length"
+        )
 
         inputs: list[list[int]] = [
-            self.prepare_prompt(text, trace, annealing_percentage) 
+            self.prepare_prompt(text, trace, annealing_percentage)
             for text, trace, annealing_percentage in zip(texts, traces, annealing_percentages)
         ]
 

@@ -9,7 +9,7 @@ class Sample:
     prompt: str
     answer: str
     solution: str | None
-    annealing_percentage: float | None # during training, cannot be none for error check
+    annealing_percentage: float | None  # during training, cannot be none for error check
 
     @classmethod
     def from_dict(cls, data: dict):
@@ -24,7 +24,12 @@ class Sample:
         return cls(prompt=prompt, answer=answer, solution=solution, annealing_percentage=annealing_percentage)
 
     def get_dict(self) -> dict:
-        return {"prompt": self.prompt, "answer": self.answer, "solution": self.solution, "annealing_percentage": self.annealing_percentage}
+        return {
+            "prompt": self.prompt,
+            "answer": self.answer,
+            "solution": self.solution,
+            "annealing_percentage": self.annealing_percentage,
+        }
 
 
 @dataclass

@@ -46,7 +46,7 @@ class Trainer:
 
         with stax.Tracker(timer=True) as tracker:
             self._init_state()
-            self._setup_annealing_schedule() # do this before everything else
+            self._setup_annealing_schedule()  # do this before everything else
             self._setup_model()
             self._setup_optimizer()
             self._setup_checkpointer()
@@ -271,8 +271,12 @@ class Trainer:
 
         max_seq_length = self.config.loss_config.inference_config.max_seq_len
         hf_model = self.config.model_config.hf_model_name
-        self.train_dataset = DataLoader(self.config.data_config.train_config, max_seq_length, hf_model, self.annealing_schedule)
-        self.val_dataset = DataLoader(self.config.data_config.val_config, max_seq_length, hf_model, self.annealing_schedule)
+        self.train_dataset = DataLoader(
+            self.config.data_config.train_config, max_seq_length, hf_model, self.annealing_schedule
+        )
+        self.val_dataset = DataLoader(
+            self.config.data_config.val_config, max_seq_length, hf_model, self.annealing_schedule
+        )
 
     @partial(setup, component="model")
     def _setup_model(self):
@@ -316,10 +320,10 @@ class Trainer:
         self.inference_engine = InferenceEngine(
             model=self.model, params=inference_params, config=self.config.loss_config.inference_config
         )
-    
+
     @partial(setup, component="annealing schedule")
     def _setup_annealing_schedule(self):
-        anneal_config= self.config.loss_config.annealing_config
+        anneal_config = self.config.loss_config.annealing_config
 
         if anneal_config.use_annealing == 1:
             match anneal_config.schedule:
@@ -495,7 +499,6 @@ class Trainer:
 
         logger.info("Starting training loop...")
         while self.global_step < self.total_steps:
-
             samples = self.train_dataset(self.train_n_prompts, self.global_step)
 
             generations = self.inference_engine(samples, self.key(), {"params": self.params})

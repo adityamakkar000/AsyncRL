@@ -6,10 +6,12 @@ from src.scripts.premption_tooling import Vals, Cross, Zip
 # group_size = [8, 16]
 
 
-RUN = Cross([
-    Vals("loss_config.annealing_config.use_annealing", [0, 1]),
-    Vals("loss_config.annealing_config.schedule", ["linear", "cosine"]),
-])
+RUN = Zip(
+    [
+        Vals("loss_config.annealing_config.use_annealing", [0, 1, 1]),
+        Vals("loss_config.annealing_config.schedule", ["linear", "linear", "cosine"]),
+    ]
+)
 
 # RUN: Cross | Zip | Vals = Cross(
 #     [

@@ -44,9 +44,11 @@ class DataLoader:
             raise ValueError(f"No rows found at {gs_path}")
         samples = [Sample.from_dict(r) for r in rows]
         return samples
-    
+
     def _get_annealing_rate(self, step: int) -> float:
-        if self.annealing_schedule is None: # we will initialize the schedule to none if not using annealing in the trainer
+        if (
+            self.annealing_schedule is None
+        ):  # we will initialize the schedule to none if not using annealing in the trainer
             return 0.0
         return self.annealing_schedule(step).item()
 
