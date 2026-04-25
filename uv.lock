@@ -4574,7 +4574,7 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git#65c75d4d59b55f63b54c77068a3607f0d5e48693" }
+source = { git = "https://github.com/adityamakkar000/stax.git#ec967d61aecfb06ae29911bf493ddc31608802ea" }
 dependencies = [
     { name = "flax" },
     { name = "jax" },

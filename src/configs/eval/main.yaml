@@ -16,7 +16,7 @@ model_config:
   use_best_ckpt: false
   step_number: -1 # take last step 
 
-temperature: 1.0
-top_p: 1.0
+temperature: 0.7
+top_p: 0.95
 max_tokens: 8192
 epochs: 1

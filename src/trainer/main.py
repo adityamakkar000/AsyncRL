@@ -161,7 +161,10 @@ class Trainer:
                 writer_kwargs["config"] = OmegaConf.to_object(self.config)
 
             writer = stax.WandBWriter(
-                entity=os.getenv("WANDB_ENTITY", ""), project=writer_config.project, **writer_kwargs
+                name=self.config.experiment_name,
+                entity=os.getenv("WANDB_ENTITY", ""),
+                project=writer_config.project,
+                **writer_kwargs,
             )
         else:
             writer = stax.TextWriter(metrics_to_print=self.config.metrics_to_log)
