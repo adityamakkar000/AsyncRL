@@ -15,6 +15,12 @@
 To train create your config and run
 `mesh run <your_cluster> "python -m src.train --config-name <your_config_name> key=value [...]`
 
+#### Run using `launch.py`
+- Comment 1st line in `mesh.yaml` prerun
+
+#### Run using Mesh manually
+- Change annealing config as required
+- Uncomment 1st line in `mesh.yaml` prerun
 
 ## Eval
 

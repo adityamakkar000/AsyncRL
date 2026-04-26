@@ -275,7 +275,7 @@ class Trainer:
             self.config.data_config.train_config, max_seq_length, hf_model, self.annealing_schedule
         )
         self.val_dataset = DataLoader(
-            self.config.data_config.val_config, max_seq_length, hf_model, self.annealing_schedule
+            self.config.data_config.val_config, max_seq_length, hf_model, None # no annealing for validation
         )
 
     @partial(setup, component="model")
@@ -325,7 +325,7 @@ class Trainer:
     def _setup_annealing_schedule(self):
         anneal_config = self.config.loss_config.annealing_config
 
-        if anneal_config.use_annealing == 1:
+        if anneal_config.use_annealing:
             match anneal_config.schedule:
                 case "linear":
                     self.annealing_schedule = optax.linear_schedule(
@@ -514,8 +514,6 @@ class Trainer:
                 val_samples = self.val_dataset(self.val_n_prompts, self.global_step)
                 val_generations = self.inference_engine(val_samples, self.key(), {"params": self.params})
                 _val_batch, val_metrics = self.val_dataset.prepare_batch(val_samples, val_generations, train=False)
-                ap = val_samples[0].annealing_percentage
-                metrics |= {f"val/annealing_percentage": float(ap) if ap is not None else 0.0}
 
                 metrics |= val_metrics
 

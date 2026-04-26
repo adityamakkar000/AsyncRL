@@ -251,13 +251,12 @@ class InferenceEngine:
         )
 
         if annealing_percentage == 0.0:
-            # base = base + self.tokenizer.encode("<no trace inserted>", add_special_tokens=False)
             return base
 
         trace_tokens = self.tokenizer.encode(trace, add_special_tokens=False)
         annealed_trace = apply_annealing(
             trace_tokens, annealing_percentage
-        )  # + self.tokenizer.encode(f"<trace {annealing_percentage * 100}% inserted ends here>", add_special_tokens=False)
+        )
 
         return base + annealed_trace
 
