@@ -254,9 +254,7 @@ class InferenceEngine:
             return base
 
         trace_tokens = self.tokenizer.encode(trace, add_special_tokens=False)
-        annealed_trace = apply_annealing(
-            trace_tokens, annealing_percentage
-        )
+        annealed_trace = apply_annealing(trace_tokens, annealing_percentage)
 
         return base + annealed_trace
 

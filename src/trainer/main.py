@@ -275,7 +275,10 @@ class Trainer:
             self.config.data_config.train_config, max_seq_length, hf_model, self.annealing_schedule
         )
         self.val_dataset = DataLoader(
-            self.config.data_config.val_config, max_seq_length, hf_model, None # no annealing for validation
+            self.config.data_config.val_config,
+            max_seq_length,
+            hf_model,
+            None,  # no annealing for validation
         )
 
     @partial(setup, component="model")
