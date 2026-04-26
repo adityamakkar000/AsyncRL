@@ -43,9 +43,15 @@ class WandBConfig:
     tags: Optional[List[str]] = None
 
 
-# TODO: actual experiment config
 @dataclass
-class AnnealedLoss: ...
+class AnnealedLoss:
+    """Config for annealnig the fraction of reasoning trace injected into prompts. Appends to generation prompt."""
+
+    use_annealing: bool = True
+    init_value: float = 1.0  # Fraction of trace at start of annealing (eg 1.0 = full trace)
+    end_value: float = 0.0  # Fraction of trace at end of annealing (eg 0.0 = no trace)
+    annealing_steps: float = 0.1  # Percentage of total training steps to anneal for (in the beginning)
+    schedule: str = "linear"  # "linear", "cosine"
 
 
 @dataclass
@@ -66,7 +72,7 @@ class RLConfig:
 class LossConfig:
     rl_config: RLConfig = field(default_factory=RLConfig)
     inference_config: InferenceConfig = field(default_factory=InferenceConfig)
-    annealing_config: Optional[AnnealedLoss] = None  # TODO: Annealed RL config will go here
+    annealing_config: AnnealedLoss = field(default_factory=AnnealedLoss)
 
 
 @dataclass
