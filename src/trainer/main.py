@@ -336,8 +336,7 @@ class Trainer:
                 case "cosine":
                     self.annealing_schedule = optax.cosine_decay_schedule(
                         init_value=anneal_config.init_value,
-                        end_value=anneal_config.end_value,
-                        transition_steps=max(1, int(anneal_config.annealing_steps * self.config.num_steps)),
+                        decay_steps=max(1, int(anneal_config.annealing_steps * self.config.num_steps)),
                     )
                 case _:
                     raise ValueError(f"Unsupported schedule: {anneal_config.schedule}")

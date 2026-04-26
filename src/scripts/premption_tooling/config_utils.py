@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 CLUSTER_FILE = os.path.expanduser("~/.config/mesh/cluster.yaml")
-DEFAULT_USER = os.environ.get("USER")
+DEFAULT_USER = os.environ.get("TPU_USERNAME")
 IDENTITY_FILE = os.path.expanduser(os.environ.get("SSH_IDENTITY_FILE", "~/.ssh/id_rsa"))
 
 lock = Lock()
