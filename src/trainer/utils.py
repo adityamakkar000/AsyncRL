@@ -5,7 +5,6 @@ from typing import Any, Callable
 import gcsfs
 import jax
 import stax
-from jax.experimental.multihost_utils import sync_global_devices
 from stax import staxLogger as logger
 
 
@@ -61,4 +60,3 @@ def write_to_gcs(path: str, data: str):
         fs = gcsfs.GCSFileSystem()
         with fs.open(path.replace("gs://", ""), "w") as f:
             f.write(data)
-    sync_global_devices("gcs_writer")

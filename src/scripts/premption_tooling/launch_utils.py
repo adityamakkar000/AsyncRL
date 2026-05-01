@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from .main import Runtime, TPUJob, TPUType, Zone, run_session
+from .main import Runtime, TPUJob, TPUType, Zone
 
 
 @dataclass
@@ -96,30 +96,6 @@ def make_name(combo: dict[str, Any], experiment_prefix: str) -> str:
     return "_".join(parts)
 
 
-def mesh_cmd(
-    cluster: str, combo: dict[str, Any], experiment_prefix: str, fixed_overrides: dict[str, Any], base_config: str
-) -> list[str]:
-    name = make_name(combo, experiment_prefix)
-    overrides = {**fixed_overrides, **combo}
-    inner_parts = [
-        "python",
-        "-m",
-        "src.train",
-        f"--config-name={base_config}",
-        f"experiment_name={name}",
-    ]
-    for k, v in overrides.items():
-        inner_parts.append(f"{k}={v}")
-    inner_cmd = " ".join(inner_parts)
-    cmd = [
-        "mesh",
-        "run",
-        cluster,
-        inner_cmd,
-    ]
-    return cmd
-
-
 def return_tpu_jobs(
     job: LaunchJob,
 ) -> list[TPUJob]:
@@ -142,19 +118,24 @@ def return_tpu_jobs(
         for k, v in overrides.items():
             inner_parts.append(f"{k}={v}")
         inner_cmd = " ".join(inner_parts)
-        job_tpu = TPUJob(
-            node_id=f"node_{node_counter}_{rng_combo}",
-            zone=job.zone,
-            tpu_type=job.tpu_type,
-            runtime=job.runtime,
-            cmd=inner_cmd,
-            retries=job.retries,
-        )
-        jobs.append(job_tpu)
+        # job_tpu = TPUJob(
+        #     node_id=f"node_{node_counter}_{rng_combo}_{datatime}",
+        #     zone=job.zone,
+        #     tpu_type=job.tpu_type,
+        #     runtime=job.runtime,
+        #     cmd=inner_cmd,
+        #     retries=job.retries,
+        # )
+        # jobs.append(job_tpu)
+
+        subprocess.Run('mesh run mac "mv ~/job ~/{name}"')
+        # make post to the server with this info
+
     return jobs
 
 
 def launch(job: LaunchJob) -> None:
     tpu_jobs = return_tpu_jobs(job)
-    run_session(tpu_jobs)
+    # run_session(tpu_jobs)
+    # make
     print("All runs completed.")

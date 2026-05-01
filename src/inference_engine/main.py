@@ -4,7 +4,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import stax
-from jax.experimental.multihost_utils import process_allgather, sync_global_devices
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, PyTree
 from stax import Tracker
@@ -218,7 +217,8 @@ class InferenceEngine:
         return batch, seq_lens, params, key
 
     def setup_parameters(self, params: PyTree) -> PyTree:
-        return jax.tree.map(lambda p: process_allgather(p, tiled=True), params)
+        # return jax.tree.map(lambda p: process_allgather(p, tiled=True), params)
+        return params
 
     def compute_max_power_of_two(self, n: int, upper_bound: int) -> int:
         """Compute the maximum power of two less than or equal to n and upper_bound."""
@@ -730,7 +730,7 @@ class InferenceEngine:
                 output_rollouts, metrics = self.batch_rollout(inp_tokens, seq_lens, key, params)
             output_strs = self.detokenizer(output_rollouts)
             logger.info("done on this device")
-            sync_global_devices("inference_engine_sync")
+            # sync_global_devices("inference_engine_sync")
             logger.info("done sync")
         metrics |= {"total_inference_time": t.data["time"]}
         metrics = {f"inference_metrics/{k}": v for k, v in metrics.items()}

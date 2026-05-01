@@ -9,7 +9,7 @@ from src.constants import DATA, GS_BUCKET
 from src.data.config import DatasetConfig, RLBatch, Sample
 from src.data.utils import compute_aux_metrics, load_jsonl_from_gcs
 from src.data.verifier import Verifier, VerifierInput
-from src.inference_engine.config import InferenceResults, InferenceRollout
+from src.inference_engine.config import InferenceRollout
 
 
 class DataLoader:
@@ -57,13 +57,13 @@ class DataLoader:
 
         return samples
 
-    def _get_rewards(self, samples: list[Sample], generations: InferenceResults) -> tuple[np.ndarray, int]:
+    def _get_rewards(self, generations: list[InferenceRollout]) -> tuple[np.ndarray, int]:
         num_unparsable = 0
         total_rewards = []
-        for sample, inference_rollout in zip(samples, generations.rollouts):
+        for inference_rollout in generations:
             token_rewards = []
-            for tokens in inference_rollout.rollouts:
-                reward = self.get_reward(self.tokenizer.decode(tokens), sample.answer)
+            for tokens in inference_rollout.rollouts_tokens:
+                reward = self.get_reward(self.tokenizer.decode(tokens), inference_rollout.sample.answer)
                 if reward is None:
                     num_unparsable += 1
                     reward = 0.0
@@ -73,27 +73,27 @@ class DataLoader:
 
         return np.array(total_rewards, dtype=np.int32), num_unparsable
 
-    def prepare_batch(self, samples: list[Sample], generations: InferenceResults, train: bool) -> tuple[RLBatch, dict]:
-        tokens = self.pad_tokens(generations.rollouts, self.tokenizer.pad_token_id, "rollouts")
-        reference_model_logprobs = self.pad_tokens(generations.rollouts, -np.inf, "logprobs")
+    def prepare_batch(self, generations: list[InferenceRollout], train: bool) -> tuple[RLBatch, dict]:
+        tokens = self.pad_tokens(generations, self.tokenizer.pad_token_id, "rollouts_tokens")
+        reference_model_logprobs = self.pad_tokens(generations, -np.inf, "rollout_logprobs")
 
         seq_lens = np.array(
-            [[len(tokens) for tokens in inference_rollout.rollouts] for inference_rollout in generations.rollouts],
+            [[len(tokens) for tokens in inference_rollout.rollouts_tokens] for inference_rollout in generations],
             dtype=np.int32,
         )
 
-        rewards, num_unparsable = self._get_rewards(samples, generations)
+        rewards, num_unparsable = self._get_rewards(generations)
 
         group_mean = rewards.mean(axis=1, keepdims=True) * np.ones_like(rewards)
         group_std = rewards.std(axis=1, keepdims=True) * np.ones_like(rewards) + 1e-8
-
-        rl_batch = RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std)
 
         def compress(x):
             x = x.reshape(x.shape[0] * x.shape[1], -1)
             return x.squeeze(-1) if x.shape[-1] == 1 else x
 
-        rl_batch = jax.tree.map(compress, rl_batch)
+        rl_batch = jax.tree.map(
+            compress, RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std)
+        )
 
         num_unparsable = num_unparsable / self.dataset_config.batch_size
 

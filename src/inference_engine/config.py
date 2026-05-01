@@ -6,6 +6,7 @@ from flax import struct
 from jaxtyping import Array, PyTree
 from omegaconf import MISSING
 
+from src.data import Sample
 from src.model import KVCache
 
 
@@ -55,12 +56,13 @@ class InferenceShardings:
 
 @dataclass
 class InferenceRollout:
-    rollouts: list[Array]
-    logprobs: list[Array]
+    sample: Sample
+    rollout_strs: list[str]
+    rollouts_tokens: list[Array]
+    rollout_logprobs: list[Array]
 
 
 @dataclass
 class InferenceResults:
-    rollouts: list[InferenceRollout]
-    output_strs: list[list[str]]
+    generations: list[InferenceRollout]
     metrics: PyTree

@@ -171,6 +171,9 @@ class TPUJob:
             console.print(f"[green]{self.node_id} job finished, releasing TPU[/green]")
             self.delete_tpu()
 
+    def __del__(self):
+        self.delete_tpu()
+
 
 def generate_table(jobs: list[TPUJob]) -> Table:
     current_time = datetime.now().strftime("%H:%M:%S")
