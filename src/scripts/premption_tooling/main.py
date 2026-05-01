@@ -1,14 +1,12 @@
 import os
 import subprocess
 import threading
-import time
+import requests
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
 from rich.console import Console
-from rich.live import Live
-from rich.table import Table
 
 from .config_utils import delete_mesh_config, update_mesh_config
 from .gcp_utils import tpu_create_queued, tpu_delete_queued, tpu_describe, tpu_get_ips
@@ -57,11 +55,20 @@ class TPUStatus(str, Enum):
 
     @staticmethod
     def failed_states() -> list[str]:
-        return [TPUStatus.FAILED.value, TPUStatus.PREEMPTED.value, TPUStatus.SUSPENDED.value]
+        return [
+            TPUStatus.FAILED.value,
+            TPUStatus.PREEMPTED.value,
+            TPUStatus.SUSPENDED.value,
+        ]
 
     @staticmethod
     def allocated_states() -> list[str]:
-        return [TPUStatus.ACTIVE.value, TPUStatus.PREEMPTED.value, TPUStatus.SUSPENDED.value, TPUStatus.FAILED.value]
+        return [
+            TPUStatus.ACTIVE.value,
+            TPUStatus.PREEMPTED.value,
+            TPUStatus.SUSPENDED.value,
+            TPUStatus.FAILED.value,
+        ]
 
 
 @dataclass
@@ -74,6 +81,8 @@ class TPUJob:
     process: subprocess.Popen | None = None
     _log_file: object = field(default=None, init=False, repr=False)
     retries: int = 3
+    cleanup_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    cleanup_done: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self):
         is_v5 = self.tpu_type in TPUType.all_v5()
@@ -138,25 +147,43 @@ class TPUJob:
         full_cmd = f'mesh run {self.node_id} "{self.cmd}"'
         log_path = f"{self.home_dir}/logs/{self.node_id}.txt"
 
-        self._log_file = open(log_path, "a", buffering=1)
-        self.process = subprocess.Popen(
-            full_cmd, shell=True, stdout=self._log_file, stderr=subprocess.STDOUT, text=True, cwd=self.launch_dir
+        with self.cleanup_lock:
+            self._log_file = open(log_path, "a", buffering=1)
+            self.process = subprocess.Popen(
+            full_cmd,
+            shell=True,
+            stdout=self._log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=self.launch_dir,
         )
 
     def allocate_tpu(self):
-        tpu_create_queued(self.node_id, self.tpu_type.value, self.runtime.value, self.zone.value, spot=True)
+        tpu_create_queued(
+            self.node_id,
+            self.tpu_type.value,
+            self.runtime.value,
+            self.zone.value,
+            spot=True,
+        )
 
     def delete_tpu(self):
-        if self.process is not None and self.process.poll() is None:
-            self.process.terminate()
+        with self.cleanup_lock:
+            if self.cleanup_done:
+                return
+    
+            if self.process is not None and self.process.poll() is None:
+                self.process.terminate()
 
-        if self._log_file is not None:
-            self._log_file.close()
-            self._log_file = None
+            if self._log_file is not None:
+                self._log_file.close()
+                self._log_file = None
 
-        if self.tpu_status in TPUStatus.allocated_states():
-            tpu_delete_queued(self.node_id, self.zone.value)
-            delete_mesh_config(self.node_id)
+            if self.tpu_status in TPUStatus.allocated_states():
+                tpu_delete_queued(self.node_id, self.zone.value)
+                delete_mesh_config(self.node_id)
+            
+            self.cleanup_done = True
 
     def check_and_handle_preemption(self):
         js = self.job_status
@@ -165,18 +192,22 @@ class TPUJob:
         if tpu_status in TPUStatus.failed_states():
             console.print(f"[yellow]{self.node_id} preempted/failed (TPU: {tpu_status}), re-queuing...[/yellow]")
             self.delete_tpu()
-            self.process = None
+            with self.cleanup_lock:
+                self.process = None
 
         elif js == "ERROR":
             console.print(f"[red]{self.node_id} job errored, releasing TPU[/red]")
             if self.retries > 0:
                 console.print(f"[yellow]Retrying {self.node_id} (retries left: {self.retries})[/yellow]")
                 self.retries -= 1
-                self.process = None
+                with self.cleanup_lock: 
+                    self.process = None
             else:
-                self.job_status = "FINISHED"  # will bedeleted by the server
+                self.delete_tpu()
 
         elif js == "PENDING":
+            with self.cleanup_lock:
+                self.cleanup_done = False
             self.launch_job()
 
         elif js == "FINISHED" and tpu_status in TPUStatus.allocated_states():

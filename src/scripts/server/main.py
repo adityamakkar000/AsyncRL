@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -119,11 +118,13 @@ class Server:
             idx = next((i for i, j in enumerate(self.jobs) if j.node_id == job_id), None)
             if idx is None:
                 return False
-            job = self.jobs.pop(idx)
+            job = self.jobs[idx]
             try:
                 job.delete_tpu()
             except Exception:
                 logger.exception("delete_tpu failed for %s", job_id)
+                return False
+            del self.jobs[idx]
             return True
 
 
@@ -167,7 +168,7 @@ def get_jobs() -> list[JobView]:
 @app.delete("/jobs/{job_id}")
 def delete_job(job_id: str) -> dict[str, Any]:
     if not get_state().delete_job(job_id):
-        raise HTTPException(status_code=404, detail=f"job not found: {job_id}")
+        return {"ok": False, "deleted": job_id}
     return {"ok": True, "deleted": job_id}
 
 
