@@ -110,8 +110,12 @@ class TPUJob:
         return self.job_status in {"FINISHED"}
 
     @property
+    def home_dir(self) -> str:
+        return os.path.expanduser("~")
+
+    @property
     def launch_dir(self) -> str:
-        return f"~/{self.node_id}"
+        return f"{self.home_dir}/{self.node_id}"
 
     def setup_tpu(self) -> int:
         ips = tpu_get_ips(self.node_id, self.zone.value)
@@ -132,7 +136,7 @@ class TPUJob:
             return
 
         full_cmd = f'mesh run {self.node_id} "{self.cmd}"'
-        log_path = f"~/logs/{self.node_id}.txt"
+        log_path = f"{self.home_dir}/logs/{self.node_id}.txt"
 
         self._log_file = open(log_path, "a", buffering=1)
         self.process = subprocess.Popen(
@@ -170,7 +174,7 @@ class TPUJob:
                 self.retries -= 1
                 self.process = None
             else:
-                self.delete_tpu()
+                self.job_status = "FINISHED" # will bedeleted by the server
 
         elif js == "PENDING":
             self.launch_job()

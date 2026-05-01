@@ -40,9 +40,9 @@ class Server:
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
-        self.jobs = list[TPUJob] = []
+        self.jobs: list[TPUJob] = []
         self.shutdown = threading.Event()
-        self.worker = threading.Thread | None = None
+        self.worker: threading.Thread | None = None
 
     def start_worker(self) -> None:
         if self.worker is not None and self.worker.is_alive():
@@ -51,7 +51,7 @@ class Server:
         self.worker = threading.Thread(target=self.run_loop, name="tpu-run-session", daemon=True)
         self.worker.start()
 
-    def shutdown(self) -> None:
+    def shutdown_worker(self) -> None:
         self.shutdown.set()
         if self.worker is not None:
             self.worker.join(timeout=30.0)
@@ -80,20 +80,20 @@ class Server:
                 time.sleep(3)
 
     def add_job(self, body: RunJobRequest) -> None:
-        if body.node_id in [j.node_id for j in self.jobs]:
-            raise ValueError(f"node_id already queued: {body.node_id}")
-        job = TPUJob(
-            node_id=body.node_id,
-            zone=body.zone,
-            tpu_type=body.tpu_type,
-            runtime=body.runtime,
-            cmd=body.cmd,
-            retries=body.retries,
-        )
-        log_root = Path("~/logs/{body.node_id}.txt")
-        log_root.mkdir(parents=True, exist_ok=True)
         with self.lock:
+            if body.node_id in [j.node_id for j in self.jobs]:
+                raise ValueError(f"node_id already queued: {body.node_id}")
+            job = TPUJob(
+                node_id=body.node_id,
+                zone=body.zone,
+                tpu_type=body.tpu_type,
+                runtime=body.runtime,
+                cmd=body.cmd,
+                retries=body.retries,
+            )
             self.jobs.append(job)
+            log_root = Path(f"~/logs/{body.node_id}")
+            log_root.mkdir(parents=True, exist_ok=True)
     
     def list_jobs(self) -> list[JobView]:
         with self.lock:
@@ -120,11 +120,11 @@ class Server:
             if idx is None:
                 return False
             job = self.jobs.pop(idx)
-        try:
-            job.delete_tpu()
-        except Exception:
-            logger.exception("delete_tpu failed for %s", job_id)
-        return True
+            try:
+                job.delete_tpu()
+            except Exception:
+                logger.exception("delete_tpu failed for %s", job_id)
+            return True
 
 
 state: Server | None = None
@@ -138,7 +138,7 @@ async def lifespan(app: FastAPI):
     state.start_worker()
     yield
     if state is not None:
-        state.shutdown()
+        state.shutdown_worker()
 
 
 app = FastAPI(title="TPU Server (Mac Mini)", lifespan=lifespan)

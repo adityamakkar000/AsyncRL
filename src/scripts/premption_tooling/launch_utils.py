@@ -136,7 +136,9 @@ def run_tpu_jobs(
                 "retries": RETRIES,
             }
 
-        requests.post("http://server:8000/run_job", json=post_args)
+        response = requests.post("http://server:8000/run_job", json=post_args, timeout=30)
+        response.raise_for_status()
+        print(f"Job submitted: {response.json()}")
    
 
 def launch(job: LAUNCH_JOB) -> None:
