@@ -74,7 +74,7 @@ class TPUJob:
     process: subprocess.Popen | None = None
     _log_file: object = field(default=None, init=False, repr=False)
     retries: int = 3
-    
+
     def __post_init__(self):
         is_v5 = self.tpu_type in TPUType.all_v5()
         is_v6 = self.tpu_type in TPUType.all_v6()
@@ -104,7 +104,7 @@ class TPUJob:
     @property
     def is_job_finished(self) -> bool:
         return self.job_status in {"FINISHED", "ERROR"}
-    
+
     @property
     def is_job_finished_without_error(self) -> bool:
         return self.job_status in {"FINISHED"}
@@ -174,7 +174,7 @@ class TPUJob:
                 self.retries -= 1
                 self.process = None
             else:
-                self.job_status = "FINISHED" # will bedeleted by the server
+                self.job_status = "FINISHED"  # will bedeleted by the server
 
         elif js == "PENDING":
             self.launch_job()

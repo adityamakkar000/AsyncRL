@@ -91,6 +91,7 @@ def make_name(combo: dict[str, Any], EXPERIMENT_PREFIX: str) -> str:
         parts.append(f"{short}{val:g}" if isinstance(val, float) else f"{short}{val}")
     return "_".join(parts)
 
+
 def run_tpu_jobs(
     combos: list[dict[str, Any]],
     EXPERIMENT_PREFIX: str,
@@ -125,21 +126,21 @@ def run_tpu_jobs(
         copy_dir = os.path.dirname(os.path.dirname(os.path.dirname(file_dir)))
         node_id = f"node_{NODE_COUNTER}_{rng_combo}"
         # assuming that server is named "server" in cluster.yaml and ~/.ssh/config
-        subprocess.run(["mesh", "run", "server", "--dir", file_dir, f"\"mv ~/job ~/{node_id}\""], cwd=copy_dir)
-        
+        subprocess.run(["mesh", "run", "server", "--dir", file_dir, f'"mv ~/job ~/{node_id}"'], cwd=copy_dir)
+
         post_args = {
-                "node_id": node_id,
-                "zone": ZONE,
-                "tpu_type": TPU_TYPE,
-                "runtime": RUNTIME,
-                "cmd": inner_cmd,
-                "retries": RETRIES,
-            }
+            "node_id": node_id,
+            "zone": ZONE,
+            "tpu_type": TPU_TYPE,
+            "runtime": RUNTIME,
+            "cmd": inner_cmd,
+            "retries": RETRIES,
+        }
 
         response = requests.post("http://server:8000/run_job", json=post_args, timeout=30)
         response.raise_for_status()
         print(f"Job submitted: {response.json()}")
-   
+
 
 def launch(job: LAUNCH_JOB) -> None:
     combos = make_combos(job.RUN)

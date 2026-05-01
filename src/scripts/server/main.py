@@ -37,7 +37,6 @@ class JobView(BaseModel):
 
 
 class Server:
-
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.jobs: list[TPUJob] = []
@@ -61,7 +60,7 @@ class Server:
             with self.lock:
                 pending = [j for j in self.jobs if not j.is_job_finished_without_error]
                 not_pending = [j for j in self.jobs if j.is_job_finished_without_error]
-                for j in not_pending: 
+                for j in not_pending:
                     try:
                         self.delete_job(j.node_id)
                         logger.info("deleted job %s", j.node_id)
@@ -94,7 +93,7 @@ class Server:
             self.jobs.append(job)
             log_root = Path(f"~/logs/{body.node_id}")
             log_root.mkdir(parents=True, exist_ok=True)
-    
+
     def list_jobs(self) -> list[JobView]:
         with self.lock:
             snapshot = list(self.jobs)
