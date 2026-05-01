@@ -91,8 +91,6 @@ class Server:
                 retries=body.retries,
             )
             self.jobs.append(job)
-            log_root = Path(f"{job.home_dir}/logs/{body.node_id}")
-            log_root.mkdir(parents=True, exist_ok=True)
 
     def list_jobs(self) -> list[JobView]:
         with self.lock:
@@ -119,13 +117,15 @@ class Server:
             if idx is None:
                 return False
             job = self.jobs[idx]
-            try:
-                job.delete_tpu()
-            except Exception:
-                logger.exception("delete_tpu failed for %s", job_id)
-                return False
             del self.jobs[idx]
-            return True
+        try:
+            job.delete_tpu()
+        except Exception:
+            logger.exception("delete_tpu failed for %s, adding back job to the queue", job_id)
+            with self.lock:
+                self.jobs.append(job)
+            return False
+        return True
 
 
 state: Server | None = None

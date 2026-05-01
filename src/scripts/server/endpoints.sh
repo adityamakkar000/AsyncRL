@@ -7,20 +7,39 @@ server_jobs() {
   }
   local json
   json=$(curl -sS -f "${TPU_SERVER_URL%/}/jobs") || return
-  echo "$json" | jq -r '
-    ["NODE_ID", "ZONE", "TPU_TYPE", "RUNTIME", "CMD", "RETRIES", "TPU_STATUS", "JOB_STATUS"],
-    (.[] | [
-      .node_id,
-      .zone,
-      .tpu_type,
-      .runtime,
-      (.cmd | gsub("\t"; " ") | gsub("\n"; " ")),
-      (.retries_left | tostring),
-      .tpu_status,
-      .job_status
-    ])
-    | @tsv
-  ' | column -t -s $'\t'
+
+  if [ -t 1 ]; then
+    local max_cmd_len=30
+    echo "$json" | jq -r --arg max_len "$max_cmd_len" '
+      ["NODE_ID", "TPU_STATUS", "JOB_STATUS", "ZONE", "TPU_TYPE", "RUNTIME", "CMD", "RETRIES"],
+      (.[] | [
+        .node_id,
+        .tpu_status,
+        .job_status,
+        .zone,
+        .tpu_type,
+        .runtime,
+        (.cmd | gsub("\t"; " ") | gsub("\n"; " ") | if (length > ($max_len|tonumber)) then .[0:($max_len|tonumber)] + "…" else . end),
+        (.retries_left | tostring)
+      ])
+      | @tsv
+    ' | column -t -s $'\t'
+  else
+    echo "$json" | jq -r '
+      ["NODE_ID", "TPU_STATUS", "JOB_STATUS", "ZONE", "TPU_TYPE", "RUNTIME", "CMD", "RETRIES"],
+      (.[] | [
+        .node_id,
+        .tpu_status,
+        .job_status,
+        .zone,
+        .tpu_type,
+        .runtime,
+        (.cmd | gsub("\t"; " ") | gsub("\n"; " ")),
+        (.retries_left | tostring)
+      ])
+      | @tsv
+    ' | column -t -s $'\t'
+  fi
 }
 
 server_delete() {
