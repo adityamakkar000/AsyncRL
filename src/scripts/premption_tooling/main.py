@@ -1,9 +1,7 @@
 import os
 import subprocess
 import threading
-import requests
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum
 
 from rich.console import Console

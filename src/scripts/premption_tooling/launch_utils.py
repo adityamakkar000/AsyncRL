@@ -10,8 +10,10 @@ import random
 from dataclasses import dataclass, field
 from typing import Any
 
-from .main import Runtime, TPUJob, TPUType, Zone, run_session
+from .main import Runtime, TPUJob, TPUType, Zone
 
+# assuming TPU_SERVER_URL is set in the environment
+TPU_SERVER_URL = os.getenv("TPU_SERVER_URL", None)
 
 @dataclass
 class Vals:
@@ -126,7 +128,7 @@ def run_tpu_jobs(
         copy_dir = os.path.dirname(os.path.dirname(os.path.dirname(file_dir)))
         node_id = f"node_{NODE_COUNTER}_{rng_combo}"
         # assuming that server is named "server" in cluster.yaml and ~/.ssh/config
-        subprocess.run(["mesh", "run", "server", "--dir", file_dir, f'"cp -r ~/job ~/{node_id}"'], cwd=copy_dir)
+        subprocess.run(["mesh", "run", "server", "--dir", file_dir, f"cp -r ~/job ~/{node_id}"], cwd=copy_dir)
 
         post_args = {
             "node_id": node_id,
@@ -137,7 +139,11 @@ def run_tpu_jobs(
             "retries": RETRIES,
         }
 
-        response = requests.post("http://server:8000/run_job", json=post_args, timeout=30)
+        # print('-------------------------------')
+        # print(post_args)
+        # print('-------------------------------')
+
+        response = requests.post(f"{TPU_SERVER_URL}/run_job", json=post_args, timeout=30)
         response.raise_for_status()
         print(f"Job submitted: {response.json()}")
 

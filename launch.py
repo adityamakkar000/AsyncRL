@@ -8,8 +8,9 @@ from src.scripts.premption_tooling import Vals, Cross, Zip
 
 RUN = Zip(
     [
-        Vals("loss_config.annealing_config.use_annealing", [0, 1, 1]),
-        Vals("loss_config.annealing_config.schedule", ["linear", "linear", "cosine"]),
+        Vals("loss_config.annealing_config.use_annealing", [1]),
+        Vals("loss_config.annealing_config.schedule", ["cosine"]),
+        Vals("loss_config.annealing_config.annealing_steps", [0.2])
     ]
 )
 
