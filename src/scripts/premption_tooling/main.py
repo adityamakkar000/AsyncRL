@@ -150,13 +150,13 @@ class TPUJob:
         with self.cleanup_lock:
             self._log_file = open(log_path, "a", buffering=1)
             self.process = subprocess.Popen(
-            full_cmd,
-            shell=True,
-            stdout=self._log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-            cwd=self.launch_dir,
-        )
+                full_cmd,
+                shell=True,
+                stdout=self._log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=self.launch_dir,
+            )
 
     def allocate_tpu(self):
         tpu_create_queued(
@@ -171,7 +171,7 @@ class TPUJob:
         with self.cleanup_lock:
             if self.cleanup_done:
                 return
-    
+
             if self.process is not None and self.process.poll() is None:
                 self.process.terminate()
 
@@ -182,7 +182,7 @@ class TPUJob:
             if self.tpu_status in TPUStatus.allocated_states():
                 tpu_delete_queued(self.node_id, self.zone.value)
                 delete_mesh_config(self.node_id)
-            
+
             self.cleanup_done = True
 
     def check_and_handle_preemption(self):
@@ -200,7 +200,7 @@ class TPUJob:
             if self.retries > 0:
                 console.print(f"[yellow]Retrying {self.node_id} (retries left: {self.retries})[/yellow]")
                 self.retries -= 1
-                with self.cleanup_lock: 
+                with self.cleanup_lock:
                     self.process = None
             else:
                 self.delete_tpu()
