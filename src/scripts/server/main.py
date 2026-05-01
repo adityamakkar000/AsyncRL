@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from scripts.premption_tooling.main import Runtime, TPUJob, TPUType, Zone, run_session
 
@@ -23,12 +23,10 @@ class RunJobRequest(BaseModel):
     runtime: Runtime
     cmd: str
     retries: int = 3
-    name: str
 
 
 class JobView(BaseModel):
     node_id: str
-    name: str
     zone: str
     tpu_type: str
     runtime: str
@@ -38,45 +36,44 @@ class JobView(BaseModel):
     job_status: str
 
 
-class JobQueueState:
-    """Thread-safe job list + names; background worker runs run_session in a loop."""
+class Server:
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._jobs: list[TPUJob] = []
-        self._name_by_node: dict[str, str] = {}
-        self._shutdown = threading.Event()
-        self._worker: threading.Thread | None = None
+        self.lock = threading.Lock()
+        self.jobs = list[TPUJob] = []
+        self.shutdown = threading.Event()
+        self.worker = threading.Thread | None = None
+        self.nodes = set[str] = set()
 
     def start_worker(self) -> None:
-        if self._worker is not None and self._worker.is_alive():
+        if self.worker is not None and self.worker.is_alive():
             return
-        self._shutdown.clear()
-        self._worker = threading.Thread(target=self._run_loop, name="tpu-run-session", daemon=True)
-        self._worker.start()
+        self.shutdown.clear()
+        self.worker = threading.Thread(target=self.run_loop, name="tpu-run-session", daemon=True)
+        self.worker.start()
 
     def shutdown(self) -> None:
-        self._shutdown.set()
-        if self._worker is not None:
-            self._worker.join(timeout=30.0)
+        self.shutdown.set()
+        if self.worker is not None:
+            self.worker.join(timeout=30.0)
 
-    def _run_loop(self) -> None:
-        while not self._shutdown.is_set():
-            with self._lock:
-                pending = any(not j.is_job_finished for j in self._jobs)
+    def run_loop(self) -> None:
+        while not self.shutdown.is_set():
+            with self.lock:
+                pending = any(not j.is_job_finished for j in self.jobs)
             if not pending:
                 time.sleep(0.25)
                 continue
             try:
-                with self._lock:
-                    jobs_ref = self._jobs
+                with self.lock:
+                    jobs_ref = self.jobs
                 run_session(jobs_ref)
             except Exception:
                 logger.exception("run_session crashed; retrying after delay")
                 time.sleep(2.0)
 
     def add_job(self, body: RunJobRequest) -> None:
-        if body.node_id in self._name_by_node:
+        if body.node_id in self.nodes:
             raise ValueError(f"node_id already queued: {body.node_id}")
         job = TPUJob(
             node_id=body.node_id,
@@ -86,23 +83,20 @@ class JobQueueState:
             cmd=body.cmd,
             retries=body.retries,
         )
-        log_root = Path("logs") / body.name
+        log_root = Path("~/logs/{body.node_id}.txt")
         log_root.mkdir(parents=True, exist_ok=True)
-        with self._lock:
-            self._jobs.append(job)
-            self._name_by_node[body.node_id] = body.name
+        with self.lock:
+            self.jobs.append(job)
+            self.nodes.add(body.node_id)
 
     def list_jobs(self) -> list[JobView]:
-        with self._lock:
-            snapshot = list(self._jobs)
-            names = dict(self._name_by_node)
+        with self.lock:
+            snapshot = list(self.jobs)
         out: list[JobView] = []
         for j in snapshot:
-            name = names.get(j.node_id, j.node_id)
             out.append(
                 JobView(
                     node_id=j.node_id,
-                    name=name,
                     zone=j.zone.value,
                     tpu_type=j.tpu_type.value,
                     runtime=j.runtime.value,
@@ -115,13 +109,12 @@ class JobQueueState:
         return out
 
     def delete_job(self, job_id: str) -> bool:
-        """Remove job by node_id; terminate process and release TPU if allocated."""
-        with self._lock:
-            idx = next((i for i, j in enumerate(self._jobs) if j.node_id == job_id), None)
+        with self.lock:
+            idx = next((i for i, j in enumerate(self.jobs) if j.node_id == job_id), None)
             if idx is None:
                 return False
-            job = self._jobs.pop(idx)
-            self._name_by_node.pop(job_id, None)
+            job = self.jobs.pop(idx)
+            self.nodes.remove(job_id)
         try:
             job.delete_tpu()
         except Exception:
@@ -129,24 +122,24 @@ class JobQueueState:
         return True
 
 
-state: JobQueueState | None = None
+state: Server | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global state
     logging.basicConfig(level=logging.INFO)
-    state = JobQueueState()
+    state = Server()
     state.start_worker()
     yield
     if state is not None:
         state.shutdown()
 
 
-app = FastAPI(title="TPU job queue", lifespan=lifespan)
+app = FastAPI(title="TPU Server (Mac Mini)", lifespan=lifespan)
 
 
-def _get_state() -> JobQueueState:
+def get_state() -> Server:
     if state is None:
         raise HTTPException(status_code=503, detail="Server not ready")
     return state
@@ -155,20 +148,20 @@ def _get_state() -> JobQueueState:
 @app.post("/run_job")
 def run_job(req: RunJobRequest) -> dict[str, Any]:
     try:
-        _get_state().add_job(req)
+        get_state().add_job(req)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    return {"ok": True, "node_id": req.node_id, "name": req.name}
+    return {"ok": True, "node_id": req.node_id}
 
 
 @app.get("/jobs", response_model=list[JobView])
 def get_jobs() -> list[JobView]:
-    return _get_state().list_jobs()
+    return get_state().list_jobs()
 
 
 @app.delete("/jobs/{job_id}")
 def delete_job(job_id: str) -> dict[str, Any]:
-    if not _get_state().delete_job(job_id):
+    if not get_state().delete_job(job_id):
         raise HTTPException(status_code=404, detail=f"job not found: {job_id}")
     return {"ok": True, "deleted": job_id}
 
