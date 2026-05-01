@@ -58,20 +58,21 @@ class Server:
     def run_loop(self) -> None:
         while not self.shutdown.is_set():
             with self.lock:
-                pending = [j for j in self.jobs if not j.is_job_finished_without_error]
-                not_pending = [j for j in self.jobs if j.is_job_finished_without_error]
-                for j in not_pending:
-                    try:
-                        self.delete_job(j.node_id)
-                        logger.info("deleted job %s", j.node_id)
-                    except Exception:
-                        logger.exception("delete_tpu failed for %s", j.node_id)
+                jobs_snapshot = list(self.jobs)
+            pending = [j for j in jobs_snapshot if not j.is_job_finished_without_error]
+            not_pending = [j for j in jobs_snapshot if j.is_job_finished_without_error]
+            for j in not_pending:
+                try:
+                    self.delete_job(j.node_id)
+                    logger.info("deleted job %s", j.node_id)
+                except Exception:
+                    logger.exception("delete_tpu failed for %s", j.node_id)
             if len(pending) == 0:
                 time.sleep(3)
                 continue
             try:
                 with self.lock:
-                    jobs_ref = self.jobs
+                    jobs_ref = list(self.jobs)
                 run_session(jobs_ref)
             except Exception:
                 logger.exception("run_session crashed; retrying after delay")
@@ -91,7 +92,7 @@ class Server:
                 retries=body.retries,
             )
             self.jobs.append(job)
-            log_root = Path(f"~/logs/{body.node_id}")
+            log_root = Path(f"{job.home_dir}/logs/{body.node_id}")
             log_root.mkdir(parents=True, exist_ok=True)
 
     def list_jobs(self) -> list[JobView]:

@@ -185,8 +185,6 @@ class TPUJob:
 
 
 def run_session(jobs: list[TPUJob]):
-    if not os.path.exists("logs"):
-        os.makedirs("logs")
     threads = [threading.Thread(target=j.check_and_handle_preemption) for j in jobs]
     for t in threads:
         t.start()
