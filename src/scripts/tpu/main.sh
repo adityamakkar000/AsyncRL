@@ -1,5 +1,5 @@
-
 # delete a queued TPU resource
+# usage: tpuq_rm <id> [zone]
 tpuq_rm() {
   local ID="$1"
   local ZONE="${2:-$GCLOUD_TPU_ZONE}"
@@ -17,6 +17,7 @@ tpuq_rm() {
 
 
 # list queued TPU resources
+# usage: tpuq_ls [zone]
 tpuq_ls() {
   local ZONE="${1:-$GCLOUD_TPU_ZONE}"
 
@@ -26,6 +27,7 @@ tpuq_ls() {
 }
 
 # create a queued TPU resource
+# usage: tpuq_create <id> <tpu-type> [runtime] [spot] [zone]
 tpuq_create() {
   local ID="$1"
   local TPU_TYPE="$2"
@@ -59,6 +61,7 @@ tpuq_create() {
 }
 
 # describe a queued TPU resource
+# usage: tpuq_describe <id> [zone]
 tpuq_describe() {
   local ID="$1"
   local ZONE="${2:-$GCLOUD_TPU_ZONE}"
@@ -74,6 +77,7 @@ tpuq_describe() {
 }
 
 # list TPU VMs in a zone
+# usage: tpu_ls <zone>
 tpu_ls () {
   if [ -z "$1" ]; then
     echo "usage: tpu_ls <zone>"
@@ -90,4 +94,4 @@ tpu_ls () {
       state,
       networkEndpoints[].accessConfig.externalIp
     )"
-gcloud projects list}
+}

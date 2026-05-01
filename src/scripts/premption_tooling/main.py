@@ -74,7 +74,7 @@ class TPUJob:
     process: subprocess.Popen | None = None
     _log_file: object = field(default=None, init=False, repr=False)
     retries: int = 3
-
+    
     def __post_init__(self):
         is_v5 = self.tpu_type in TPUType.all_v5()
         is_v6 = self.tpu_type in TPUType.all_v6()
@@ -104,11 +104,19 @@ class TPUJob:
     @property
     def is_job_finished(self) -> bool:
         return self.job_status in {"FINISHED", "ERROR"}
+    
+    @property
+    def is_job_finished_without_error(self) -> bool:
+        return self.job_status in {"FINISHED"}
+
+    @property
+    def launch_dir(self) -> str:
+        return f"~/{self.node_id}"
 
     def setup_tpu(self) -> int:
         ips = tpu_get_ips(self.node_id, self.zone.value)
         update_mesh_config(self.node_id, ips)
-        result = subprocess.run(["mesh", "setup", self.node_id], capture_output=True)
+        result = subprocess.run(["mesh", "setup", self.node_id], capture_output=True, cwd=self.launch_dir)
         return result.returncode
 
     def launch_job(self):
@@ -124,11 +132,11 @@ class TPUJob:
             return
 
         full_cmd = f'mesh run {self.node_id} "{self.cmd}"'
-        log_path = f"logs/log_{self.node_id}.txt"
+        log_path = f"~/logs/{self.node_id}.txt"
 
         self._log_file = open(log_path, "a", buffering=1)
         self.process = subprocess.Popen(
-            full_cmd, shell=True, stdout=self._log_file, stderr=subprocess.STDOUT, text=True
+            full_cmd, shell=True, stdout=self._log_file, stderr=subprocess.STDOUT, text=True, cwd=self.launch_dir
         )
 
     def allocate_tpu(self):
@@ -172,40 +180,11 @@ class TPUJob:
             self.delete_tpu()
 
 
-def generate_table(jobs: list[TPUJob]) -> Table:
-    current_time = datetime.now().strftime("%H:%M:%S")
-    title = f"TPU Cluster Dashboard [dim](Last Updated: {current_time})[/dim]"
-
-    table = Table(title=title, title_style="bold magenta")
-    table.add_column("Node ID", style="cyan", no_wrap=True)
-    table.add_column("TPU Status", style="yellow")
-    table.add_column("Job Status", style="green")
-    table.add_column("Command", style="dim", overflow="ellipsis")
-    table.add_column("Log Tail Command", style="blue")
-    table.add_column("Retries Left", style="red")
-
-    for job in jobs:
-        log_cmd = f"tail -f logs/log_{job.node_id}.txt"
-        cmd_display = job.cmd[:40] + "..." if len(job.cmd) > 40 else job.cmd
-        table.add_row(job.node_id, job.tpu_status, job.job_status, cmd_display, log_cmd, str(job.retries))
-    return table
-
-
 def run_session(jobs: list[TPUJob]):
     if not os.path.exists("logs"):
         os.makedirs("logs")
-    try:
-        with Live(generate_table(jobs), refresh_per_second=1) as live:
-            while any(not j.is_job_finished for j in jobs):
-                threads = [threading.Thread(target=j.check_and_handle_preemption) for j in jobs]
-                for t in threads:
-                    t.start()
-                for t in threads:
-                    t.join()
-                live.update(generate_table(jobs))
-                time.sleep(UPDATE_TIME)
-    finally:
-        console.print("[bold red]Cleaning up...[/bold red]")
-        for j in jobs:
-            j.delete_tpu()
-        console.print("[bold green]Cleanup complete.[/bold green]")
+    threads = [threading.Thread(target=j.check_and_handle_preemption) for j in jobs]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()

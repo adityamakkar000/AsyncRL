@@ -1,6 +1,9 @@
 """Run launcher for TPU clusters via mesh."""
 
 from __future__ import annotations
+import os
+import subprocess
+import requests
 
 import itertools
 import random
@@ -88,32 +91,7 @@ def make_name(combo: dict[str, Any], EXPERIMENT_PREFIX: str) -> str:
         parts.append(f"{short}{val:g}" if isinstance(val, float) else f"{short}{val}")
     return "_".join(parts)
 
-
-def mesh_cmd(
-    cluster: str, combo: dict[str, Any], EXPERIMENT_PREFIX: str, FIXED_OVERRIDES: dict[str, Any], BASE_CONFIG: str
-) -> list[str]:
-    name = make_name(combo, EXPERIMENT_PREFIX)
-    overrides = {**FIXED_OVERRIDES, **combo}
-    inner_parts = [
-        "python",
-        "-m",
-        "src.train",
-        f"--config-name={BASE_CONFIG}",
-        f"experiment_name={name}",
-    ]
-    for k, v in overrides.items():
-        inner_parts.append(f"{k}={v}")
-    inner_cmd = " ".join(inner_parts)
-    cmd = [
-        "mesh",
-        "run",
-        cluster,
-        inner_cmd,
-    ]
-    return cmd
-
-
-def return_tpu_jobs(
+def run_tpu_jobs(
     combos: list[dict[str, Any]],
     EXPERIMENT_PREFIX: str,
     FIXED_OVERRIDES: dict[str, Any],
@@ -122,13 +100,12 @@ def return_tpu_jobs(
     TPU_TYPE: TPUType,
     RUNTIME: Runtime,
     RETRIES: int,
-) -> list[TPUJob]:
+):
     NODE_COUNTER = 0
 
-    jobs = []
     for combo in combos:
         NODE_COUNTER += 1
-        rng_combo = random.randint(0, 100000)
+        rng_combo = random.randint(0, 1000000)
 
         name = make_name(combo, EXPERIMENT_PREFIX)
         overrides = {**FIXED_OVERRIDES, **combo}
@@ -142,22 +119,30 @@ def return_tpu_jobs(
         for k, v in overrides.items():
             inner_parts.append(f"{k}={v}")
         inner_cmd = " ".join(inner_parts)
-        job = TPUJob(
-            node_id=f"node_{NODE_COUNTER}_{rng_combo}",
-            zone=ZONE,
-            tpu_type=TPU_TYPE,
-            runtime=RUNTIME,
-            cmd=inner_cmd,
-            retries=RETRIES,
-        )
-        jobs.append(job)
-    return jobs
 
+        file_dir = os.path.dirname(os.path.abspath(__file__))
+        # warning: this is hard coded to this project structure
+        copy_dir = os.path.dirname(os.path.dirname(os.path.dirname(file_dir)))
+        node_id = f"node_{NODE_COUNTER}_{rng_combo}"
+        # assuming that server is named "server" in cluster.yaml and ~/.ssh/config
+        subprocess.run(["mesh", "run", "server", "--dir", file_dir, f"\"mv ~/job ~/{node_id}\""], cwd=copy_dir)
+        
+        post_args = {
+                "node_id": node_id,
+                "zone": ZONE,
+                "tpu_type": TPU_TYPE,
+                "runtime": RUNTIME,
+                "cmd": inner_cmd,
+                "retries": RETRIES,
+            }
+
+        requests.post("http://server:8000/run_job", json=post_args)
+   
 
 def launch(job: LAUNCH_JOB) -> None:
     combos = make_combos(job.RUN)
 
-    tpu_jobs = return_tpu_jobs(
+    run_tpu_jobs(
         combos,
         job.EXPERIMENT_PREFIX,
         job.FIXED_OVERRIDES,
@@ -167,7 +152,3 @@ def launch(job: LAUNCH_JOB) -> None:
         job.RUNTIME,
         job.RETRIES,
     )
-
-    run_session(tpu_jobs)
-
-    print("All runs completed.")

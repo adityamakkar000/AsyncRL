@@ -43,7 +43,6 @@ class Server:
         self.jobs = list[TPUJob] = []
         self.shutdown = threading.Event()
         self.worker = threading.Thread | None = None
-        self.nodes = set[str] = set()
 
     def start_worker(self) -> None:
         if self.worker is not None and self.worker.is_alive():
@@ -60,9 +59,16 @@ class Server:
     def run_loop(self) -> None:
         while not self.shutdown.is_set():
             with self.lock:
-                pending = any(not j.is_job_finished for j in self.jobs)
-            if not pending:
-                time.sleep(0.25)
+                pending = [j for j in self.jobs if not j.is_job_finished_without_error]
+                not_pending = [j for j in self.jobs if j.is_job_finished_without_error]
+                for j in not_pending: 
+                    try:
+                        self.delete_job(j.node_id)
+                        logger.info("deleted job %s", j.node_id)
+                    except Exception:
+                        logger.exception("delete_tpu failed for %s", j.node_id)
+            if len(pending) == 0:
+                time.sleep(3)
                 continue
             try:
                 with self.lock:
@@ -70,10 +76,11 @@ class Server:
                 run_session(jobs_ref)
             except Exception:
                 logger.exception("run_session crashed; retrying after delay")
-                time.sleep(2.0)
+            finally:
+                time.sleep(3)
 
     def add_job(self, body: RunJobRequest) -> None:
-        if body.node_id in self.nodes:
+        if body.node_id in [j.node_id for j in self.jobs]:
             raise ValueError(f"node_id already queued: {body.node_id}")
         job = TPUJob(
             node_id=body.node_id,
@@ -87,8 +94,7 @@ class Server:
         log_root.mkdir(parents=True, exist_ok=True)
         with self.lock:
             self.jobs.append(job)
-            self.nodes.add(body.node_id)
-
+    
     def list_jobs(self) -> list[JobView]:
         with self.lock:
             snapshot = list(self.jobs)
@@ -114,7 +120,6 @@ class Server:
             if idx is None:
                 return False
             job = self.jobs.pop(idx)
-            self.nodes.remove(job_id)
         try:
             job.delete_tpu()
         except Exception:
