@@ -126,7 +126,7 @@ def run_tpu_jobs(
         copy_dir = os.path.dirname(os.path.dirname(os.path.dirname(file_dir)))
         node_id = f"node_{NODE_COUNTER}_{rng_combo}"
         # assuming that server is named "server" in cluster.yaml and ~/.ssh/config
-        subprocess.run(["mesh", "run", "server", "--dir", file_dir, f'"mv ~/job ~/{node_id}"'], cwd=copy_dir)
+        subprocess.run(["mesh", "run", "server", "--dir", file_dir, f'"cp -r ~/job ~/{node_id}"'], cwd=copy_dir)
 
         post_args = {
             "node_id": node_id,
