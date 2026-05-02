@@ -123,12 +123,11 @@ def run_tpu_jobs(
             inner_parts.append(f"{k}={v}")
         inner_cmd = " ".join(inner_parts)
 
-        file_dir = os.path.dirname(os.path.abspath(__file__))
         # warning: this is hard coded to this project structure
-        copy_dir = os.path.dirname(os.path.dirname(os.path.dirname(file_dir)))
+        copy_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         node_id = f"node_{NODE_COUNTER}_{rng_combo}"
         # assuming that server is named "server" in cluster.yaml and ~/.ssh/config
-        subprocess.run(["mesh", "run", "server", "--dir", file_dir, f"cp -r ~/job ~/{node_id}"], cwd=copy_dir)
+        subprocess.run(["mesh", "copy", "server", f"~/{node_id}"], cwd=copy_dir)
 
         post_args = {
             "node_id": node_id,
@@ -138,10 +137,6 @@ def run_tpu_jobs(
             "cmd": inner_cmd,
             "retries": RETRIES,
         }
-
-        # print('-------------------------------')
-        # print(post_args)
-        # print('-------------------------------')
 
         response = requests.post(f"{TPU_SERVER_URL}/run_job", json=post_args, timeout=30)
         response.raise_for_status()
