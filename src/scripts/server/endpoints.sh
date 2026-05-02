@@ -1,6 +1,7 @@
-export TPU_SERVER_URL='url here'
+# copy this file into ~/.bashrc or ~/.zshrc and fill out placeholder
+export TPU_SERVER_URL='http://<SERVER_IP_PLACEHOLDER>:8000'
 
-server_jobs() {
+server_ls() {
   command -v jq >/dev/null 2>&1 || {
     echo "server_jobs: need jq installed for table output (brew install jq)" >&2
     return 1

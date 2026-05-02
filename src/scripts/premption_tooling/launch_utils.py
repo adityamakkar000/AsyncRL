@@ -124,10 +124,10 @@ def run_tpu_jobs(
             inner_parts.append(f"{k}={v}")
         inner_cmd = " ".join(inner_parts)
 
-        # warning: this is hard coded to this project structure
+        # warning: this is hard coded to current project structure
         copy_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         node_id = f"node_{NODE_COUNTER}_{rng_combo}"
-        # assuming that server is named "server" in cluster.yaml and ~/.ssh/config
+        # assuming that server is named "server" in cluster.yaml
         subprocess.run(["mesh", "copy", "server", f"~/{node_id}"], cwd=copy_dir)
 
         post_args = {
