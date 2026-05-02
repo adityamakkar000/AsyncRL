@@ -55,7 +55,7 @@ def tpu_create_queued(node_id: str, tpu_type: str, runtime: str, zone: str, spot
     return subprocess.run(cmd)
 
 
-def tpu_delete_queued(node_id, zone: str):
+def tpu_delete_queued(node_id, zone: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             "gcloud",
