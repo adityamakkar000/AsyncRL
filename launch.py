@@ -1,16 +1,15 @@
 import src.scripts.premption_tooling as TPUJOB
-from src.scripts.premption_tooling import Vals, Zip
 
 # max_seq_len = [4096, 8192]
 # batch_size = [1024, 1024]
 # group_size = [8, 16]
 
 
-RUN = Zip(
+RUN: TPUJOB.Vals | TPUJOB.Zip | TPUJOB.Cross = TPUJOB.Zip(
     [
-        Vals("loss_config.annealing_config.use_annealing", [1]),
-        Vals("loss_config.annealing_config.schedule", ["cosine"]),
-        Vals("loss_config.annealing_config.annealing_steps", [0.15]),
+        TPUJOB.Vals("loss_config.annealing_config.use_annealing", [1]),
+        TPUJOB.Vals("loss_config.annealing_config.schedule", ["cosine"]),
+        TPUJOB.Vals("loss_config.annealing_config.annealing_steps", [0.15]),
     ]
 )
 
@@ -38,6 +37,7 @@ job = TPUJOB.LAUNCH_JOB(
     FIXED_OVERRIDES=dict(),
     BASE_CONFIG=BASE_CONFIG,
     ZONE=TPUJOB.Zone.US_EAST5_A,
+    JOB_TYPE=TPUJOB.JOB_TYPES.TRAIN,
     TPU_TYPE=TPUJOB.TPUType.V5P_32,
     RUNTIME=TPUJOB.Runtime.V2_ALPHA_TPUV5,
     RETRIES=5,

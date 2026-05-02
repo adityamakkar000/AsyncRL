@@ -7,6 +7,7 @@ import os
 import random
 import subprocess
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 import requests
@@ -71,6 +72,11 @@ class Zip:
         return combos
 
 
+class JOB_TYPES(str, Enum):
+    TRAIN = "src.train"
+    EVAL = "src.eval"
+
+
 @dataclass
 class LAUNCH_JOB:
     RUN: Cross | Zip | Vals
@@ -78,6 +84,7 @@ class LAUNCH_JOB:
     FIXED_OVERRIDES: dict[str, Any]
     BASE_CONFIG: str
     ZONE: Zone
+    JOB_TYPE: JOB_TYPES
     TPU_TYPE: TPUType
     RUNTIME: Runtime
     RETRIES: int = 3
@@ -101,6 +108,7 @@ def run_tpu_jobs(
     FIXED_OVERRIDES: dict[str, Any],
     BASE_CONFIG: str,
     ZONE: Zone,
+    JOB_TYPE: JOB_TYPES,
     TPU_TYPE: TPUType,
     RUNTIME: Runtime,
     RETRIES: int,
@@ -116,7 +124,7 @@ def run_tpu_jobs(
         inner_parts = [
             "python",
             "-m",
-            "src.train",
+            JOB_TYPE.value,
             f"--config-name={BASE_CONFIG}",
             f"experiment_name={name}",
         ]
@@ -153,6 +161,7 @@ def launch(job: LAUNCH_JOB) -> None:
         job.FIXED_OVERRIDES,
         job.BASE_CONFIG,
         job.ZONE,
+        job.JOB_TYPE,
         job.TPU_TYPE,
         job.RUNTIME,
         job.RETRIES,
