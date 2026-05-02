@@ -64,13 +64,9 @@ class Server:
             with self.delete_lock:
                 to_delete = list(self.delete_queue)
             pending = [j for j in jobs_snapshot if not j.is_job_finished_without_error]
-            not_pending = [j for j in jobs_snapshot if j.is_job_finished_without_error]
-            for j in not_pending:
-                try:
-                    self.delete_job(j.node_id)
-                    logger.info("deleted job %s", j.node_id)
-                except Exception:
-                    logger.exception("delete_tpu failed for %s", j.node_id)
+            for j in jobs_snapshot:
+                if j.is_job_finished_without_error:
+                    to_delete.append(j.node_id)
             for j in to_delete:
                 try:
                     if self.delete_job(j):
@@ -78,7 +74,7 @@ class Server:
                     else:
                         logger.info("failed to delete job %s, must send DELETE request again", j)
                     with self.delete_lock:
-                        self.delete_queue.remove(j)
+                        if j in self.delete_queue: self.delete_queue.remove(j)
                 except Exception:
                     logger.exception("delete_tpu failed for %s", j)
             if len(pending) == 0:
