@@ -1,0 +1,27 @@
+dataset_name: main
+dataset_path: openai/gsm8k
+doc_to_target: '{{answer.split(''####'')[-1].strip() if answer is defined else target}}'
+doc_to_text:  'Solve the following math problem step by step. Put your answer inside \\boxed{}.
+ {{question}}
+ Remember to put your answer inside \\boxed{}'
+process_results: !function utils.process_gsm8k_results
+metric_list:
+  - metric: boxed_parse
+    aggregation: mean
+    higher_is_better: true
+
+generation_kwargs:
+  do_sample: true
+  until:
+  - 'Q:'
+  - </s>
+  - <|im_end|>
+tag:
+- chain_of_thought
+metadata:
+  version: 3.0
+num_fewshot: 0
+output_type: generate_until
+repeats: 1
+task: gsm8k_boxed
+test_split: test

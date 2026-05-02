@@ -1,7 +1,8 @@
-from src.data.config import DataConfig, RLBatch, Sample
-from src.data.dataloader import DataLoader
-from src.data.utils import filter_rejection_sampled_data, load_jsonl_from_gcs
-from src.data.verifier import Verifier, VerifierInput
+from .config import DataConfig, RLBatch, Sample
+from .dataloader import DataLoader
+from .math_utils import grade_answer_verl
+from .utils import filter_rejection_sampled_data, load_jsonl_from_gcs
+from .verifier import Verifier, VerifierInput
 
 __all__ = [
     "DataConfig",
@@ -12,4 +13,5 @@ __all__ = [
     "Verifier",
     "VerifierInput",
     "filter_rejection_sampled_data",
+    "grade_answer_verl",
 ]

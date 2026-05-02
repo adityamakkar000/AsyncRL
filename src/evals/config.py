@@ -22,7 +22,5 @@ class evalConfig:
     top_p: float = 1.0
     max_tokens: int = 8192
     debug: bool = False
-    epochs: int = 4
-
-    max_connections: int = 100
-    max_tasks: int = 5
+    epochs: int = 2
+    max_concurrent_requests: int = 500

@@ -19,7 +19,7 @@ from src.data import DataLoader, RLBatch
 from src.inference_engine import InferenceEngine
 from src.model import Model
 
-from .config import AnnealedLoss, TrainerConfig
+from .config import TrainerConfig
 from .loss import get_single_step
 from .utils import Key, setup, write_to_gcs
 
@@ -162,7 +162,10 @@ class Trainer:
                 writer_kwargs["config"] = OmegaConf.to_object(self.config)
 
             writer = stax.WandBWriter(
-                entity=os.getenv("WANDB_ENTITY", ""), project=writer_config.project, **writer_kwargs
+                name=self.config.experiment_name,
+                entity=os.getenv("WANDB_ENTITY", ""),
+                project=writer_config.project,
+                **writer_kwargs,
             )
         else:
             writer = stax.TextWriter(metrics_to_print=self.config.metrics_to_log)
@@ -511,7 +514,7 @@ class Trainer:
             self.params, self.opt_state = out["params"], out["opt_state"]
             metrics = out["metrics"] | metrics_all_reduce(generations.metrics) | metrics_all_reduce(train_data_metrics)
             ap = samples[0].annealing_percentage
-            metrics |= {f"train/annealing_percentage": float(ap) if ap is not None else 0.0}
+            metrics |= {"train/annealing_percentage": float(ap) if ap is not None else 0.0}
 
             if self.global_step % self.config.val_interval == 0:
                 val_samples = self.val_dataset(self.val_n_prompts, self.global_step)

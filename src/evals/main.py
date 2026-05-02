@@ -1,21 +1,20 @@
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
 
 import gcsfs
+import lm_eval
 from dotenv import load_dotenv
+from lm_eval.loggers import WandbLogger
+from lm_eval.tasks import TaskManager, get_task_dict
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
-from stax import TextWriter, WandBWriter
 
-from src.constants import GS_BUCKET, HF_CHECKPOINT_PATH
-from src.data import Sample, Verifier, VerifierInput
+from src.constants import GS_BUCKET, HF_CHECKPOINT_PATH, SERVED_MODEL_NAME
 from src.model import Model
 from src.vllm_engine.main import vLLMEngine
 
 from .config import evalConfig
-from .utils import fetch_eval_samples
+from .eval_model import LocalModelEval
 
 load_dotenv()
 
@@ -25,10 +24,9 @@ class EvalRunner:
         self.config = config
         self.vllm_config = config.vllm_config
         self.model_config = config.model_config
-        self.verifier = Verifier()
 
         self.check_config()
-        self.vllm_engine = vLLMEngine(self.vllm_config, self.config.max_connections, debug=config.debug)
+        self.vllm_engine = vLLMEngine(self.vllm_config, max_workers=100, debug=config.debug)
 
     def check_config(self):
         if self.model_config.use_best_ckpt and self.model_config.step_number is not None:
@@ -58,80 +56,64 @@ class EvalRunner:
 
         model.save_hf(HF_CHECKPOINT_PATH, params)
         logger.info("Model saved to HF weights.")
-
-        if writer_config := self.train_config.wandb_config:
-            if metadata["writer_id"] is None:
-                raise ValueError("Writer ID is None in metadata, cannot initialize WandBWriter.")
-            self.writer = WandBWriter(
-                entity=os.getenv("WANDB_ENTITY", ""),
-                project=writer_config.project,
-                metrics_to_print=dict(),
-                run_id=metadata["writer_id"],
-            )
-
-        else:
-            self.writer = TextWriter(metrics_to_print=dict())
-
         logger.info(f"Model setup complete with step number {self.step_number} and metadata {metadata}.")
 
     def launch_vllm(self):
         self.vllm_engine.launch_vllm(HF_CHECKPOINT_PATH)
 
-    def run_task(self, task: str) -> dict[str, float]:
-        task_samples: list[Sample] = fetch_eval_samples(task)
-        outputs = self.vllm_engine.generate_completions(
-            prompts=[sample.prompt for sample in task_samples],
-            max_sequence_len=self.config.max_tokens,
-            pass_at=self.config.epochs,
-            temperature=self.config.temperature,
-            top_p=self.config.top_p,
+    def run_evals(self):
+        wandb_logger = WandbLogger(
+            init_args={
+                "project": "eval_debug",
+                "name": f"eval-{self.model_config.model_name}-step-{self.step_number}",
+                "tags": [self.model_config.model_name, f"step_{self.step_number}"] + [t for t in self.config.tasks],
+                "entity": os.getenv("WANDB_ENTITY", ""),
+            },
+            config_args=OmegaConf.to_object(self.config),
         )
 
-        prompt_to_answer = {sample.prompt: sample.answer for sample in task_samples}
+        model_args = {
+            "model": SERVED_MODEL_NAME,
+            "tokenizer": HF_CHECKPOINT_PATH,
+            "num_concurrent": self.config.max_concurrent_requests,
+        }
 
-        def flatten_2d_list(lst: list[list[Any]]) -> list[float]:
-            return [item for sublist in lst for item in sublist]
+        gen_kwargs = {
+            "temperature": self.config.temperature,
+            "top_p": self.config.top_p,
+            "max_tokens": self.config.max_tokens,
+            "do_sample": True,
+        }
 
-        rewards = flatten_2d_list(
-            [
-                [self.verifier(VerifierInput(completion, prompt_to_answer[prompt])) for completion in rollouts]
-                for prompt, rollouts in zip(outputs.prompts, outputs.completions)
-            ]
+        task_manager = TaskManager(include_path="./src/configs/eval/tasks_yaml/")
+        tasks = list(get_task_dict(list(self.config.tasks), task_manager).values())
+        for task in tasks:
+            task.set_config(key="repeats", value=self.config.epochs)
+
+        results = lm_eval.simple_evaluate(
+            model=LocalModelEval(**model_args),
+            apply_chat_template=True,
+            num_fewshot=0,
+            gen_kwargs=gen_kwargs,
+            tasks=tasks,
+            task_manager=task_manager,
+            log_samples=True,
         )
-        valid_rewards = [r for r in rewards if r is not None]
-        avg_reward = sum(valid_rewards) / len(valid_rewards) if valid_rewards else 0
+        logger.info(f"{lm_eval.utils.make_table(results)}")
 
-        return {"average": avg_reward}
-
-    def process_results(self, results: dict[str, dict[str, float]]):
-        logger.info("Evaluation results:")
-
-        self.writer.log_eval_results(
-            self.step_number,
-            results,
-        )
-
-        for task, metrics in results.items():
-            logger.info(f"Task:\t{task}")
-            for metric, value in metrics.items():
-                logger.info(f"\t\t{metric}: {value:.4f}")
-
-    def launch_eval(self):
-        eval_results = dict()
-
-        with ThreadPoolExecutor(max_workers=self.config.max_connections) as executor:
-            futures = {executor.submit(self.run_task, task): task for task in self.config.tasks}
-            for future in as_completed(futures):
-                task = futures[future]
-                eval_results[task] = future.result()
-
-        self.process_results(eval_results)
+        wandb_logger.post_init(results)
+        wandb_logger.log_eval_result()
+        if results.get("samples"):
+            wandb_logger.log_eval_samples(results["samples"])
+        wandb_logger.run.finish()
 
     def cleanup(self):
         self.vllm_engine.cleanup()
-        self.writer.finish()
 
     def run_evaluation(self):
         self.setup_model()
-        self.launch_vllm()
-        self.launch_eval()
+        # self.launch_vllm()
+        try:
+            self.run_evals()
+        finally:
+            self.cleanup()
