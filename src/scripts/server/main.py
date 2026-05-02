@@ -74,7 +74,8 @@ class Server:
                     else:
                         logger.info("failed to delete job %s, must send DELETE request again", j)
                     with self.delete_lock:
-                        if j in self.delete_queue: self.delete_queue.remove(j)
+                        if j in self.delete_queue:
+                            self.delete_queue.remove(j)
                 except Exception:
                     logger.exception("delete_tpu failed for %s", j)
             if len(pending) == 0:
