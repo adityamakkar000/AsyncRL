@@ -13,7 +13,6 @@ import requests
 
 from .main import Runtime, TPUType, Zone
 
-# assuming TPU_SERVER_URL is set in the environment
 TPU_SERVER_URL = os.getenv("TPU_SERVER_URL", None)
 
 

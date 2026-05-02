@@ -146,7 +146,6 @@ source = { virtual = "." }
 dependencies = [
     { name = "datasets" },
     { name = "einops" },
-    { name = "fastapi" },
     { name = "gcsfs" },
     { name = "hydra-core" },
     { name = "jax", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, extra = ["tpu"], marker = "sys_platform == 'linux'" },
@@ -159,7 +158,6 @@ dependencies = [
     { name = "pylatexenc" },
     { name = "pytest" },
     { name = "python-dotenv" },
-    { name = "requests" },
     { name = "rich" },
     { name = "ruff" },
     { name = "stax" },
@@ -169,7 +167,6 @@ dependencies = [
     { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "transformers", version = "4.57.6", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "transformers", version = "5.7.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
-    { name = "uvicorn" },
     { name = "wandb" },
 ]
 
@@ -193,7 +190,6 @@ requires-dist = [
     { name = "datasets", specifier = ">=4.5.0" },
     { name = "datasets", marker = "extra == 'data'", specifier = ">=4.4.2" },
     { name = "einops", specifier = ">=0.8.1" },
-    { name = "fastapi", specifier = ">=0.135.3" },
     { name = "gcsfs", specifier = ">=2024.6.0" },
     { name = "gcsfs", marker = "extra == 'data'", specifier = ">=2025.3.0" },
     { name = "hydra-core", specifier = "==1.3.2" },
@@ -212,16 +208,14 @@ requires-dist = [
     { name = "pylatexenc", specifier = ">=2.10" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
-    { name = "requests", specifier = ">=2.33.1" },
     { name = "rich", specifier = "<14.0.0" },
     { name = "ruff", specifier = ">=0.14.10" },
-    { name = "stax", git = "https://github.com/adityamakkar000/stax.git" },
-    { name = "tensorboard", specifier = ">=2.20.0" },
-    { name = "tensorboard-plugin-profile", specifier = ">=2.21.6" },
+    { name = "stax" },
+    { name = "tensorboard", specifier = "==2.20.0" },
+    { name = "tensorboard-plugin-profile", specifier = "==2.21.6" },
     { name = "tfds-nightly", marker = "extra == 'data'", specifier = ">=4.9.9.dev202510250044" },
     { name = "torch", specifier = ">=2.9.0" },
     { name = "transformers", specifier = ">=4.57.3" },
-    { name = "uvicorn", specifier = ">=0.44.0" },
     { name = "vllm-tpu", marker = "sys_platform == 'linux' and extra == 'eval'", specifier = "==0.12.0" },
     { name = "wandb", specifier = "==0.25.0" },
 ]
@@ -750,19 +744,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dataclasses-json"
-version = "0.6.7"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "marshmallow", marker = "sys_platform != 'linux'" },
-    { name = "typing-inspect", marker = "sys_platform != 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/64/a4/f71d9cf3a5ac257c993b5ca3f93df5f7fb395c725e7f1e6479d2514173c3/dataclasses_json-0.6.7.tar.gz", hash = "sha256:b6b3e528266ea45b9535223bc53ca645f5208833c29229e847b3f26a1cc55fc0", size = 32227, upload-time = "2024-06-09T16:20:19.103Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c3/be/d0d44e092656fe7a06b55e6103cbce807cdbdee17884a5367c68c9860853/dataclasses_json-0.6.7-py3-none-any.whl", hash = "sha256:0dbf33f26c8d5305befd61b39d2b3414e8a407bedc2834dea9b8d642666fb40a", size = 28686, upload-time = "2024-06-09T16:20:16.715Z" },
-]
-
-[[package]]
 name = "dataproperty"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1010,12 +991,11 @@ name = "fastapi"
 version = "0.136.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "annotated-doc" },
-    { name = "pydantic" },
+    { name = "annotated-doc", marker = "sys_platform == 'linux'" },
+    { name = "pydantic", marker = "sys_platform == 'linux'" },
     { name = "starlette", version = "0.52.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
-    { name = "starlette", version = "1.0.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
-    { name = "typing-extensions" },
-    { name = "typing-inspection" },
+    { name = "typing-extensions", marker = "sys_platform == 'linux'" },
+    { name = "typing-inspection", marker = "sys_platform == 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5d/45/c130091c2dfa061bbfe3150f2a5091ef1adf149f2a8d2ae769ecaf6e99a2/fastapi-0.136.1.tar.gz", hash = "sha256:7af665ad7acfa0a3baf8983d393b6b471b9da10ede59c60045f49fbc89a0fa7f", size = 397448, upload-time = "2026-04-23T16:49:44.046Z" }
 wheels = [
@@ -1126,9 +1106,6 @@ wheels = [
 name = "flax"
 version = "0.11.1"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'linux'",
-]
 dependencies = [
     { name = "jax", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "msgpack", marker = "sys_platform == 'linux'" },
@@ -1144,33 +1121,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/2e/72/91c74452bb9c7866173dda1b44af48f6c7720f348e100e8bcb5d251b70ef/flax-0.11.1.tar.gz", hash = "sha256:a4aebfc581a9b488691cd80495c50b5cc74ba0f50af949387d1c0f36e229e713", size = 5175176, upload-time = "2025-08-08T21:26:09.468Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8a/0b/6b46d04a251f8a8b430bfd79b02a071bcd37b5dfa8321a7ad5db47dcd103/flax-0.11.1-py3-none-any.whl", hash = "sha256:b29a46564193be437c88babb5e479b5c258fc7c54f005bc3051f05fc82e0ab83", size = 456224, upload-time = "2025-08-08T21:26:07.83Z" },
-]
-
-[[package]]
-name = "flax"
-version = "0.12.6"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "sys_platform == 'win32'",
-    "sys_platform == 'emscripten'",
-    "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
-]
-dependencies = [
-    { name = "jax", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
-    { name = "msgpack", marker = "sys_platform != 'linux'" },
-    { name = "numpy", marker = "sys_platform != 'linux'" },
-    { name = "optax", marker = "sys_platform != 'linux'" },
-    { name = "orbax-checkpoint", marker = "sys_platform != 'linux'" },
-    { name = "orbax-export", marker = "sys_platform != 'linux'" },
-    { name = "pyyaml", marker = "sys_platform != 'linux'" },
-    { name = "rich", marker = "sys_platform != 'linux'" },
-    { name = "tensorstore", marker = "sys_platform != 'linux'" },
-    { name = "treescope", marker = "sys_platform != 'linux'" },
-    { name = "typing-extensions", marker = "sys_platform != 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/9a/40/d9707f22377d34dc9eaa5df67e51db4d667db9538b0f2c60c0921bc86473/flax-0.12.6.tar.gz", hash = "sha256:309a5fdfac8fe9cc03260c122a2cab6881bc366cd2d928aedb80ddffbfb202e4", size = 5077551, upload-time = "2026-03-20T21:10:22.661Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/32/0d/aa360056c4dbb263339aa4d315c45b2c7046ef95f7b2f55732eed396a63f/flax-0.12.6-py3-none-any.whl", hash = "sha256:c16e7ea1daa96153b6cc91e1e8274fa7cdb36c80180038b7e8ddb9b4e93c80f1", size = 516706, upload-time = "2026-03-20T21:10:20.683Z" },
 ]
 
 [[package]]
@@ -2389,10 +2339,6 @@ wheels = [
 name = "loguru"
 version = "0.7.3"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-    { name = "win32-setctime", marker = "sys_platform == 'win32'" },
-]
 sdist = { url = "https://files.pythonhosted.org/packages/3a/05/a1dae3dffd1116099471c643b8924f5aa6524411dc6c63fdae648c4f1aca/loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", size = 63559, upload-time = "2024-12-06T11:20:56.608Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0c/29/0348de65b8cc732daa3e33e67806420b2ae89bdce2b04af740289c5c6c8c/loguru-0.7.3-py3-none-any.whl", hash = "sha256:31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c", size = 61595, upload-time = "2024-12-06T11:20:54.538Z" },
@@ -2474,18 +2420,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0f/62/d9c46a7f5c9adbeeeda52f5b8d802e1094e9717705a645efc71b0913a0a8/markupsafe-3.0.3-cp311-cp311-win32.whl", hash = "sha256:0db14f5dafddbb6d9208827849fad01f1a2609380add406671a26386cdf15a19", size = 14572, upload-time = "2025-09-27T18:36:28.045Z" },
     { url = "https://files.pythonhosted.org/packages/83/8a/4414c03d3f891739326e1783338e48fb49781cc915b2e0ee052aa490d586/markupsafe-3.0.3-cp311-cp311-win_amd64.whl", hash = "sha256:de8a88e63464af587c950061a5e6a67d3632e36df62b986892331d4620a35c01", size = 15077, upload-time = "2025-09-27T18:36:29.025Z" },
     { url = "https://files.pythonhosted.org/packages/35/73/893072b42e6862f319b5207adc9ae06070f095b358655f077f69a35601f0/markupsafe-3.0.3-cp311-cp311-win_arm64.whl", hash = "sha256:3b562dd9e9ea93f13d53989d23a7e775fdfd1066c33494ff43f5418bc8c58a5c", size = 13876, upload-time = "2025-09-27T18:36:29.954Z" },
-]
-
-[[package]]
-name = "marshmallow"
-version = "3.26.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "packaging", marker = "sys_platform != 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/55/79/de6c16cc902f4fc372236926b0ce2ab7845268dcc30fb2fbb7f71b418631/marshmallow-3.26.2.tar.gz", hash = "sha256:bbe2adb5a03e6e3571b573f42527c6fe926e17467833660bebd11593ab8dfd57", size = 222095, upload-time = "2025-12-22T06:53:53.309Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/2f/5108cb3ee4ba6501748c4908b908e55f42a5b66245b4cfe0c99326e1ef6e/marshmallow-3.26.2-py3-none-any.whl", hash = "sha256:013fa8a3c4c276c24d26d84ce934dc964e2aa794345a0f8c7e5a7191482c8a73", size = 50964, upload-time = "2025-12-22T06:53:51.801Z" },
 ]
 
 [[package]]
@@ -2768,15 +2702,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e3/45/8004d1e6b9185c1a444d6b55ac5682acf9d98035e54386d967366035a03a/multiprocess-0.70.19-py310-none-any.whl", hash = "sha256:97404393419dcb2a8385910864eedf47a3cadf82c66345b44f036420eb0b5d87", size = 134948, upload-time = "2026-01-19T06:47:32.325Z" },
     { url = "https://files.pythonhosted.org/packages/86/c2/dec9722dc3474c164a0b6bcd9a7ed7da542c98af8cabce05374abab35edd/multiprocess-0.70.19-py311-none-any.whl", hash = "sha256:928851ae7973aea4ce0eaf330bbdafb2e01398a91518d5c8818802845564f45c", size = 144457, upload-time = "2026-01-19T06:47:33.711Z" },
     { url = "https://files.pythonhosted.org/packages/7e/82/69e539c4c2027f1e1697e09aaa2449243085a0edf81ae2c6341e84d769b6/multiprocess-0.70.19-py39-none-any.whl", hash = "sha256:0d4b4397ed669d371c81dcd1ef33fd384a44d6c3de1bd0ca7ac06d837720d3c5", size = 133477, upload-time = "2026-01-19T06:47:38.619Z" },
-]
-
-[[package]]
-name = "mypy-extensions"
-version = "1.1.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a2/6e/371856a3fb9d31ca8dac321cda606860fa4548858c0cc45d9d1d4ca2628b/mypy_extensions-1.1.0.tar.gz", hash = "sha256:52e68efc3284861e772bbcd66823fde5ae21fd2fdb51c62a211403730b916558", size = 6343, upload-time = "2025-04-22T14:54:24.164Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl", hash = "sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505", size = 4963, upload-time = "2025-04-22T14:54:22.983Z" },
 ]
 
 [[package]]
@@ -3337,15 +3262,6 @@ wheels = [
 ]
 
 [[package]]
-name = "orbax"
-version = "0.1.9"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "orbax-checkpoint" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c7/78/0e144f12703c95d4495e9abc390c2f548ee9f24d2e487137108a921b1d81/orbax-0.1.9.tar.gz", hash = "sha256:42dd487ceef9fbf027f4720f3d041686af75120466a528a8a8141226bc197218", size = 1649, upload-time = "2023-09-06T20:43:02.819Z" }
-
-[[package]]
 name = "orbax-checkpoint"
 version = "0.11.37"
 source = { registry = "https://pypi.org/simple" }
@@ -3371,26 +3287,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/14/35/990671ba4dc16e57fc7fec4c0edc70fbabcf44b9056ee443eaf5ef68d9be/orbax_checkpoint-0.11.37.tar.gz", hash = "sha256:50f9a11830b2575d5a2291e7e67e3156ba2c249dcf0533140a7b7b6adc173c34", size = 619522, upload-time = "2026-05-01T17:36:40.214Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/27/a7/b2d70d16b7aa13354f2042b639a422e886c943858014af18c42e2044cabe/orbax_checkpoint-0.11.37-py3-none-any.whl", hash = "sha256:35d8b450b17e33ea6bd2b213f672ebabc425bda877d980a2408ed448618b6e28", size = 1175122, upload-time = "2026-05-01T17:36:38.093Z" },
-]
-
-[[package]]
-name = "orbax-export"
-version = "0.0.8"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "absl-py", marker = "sys_platform != 'linux'" },
-    { name = "dataclasses-json", marker = "sys_platform != 'linux'" },
-    { name = "etils", marker = "sys_platform != 'linux'" },
-    { name = "jax", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
-    { name = "jaxlib", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
-    { name = "jaxtyping", marker = "sys_platform != 'linux'" },
-    { name = "numpy", marker = "sys_platform != 'linux'" },
-    { name = "orbax-checkpoint", marker = "sys_platform != 'linux'" },
-    { name = "protobuf", marker = "sys_platform != 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/1c/c8/ed7ac3c3c687bf129d7469b016c2b3d8777379f4ea453474e50ee41ce5cb/orbax_export-0.0.8.tar.gz", hash = "sha256:544eef564e2a6f17cd11b1167febe348b7b7cf56d9575de994a33d5613dd568a", size = 124980, upload-time = "2025-09-17T15:41:14.264Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7f/a9/3a755a58c8b6a36fe7e9e66bb6b93967ff49cdbc77cca8eacb2cf66435e9/orbax_export-0.0.8-py3-none-any.whl", hash = "sha256:f8037e1666ad28411cdb08d0668a2737b1281a32902c623ceda12109a089bc36", size = 180487, upload-time = "2025-09-17T15:41:12.928Z" },
 ]
 
 [[package]]
@@ -4133,7 +4029,7 @@ name = "qwix"
 version = "0.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "flax", version = "0.11.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
+    { name = "flax", marker = "sys_platform == 'linux'" },
     { name = "jax", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "jaxlib", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
 ]
@@ -4831,20 +4727,16 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git#03cd2fa02808253f99286815a7dc6547c7df0396" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "flax", version = "0.11.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
-    { name = "flax", version = "0.12.6", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
-    { name = "jax", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
-    { name = "jax", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
-    { name = "jaxtyping" },
-    { name = "loguru" },
-    { name = "orbax" },
-    { name = "pre-commit" },
-    { name = "ruff" },
-    { name = "tensorboard" },
-    { name = "tensorboard-plugin-profile" },
-    { name = "wandb" },
+    { name = "boto3" },
+    { name = "click" },
+    { name = "gitpython" },
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cf/52/7a375548f4c3f2e916ce880d80dc694d9b9976f60c6b639a3a6a5f9cdd42/stax-0.1.0.tar.gz", hash = "sha256:bdbb4e6e07834c08dc54f9f665ddb96fe912dde40ddb0887ba91191dd29f6bb4", size = 9409, upload-time = "2020-03-03T06:54:55.805Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/26/01/60193d861bef0b80b84ab44d504b14186c8dea62e8be4a1fa8c8ea58ffc5/stax-0.1.0-py3-none-any.whl", hash = "sha256:0c907494db0af050fa63067835361eeb53a18466a7bef20abd7ea89954d4024c", size = 11906, upload-time = "2020-03-03T06:54:53.389Z" },
 ]
 
 [[package]]
@@ -4941,14 +4833,13 @@ wheels = [
 
 [[package]]
 name = "tensorboard-plugin-profile"
-version = "2.22.2"
+version = "2.21.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "xprof" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4e/5c/a232904fa49045b68d2950f9600d0f311953ebab0c2bf23ecf6cd69f11ba/tensorboard_plugin_profile-2.22.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:195fac1df09299e83e7906d52a9395e0e5f509a109ee451586a497b383d7298a", size = 6237, upload-time = "2026-04-13T19:17:03.18Z" },
-    { url = "https://files.pythonhosted.org/packages/70/7c/9dd48b530abc1e16e09d21c873bc3f8dcf5bf8e4a4189b5f2cd4dda030bc/tensorboard_plugin_profile-2.22.2-py3-none-win_amd64.whl", hash = "sha256:1a3860516a90de0616e6440b73cdd844d35b1207a4e482e0d669f30a1639655d", size = 6295, upload-time = "2026-04-13T20:38:04.453Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/1c/0f550adebb6365a5a380ab20acd2e2a39176c50bd9576be52022d5cce46c/tensorboard_plugin_profile-2.21.6-cp311-none-any.whl", hash = "sha256:fb91ae8c0b84989befa10d8d42880540e66ce9d3885cbc0d4de7650d95535dfc", size = 5791, upload-time = "2026-02-09T09:58:15.507Z" },
 ]
 
 [[package]]
@@ -5228,7 +5119,7 @@ version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py", marker = "sys_platform == 'linux'" },
-    { name = "flax", version = "0.11.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
+    { name = "flax", marker = "sys_platform == 'linux'" },
     { name = "google-cloud-storage", marker = "sys_platform == 'linux'" },
     { name = "jax", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, extra = ["tpu"], marker = "sys_platform == 'linux'" },
     { name = "jaxlib", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
@@ -5339,7 +5230,7 @@ name = "treescope"
 version = "0.1.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy" },
+    { name = "numpy", marker = "sys_platform == 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f0/2a/d13d3c38862632742d2fe2f7ae307c431db06538fd05ca03020d207b5dcc/treescope-0.1.10.tar.gz", hash = "sha256:20f74656f34ab2d8716715013e8163a0da79bdc2554c16d5023172c50d27ea95", size = 138870, upload-time = "2025-08-08T05:43:48.048Z" }
 wheels = [
@@ -5398,19 +5289,6 @@ wheels = [
 ]
 
 [[package]]
-name = "typing-inspect"
-version = "0.9.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "mypy-extensions", marker = "sys_platform != 'linux'" },
-    { name = "typing-extensions", marker = "sys_platform != 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/dc/74/1789779d91f1961fa9438e9a8710cdae6bd138c80d7303996933d117264a/typing_inspect-0.9.0.tar.gz", hash = "sha256:b23fc42ff6f6ef6954e4852c1fb512cdd18dbea03134f91f856a95ccc9461f78", size = 13825, upload-time = "2023-05-24T20:25:47.612Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/65/f3/107a22063bf27bdccf2024833d3445f4eea42b2e598abfbd46f6a63b6cb0/typing_inspect-0.9.0-py3-none-any.whl", hash = "sha256:9ee6fc59062311ef8547596ab6b955e1b8aa46242d854bfc78f4f6b0eff35f9f", size = 8827, upload-time = "2023-05-24T20:25:45.287Z" },
-]
-
-[[package]]
 name = "typing-inspection"
 version = "0.4.2"
 source = { registry = "https://pypi.org/simple" }
@@ -5463,8 +5341,8 @@ name = "uvicorn"
 version = "0.46.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click" },
-    { name = "h11" },
+    { name = "click", marker = "sys_platform != 'emscripten'" },
+    { name = "h11", marker = "sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1f/93/041fca8274050e40e6791f267d82e0e2e27dd165627bd640d3e0e378d877/uvicorn-0.46.0.tar.gz", hash = "sha256:fb9da0926999cc6cb22dc7cd71a94a632f078e6ae47ff683c5c420750fb7413d", size = 88758, upload-time = "2026-04-23T07:16:00.151Z" }
 wheels = [
@@ -5727,15 +5605,6 @@ wheels = [
 ]
 
 [[package]]
-name = "win32-setctime"
-version = "1.2.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b3/8f/705086c9d734d3b663af0e9bb3d4de6578d08f46b1b101c2442fd9aecaa2/win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0", size = 4867, upload-time = "2024-12-07T15:28:28.314Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390", size = 4083, upload-time = "2024-12-07T15:28:26.465Z" },
-]
-
-[[package]]
 name = "word2number"
 version = "1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -5781,7 +5650,7 @@ wheels = [
 
 [[package]]
 name = "xprof"
-version = "2.22.2"
+version = "2.21.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cheroot" },
@@ -5796,10 +5665,9 @@ dependencies = [
     { name = "werkzeug" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/63/d922ed4f40b84fda96bbde4da7982225ebd1650f4995417ef85c3c7c9466/xprof-2.22.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:01ee8a2ba26c5f360f0949c88f5adc3f4cba779531d2372fdd51b2edadb706a7", size = 36278544, upload-time = "2026-04-13T19:17:00.577Z" },
-    { url = "https://files.pythonhosted.org/packages/5d/86/856ad67cc0edaca78f9e5ddf234bc77f2010437c80e8bcb9077c560c9e27/xprof-2.22.2-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:da5d611a44d7077ea4a91ad930f586053768fd77b19c368fb56e3e6f6e7c18eb", size = 24840886, upload-time = "2026-04-13T19:07:11.526Z" },
-    { url = "https://files.pythonhosted.org/packages/4f/fb/1da7ad2d5a412e8304bd0143b6c28d58db943b984ec0dec21131bee0712f/xprof-2.22.2-py3-none-manylinux_2_35_aarch64.whl", hash = "sha256:2cc2663c4db8c6deafa92ef4b0d0478fa27694401105b6e2a62c0a0d5ab7e995", size = 42125584, upload-time = "2026-04-13T19:08:34.153Z" },
-    { url = "https://files.pythonhosted.org/packages/bf/bc/4d07ada8e98be6688f76adfd69a93451a31c69840fcf63d946cea7f94b7b/xprof-2.22.2-py3-none-win_amd64.whl", hash = "sha256:7595c94f3f84d34e8f3983093b6a0b0ebffbe972afac6bf2127f0e59fd3d0d11", size = 21840407, upload-time = "2026-04-13T20:38:02.118Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/40/c63173557a4ee32205dba0019fe4463cc13da43b5035c454a5d4716ff89a/xprof-2.21.6-cp311-none-any.whl", hash = "sha256:f28aff36688e247dac1960002b50664835d0e5591166d2fd376dbfd4e6f6c528", size = 19204782, upload-time = "2026-02-09T10:10:45.683Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/41/edc46056dd6e25fd8d1042c9f543228d5920dee1aca482d883b2ef7d3b97/xprof-2.21.6-cp311-none-manylinux_2_27_x86_64.whl", hash = "sha256:80a5e69ed2217124a35be111742e7379a85e5c4a9dce4837166527655bfdfdc9", size = 22731161, upload-time = "2026-02-09T09:58:13.106Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/a5/c80bf771bce071cf112fbbb37cf737caa6789d74d95a02fd569599cbb98d/xprof-2.21.6-cp311-none-manylinux_2_35_aarch64.whl", hash = "sha256:58b4873d5a373f9d88d11e7151d381329b25626e0a60c6f11e66ab61076db30e", size = 23661498, upload-time = "2026-02-24T22:48:27.629Z" },
 ]
 
 [[package]]
