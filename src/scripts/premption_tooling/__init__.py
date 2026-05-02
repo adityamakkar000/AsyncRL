@@ -1,4 +1,4 @@
-from .launch_utils import JOB_TYPE, Cross, LaunchJob, Vals, Zip, launch
+from .launch_utils import LAUNCH_JOB, Cross, Vals, Zip, launch
 from .main import Runtime, TPUType, Zone
 
-__all__ = ["LaunchJob", "Cross", "Vals", "Zip", "launch", "Runtime", "TPUType", "Zone", "JOB_TYPE"]
+__all__ = ["LAUNCH_JOB", "Cross", "Vals", "Zip", "launch", "Runtime", "TPUType", "Zone"]

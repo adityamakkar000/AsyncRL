@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import itertools
+import os
 import random
+import subprocess
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any
 
-from .main import Runtime, TPUJob, TPUType, Zone, run_session
+import requests
+
+from .main import Runtime, TPUType, Zone
+
+# assuming TPU_SERVER_URL is set in the environment
+TPU_SERVER_URL = os.getenv("TPU_SERVER_URL", None)
 
 
 @dataclass
@@ -66,95 +72,89 @@ class Zip:
         return combos
 
 
-class JOB_TYPE(str, Enum):
-    TRAIN = "src.train"
-    EVAL = "src.eval"
-
-
 @dataclass
-class LaunchJob:
-    run: Cross | Zip | Vals
-    job_type: JOB_TYPE
-    experiment_prefix: str
-    fixed_overrides: dict[str, Any]
-    base_config: str
-    zone: Zone
-    tpu_type: TPUType
-    runtime: Runtime
-    retries: int = 3
+class LAUNCH_JOB:
+    RUN: Cross | Zip | Vals
+    EXPERIMENT_PREFIX: str
+    FIXED_OVERRIDES: dict[str, Any]
+    BASE_CONFIG: str
+    ZONE: Zone
+    TPU_TYPE: TPUType
+    RUNTIME: Runtime
+    RETRIES: int = 3
 
 
-def make_combos(run: Cross | Zip | Vals) -> list[dict[str, Any]]:
-    return run.expand()
+def make_combos(RUN: Cross | Zip | Vals) -> list[dict[str, Any]]:
+    return RUN.expand()
 
 
-def make_name(combo: dict[str, Any], experiment_prefix: str) -> str:
-    parts = [experiment_prefix]
+def make_name(combo: dict[str, Any], EXPERIMENT_PREFIX: str) -> str:
+    parts = [EXPERIMENT_PREFIX]
     for path, val in combo.items():
         short = path.split(".")[-1][:10]
         parts.append(f"{short}{val:g}" if isinstance(val, float) else f"{short}{val}")
     return "_".join(parts)
 
 
-def mesh_cmd(
-    cluster: str, combo: dict[str, Any], experiment_prefix: str, fixed_overrides: dict[str, Any], base_config: str
-) -> list[str]:
-    name = make_name(combo, experiment_prefix)
-    overrides = {**fixed_overrides, **combo}
-    inner_parts = [
-        "python",
-        "-m",
-        "src.train",
-        f"--config-name={base_config}",
-        f"experiment_name={name}",
-    ]
-    for k, v in overrides.items():
-        inner_parts.append(f"{k}={v}")
-    inner_cmd = " ".join(inner_parts)
-    cmd = [
-        "mesh",
-        "run",
-        cluster,
-        inner_cmd,
-    ]
-    return cmd
+def run_tpu_jobs(
+    combos: list[dict[str, Any]],
+    EXPERIMENT_PREFIX: str,
+    FIXED_OVERRIDES: dict[str, Any],
+    BASE_CONFIG: str,
+    ZONE: Zone,
+    TPU_TYPE: TPUType,
+    RUNTIME: Runtime,
+    RETRIES: int,
+):
+    NODE_COUNTER = 0
 
+    for combo in combos:
+        NODE_COUNTER += 1
+        rng_combo = random.randint(0, 1000000)
 
-def return_tpu_jobs(
-    job: LaunchJob,
-) -> list[TPUJob]:
-    node_counter = 0
-
-    jobs = []
-    for combo in make_combos(job.run):
-        node_counter += 1
-        rng_combo = random.randint(0, 100000)
-
-        name = make_name(combo, job.experiment_prefix)
-        overrides = {**job.fixed_overrides, **combo}
+        name = make_name(combo, EXPERIMENT_PREFIX)
+        overrides = {**FIXED_OVERRIDES, **combo}
         inner_parts = [
             "python",
             "-m",
-            job.job_type.value,
-            f"--config-name={job.base_config}",
+            "src.train",
+            f"--config-name={BASE_CONFIG}",
             f"experiment_name={name}",
         ]
         for k, v in overrides.items():
             inner_parts.append(f"{k}={v}")
         inner_cmd = " ".join(inner_parts)
-        job_tpu = TPUJob(
-            node_id=f"node_{node_counter}_{rng_combo}",
-            zone=job.zone,
-            tpu_type=job.tpu_type,
-            runtime=job.runtime,
-            cmd=inner_cmd,
-            retries=job.retries,
-        )
-        jobs.append(job_tpu)
-    return jobs
+
+        # warning: this is hard coded to current project structure
+        copy_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        node_id = f"node_{NODE_COUNTER}_{rng_combo}"
+        # assuming that server is named "server" in cluster.yaml
+        subprocess.run(["mesh", "copy", "server", f"~/{node_id}"], cwd=copy_dir)
+
+        post_args = {
+            "node_id": node_id,
+            "zone": ZONE,
+            "tpu_type": TPU_TYPE,
+            "runtime": RUNTIME,
+            "cmd": inner_cmd,
+            "retries": RETRIES,
+        }
+
+        response = requests.post(f"{TPU_SERVER_URL}/run_job", json=post_args, timeout=30)
+        response.raise_for_status()
+        print(f"Job submitted: {response.json()}")
 
 
-def launch(job: LaunchJob) -> None:
-    tpu_jobs = return_tpu_jobs(job)
-    run_session(tpu_jobs)
-    print("All runs completed.")
+def launch(job: LAUNCH_JOB) -> None:
+    combos = make_combos(job.RUN)
+
+    run_tpu_jobs(
+        combos,
+        job.EXPERIMENT_PREFIX,
+        job.FIXED_OVERRIDES,
+        job.BASE_CONFIG,
+        job.ZONE,
+        job.TPU_TYPE,
+        job.RUNTIME,
+        job.RETRIES,
+    )

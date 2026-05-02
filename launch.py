@@ -1,10 +1,20 @@
-import src.scripts.premption_tooling as tpujob
+import src.scripts.premption_tooling as TPUJOB
+from src.scripts.premption_tooling import Vals, Zip
 
-max_seq_len = [4096, 8192]
-batch_size = [1024, 1024]
-group_size = [8, 16]
+# max_seq_len = [4096, 8192]
+# batch_size = [1024, 1024]
+# group_size = [8, 16]
 
-# run: Cross | Zip | Vals = Cross(
+
+RUN = Zip(
+    [
+        Vals("loss_config.annealing_config.use_annealing", [1]),
+        Vals("loss_config.annealing_config.schedule", ["cosine"]),
+        Vals("loss_config.annealing_config.annealing_steps", [0.15]),
+    ]
+)
+
+# RUN: Cross | Zip | Vals = Cross(
 #     [
 #         Vals("loss_config.inference_config.max_seq_len", max_seq_len),
 #         Zip(
@@ -18,22 +28,20 @@ group_size = [8, 16]
 # )
 
 
-base_config = "debug"
-name = "debug"
-run = tpujob.Cross()
-job_type = tpujob.JOB_TYPE.TRAIN
+BASE_CONFIG = "debug_anneal"
+# RUN = TPUJOB.Cross()
 
-job = tpujob.LaunchJob(
-    run=run,
-    job_type=job_type,
-    experiment_prefix=name,
-    fixed_overrides=dict(),
-    base_config=base_config,
-    zone=tpujob.Zone.US_EAST5_A,
-    tpu_type=tpujob.TPUType.V5P_32,
-    runtime=tpujob.Runtime.V2_ALPHA_TPUV5,
-    retries=5,
+
+job = TPUJOB.LAUNCH_JOB(
+    RUN=RUN,
+    EXPERIMENT_PREFIX="debug",
+    FIXED_OVERRIDES=dict(),
+    BASE_CONFIG=BASE_CONFIG,
+    ZONE=TPUJOB.Zone.US_EAST5_A,
+    TPU_TYPE=TPUJOB.TPUType.V5P_32,
+    RUNTIME=TPUJOB.Runtime.V2_ALPHA_TPUV5,
+    RETRIES=5,
 )
 
 if __name__ == "__main__":
-    tpujob.launch(job)
+    TPUJOB.launch(job)

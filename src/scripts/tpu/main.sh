@@ -1,5 +1,5 @@
-
 # delete a queued TPU resource
+# usage: tpuq_rm <id> [zone]
 tpuq_rm() {
   local ID="$1"
   local ZONE="${2:-$GCLOUD_TPU_ZONE}"
@@ -17,6 +17,7 @@ tpuq_rm() {
 
 
 # list queued TPU resources
+# usage: tpuq_ls [zone]
 tpuq_ls() {
   local ZONE="${1:-$GCLOUD_TPU_ZONE}"
 
@@ -26,6 +27,7 @@ tpuq_ls() {
 }
 
 # create a queued TPU resource
+# usage: tpuq_create <id> <tpu-type> [runtime] [spot] [zone]
 tpuq_create() {
   local ID="$1"
   local TPU_TYPE="$2"
@@ -59,6 +61,7 @@ tpuq_create() {
 }
 
 # describe a queued TPU resource
+# usage: tpuq_describe <id> [zone]
 tpuq_describe() {
   local ID="$1"
   local ZONE="${2:-$GCLOUD_TPU_ZONE}"
@@ -74,6 +77,7 @@ tpuq_describe() {
 }
 
 # list TPU VMs in a zone
+# usage: tpu_ls <zone>
 tpu_ls () {
   if [ -z "$1" ]; then
     echo "usage: tpu_ls <zone>"
@@ -90,14 +94,4 @@ tpu_ls () {
       state,
       networkEndpoints[].accessConfig.externalIp
     )"
-}
-
-tpu_ls_all() {
-  for zone in us-central1-a us-central1-b us-central1-c us-central1-f us-central2-b us-central2-c us-central2-d us-east1-c us-east1-d us-east4-a us-east4-b us-east4-c us-east5-b us-east5-c us-south1-a us-west1-a us-west1-b us-west1-c us-west4-a us-west4-b europe-west4-a europe-west4-b europe-west4-c; do
-    tpus=$(gcloud compute tpus tpu-vm list --zone="$zone" --project="$GCLOUD_TPU_PROJECT" --format="table(name,acceleratorType,state)" 2>/dev/null)
-    if [[ -n "$tpus" && "$tpus" != "Listed 0 items." ]]; then
-      echo "--- Zone: $zone ---"
-      echo "$tpus"
-    fi
-  done
 }

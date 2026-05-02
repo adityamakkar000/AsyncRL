@@ -9,20 +9,27 @@ class Sample:
     prompt: str
     answer: str
     solution: str | None
+    annealing_percentage: float | None  # during training, cannot be none for error check
 
     @classmethod
     def from_dict(cls, data: dict):
         prompt = data.get("prompt")
         answer = data.get("answer")
         solution = data.get("solution")
+        annealing_percentage = None
 
         if prompt is None or answer is None:
             raise ValueError("Prompt and answer are required")
 
-        return cls(prompt=prompt, answer=answer, solution=solution)
+        return cls(prompt=prompt, answer=answer, solution=solution, annealing_percentage=annealing_percentage)
 
     def get_dict(self) -> dict:
-        return {"prompt": self.prompt, "answer": self.answer, "solution": self.solution}
+        return {
+            "prompt": self.prompt,
+            "answer": self.answer,
+            "solution": self.solution,
+            "annealing_percentage": self.annealing_percentage,
+        }
 
 
 @dataclass
