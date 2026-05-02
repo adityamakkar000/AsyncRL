@@ -10,7 +10,7 @@ RUN = Zip(
     [
         Vals("loss_config.annealing_config.use_annealing", [1]),
         Vals("loss_config.annealing_config.schedule", ["cosine"]),
-        Vals("loss_config.annealing_config.annealing_steps", [0.15])
+        Vals("loss_config.annealing_config.annealing_steps", [0.15]),
     ]
 )
 

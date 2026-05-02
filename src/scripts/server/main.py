@@ -75,7 +75,7 @@ class Server:
                 try:
                     if self.delete_job(j):
                         logger.info("deleted job %s", j)
-                    else: 
+                    else:
                         logger.info("failed to delete job %s, must send DELETE request again", j)
                     with self.delete_lock:
                         self.delete_queue.remove(j)
