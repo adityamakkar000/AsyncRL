@@ -79,6 +79,7 @@ class TPUJob:
     process: subprocess.Popen | None = None
     _log_file: object = field(default=None, init=False, repr=False)
     retries: int = 3
+    launched_by: str = ""
     cleanup_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     cleanup_done: bool = field(default=False, init=False, repr=False)
 

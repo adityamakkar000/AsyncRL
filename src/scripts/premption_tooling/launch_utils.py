@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import getpass
 import itertools
 import os
 import random
@@ -145,6 +146,7 @@ def run_tpu_jobs(
             "runtime": RUNTIME,
             "cmd": inner_cmd,
             "retries": RETRIES,
+            "launched_by": getpass.getuser(),
         }
 
         response = requests.post(f"{TPU_SERVER_URL}/run_job", json=post_args, timeout=30)

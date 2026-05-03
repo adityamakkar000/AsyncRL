@@ -29,6 +29,7 @@ class RunJobRequest(BaseModel):
     runtime: Runtime
     cmd: str
     retries: int = 3
+    launched_by: str = ""
 
 
 class JobView(BaseModel):
@@ -40,6 +41,7 @@ class JobView(BaseModel):
     retries_left: int
     tpu_status: str
     job_status: str
+    launched_by: str
 
 
 class Server:
@@ -107,6 +109,7 @@ class Server:
                 runtime=body.runtime,
                 cmd=body.cmd,
                 retries=body.retries,
+                launched_by=body.launched_by,
             )
             self.jobs.append(job)
 
@@ -125,6 +128,7 @@ class Server:
                     retries_left=j.retries,
                     tpu_status=j.tpu_status,
                     job_status=j.job_status,
+                    launched_by=j.launched_by,
                 )
             )
         return out

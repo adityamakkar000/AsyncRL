@@ -11,7 +11,7 @@ server_ls() {
   if [ -t 1 ]; then
     local max_cmd_len=30
     echo "$json" | jq -r --arg max_len "$max_cmd_len" '
-      ["NODE_ID", "TPU_STATUS", "JOB_STATUS", "ZONE", "TPU_TYPE", "RUNTIME", "CMD", "RETRIES"],
+      ["NODE_ID", "TPU_STATUS", "JOB_STATUS", "ZONE", "TPU_TYPE", "RUNTIME", "CMD", "RETRIES", "LAUNCHED_BY"],
       (.[] | [
         .node_id,
         .tpu_status,
@@ -20,13 +20,14 @@ server_ls() {
         .tpu_type,
         .runtime,
         (.cmd | gsub("\t"; " ") | gsub("\n"; " ") | if (length > ($max_len|tonumber)) then .[0:($max_len|tonumber)] + "…" else . end),
-        (.retries_left | tostring)
+        (.retries_left | tostring),
+        (.launched_by // "")
       ])
       | @tsv
     ' | column -t -s $'\t'
   else
     echo "$json" | jq -r '
-      ["NODE_ID", "TPU_STATUS", "JOB_STATUS", "ZONE", "TPU_TYPE", "RUNTIME", "CMD", "RETRIES"],
+      ["NODE_ID", "TPU_STATUS", "JOB_STATUS", "ZONE", "TPU_TYPE", "RUNTIME", "CMD", "RETRIES", "LAUNCHED_BY"],
       (.[] | [
         .node_id,
         .tpu_status,
@@ -35,7 +36,8 @@ server_ls() {
         .tpu_type,
         .runtime,
         (.cmd | gsub("\t"; " ") | gsub("\n"; " ")),
-        (.retries_left | tostring)
+        (.retries_left | tostring),
+        (.launched_by // "")
       ])
       | @tsv
     ' | column -t -s $'\t'
