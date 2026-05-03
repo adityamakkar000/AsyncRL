@@ -54,7 +54,7 @@ server_delete() {
   echo
 }
 
-server_stream() {
+server_logs() {
   local node_id="$1"
   TPU_SERVER_URL="http://100.79.104.73:8000"
   if [[ -z "$node_id" ]]; then
