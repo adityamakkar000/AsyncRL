@@ -1,7 +1,7 @@
 # copy this file into ~/.bashrc or ~/.zshrc and fill out placeholder
-export TPU_SERVER_URL='http://<SERVER_IP_PLACEHOLDER>:8000'
 
 server_ls() {
+  TPU_SERVER_URL='http://100.79.104.73:8000'
   command -v jq >/dev/null 2>&1 || {
     echo "server_jobs: need jq installed for table output (brew install jq)" >&2
     return 1
@@ -44,6 +44,7 @@ server_ls() {
 }
 
 server_delete() {
+  TPU_SERVER_URL='http://100.79.104.73:8000'
   local node_id="$1"
   if [[ -z "$node_id" ]]; then
     echo "usage: server_delete <node_id>" >&2

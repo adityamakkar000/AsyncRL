@@ -7,9 +7,7 @@ import src.scripts.premption_tooling as TPUJOB
 
 RUN: TPUJOB.Vals | TPUJOB.Zip | TPUJOB.Cross = TPUJOB.Zip(
     [
-        TPUJOB.Vals("loss_config.annealing_config.use_annealing", [1]),
-        TPUJOB.Vals("loss_config.annealing_config.schedule", ["cosine"]),
-        TPUJOB.Vals("loss_config.annealing_config.annealing_steps", [0.15]),
+        TPUJOB.Vals("loss_config.annealing_config.use_annealing", [0]),
     ]
 )
 
@@ -27,7 +25,7 @@ RUN: TPUJOB.Vals | TPUJOB.Zip | TPUJOB.Cross = TPUJOB.Zip(
 # )
 
 
-BASE_CONFIG = "debug_anneal"
+BASE_CONFIG = "debug"
 # RUN = TPUJOB.Cross()
 
 
