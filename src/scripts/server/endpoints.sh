@@ -1,5 +1,4 @@
 # copy this file into ~/.bashrc or ~/.zshrc and fill out placeholder
-export TPU_SERVER_URL='http://<SERVER_IP_PLACEHOLDER>:8000'
 
 server_ls() {
   command -v jq >/dev/null 2>&1 || {
@@ -57,6 +56,7 @@ server_delete() {
 
 server_stream() {
   local node_id="$1"
+  TPU_SERVER_URL="http://100.79.104.73:8000"
   if [[ -z "$node_id" ]]; then
     echo "usage: server_stream <node_id>" >&2
     return 1
