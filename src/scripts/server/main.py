@@ -2,19 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+import shutil
 import threading
 import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
-import shutil
-import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from scripts.premption_tooling.main import Runtime, TPUJob, TPUType, Zone, run_session
+from src.scripts.premption_tooling.main import Runtime, TPUJob, TPUType, Zone, run_session
 
 logger = logging.getLogger(__name__)
 
