@@ -146,6 +146,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "datasets" },
     { name = "einops" },
+    { name = "epath" },
     { name = "gcsfs" },
     { name = "hydra-core" },
     { name = "jax" },
@@ -188,6 +189,7 @@ requires-dist = [
     { name = "datasets", specifier = ">=4.5.0" },
     { name = "datasets", marker = "extra == 'data'", specifier = ">=4.4.2" },
     { name = "einops", specifier = ">=0.8.1" },
+    { name = "epath", specifier = ">=0.7" },
     { name = "gcsfs", specifier = ">=2024.6.0" },
     { name = "gcsfs", marker = "extra == 'data'", specifier = ">=2025.3.0" },
     { name = "hydra-core", specifier = "==1.3.2" },
@@ -209,8 +211,8 @@ requires-dist = [
     { name = "rich", specifier = "<14.0.0" },
     { name = "ruff", specifier = ">=0.14.10" },
     { name = "stax", git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FaddName" },
-    { name = "tensorboard", specifier = ">=2.20.0" },
-    { name = "tensorboard-plugin-profile", specifier = ">=2.21.6" },
+    { name = "tensorboard", specifier = "==2.20.0" },
+    { name = "tensorboard-plugin-profile", specifier = "==2.21.6" },
     { name = "tfds-nightly", marker = "extra == 'data'", specifier = ">=4.9.9.dev202510250044" },
     { name = "torch", specifier = ">=2.9.0" },
     { name = "transformers", specifier = ">=4.57.3" },
@@ -916,6 +918,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f5/22/900cb125c76b7aaa450ce02fd727f452243f2e91a61af068b40adba60ea9/email_validator-2.3.0.tar.gz", hash = "sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426", size = 51238, upload-time = "2025-08-26T13:09:06.831Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/de/15/545e2b6cf2e3be84bc1ed85613edd75b8aea69807a71c26f4ca6a9258e82/email_validator-2.3.0-py3-none-any.whl", hash = "sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4", size = 35604, upload-time = "2025-08-26T13:09:05.858Z" },
+]
+
+[[package]]
+name = "epath"
+version = "0.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/e7/a8ce60706f5b1ac3f697252b4356a7610e19045909f54500b1751e575e40/epath-0.7.tar.gz", hash = "sha256:7e420cf6c4b4c2e3a86f33a2e78968124e359613e8fae2bd5391644381886c78", size = 3306, upload-time = "2021-07-05T22:07:57.09Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ae/59/25ae9e12f586cad9865ab8f62f2abfcfde15bf0a54cc0243c3b4467a471e/epath-0.7-py3-none-any.whl", hash = "sha256:bb346c1efe30c45916394ae6140cc40a7bbe1d5f50a6b909d6ee27712a671d27", size = 3272, upload-time = "2021-07-05T22:07:55.61Z" },
 ]
 
 [[package]]
@@ -4576,7 +4587,7 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FaddName#3aa6a814a50488ad9621d6ac7913991322ec5180" }
+source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FaddName#43b3fbc3438309b86ccdb6db8402d5dc40e1cb8e" }
 dependencies = [
     { name = "flax" },
     { name = "jax" },
@@ -4683,13 +4694,13 @@ wheels = [
 
 [[package]]
 name = "tensorboard-plugin-profile"
-version = "2.22.1"
+version = "2.21.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "xprof" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/fe/5fddedbdf447e225e2c767c10262347d695b97b71db4a8b847e21cbd852c/tensorboard_plugin_profile-2.22.1-cp311-none-any.whl", hash = "sha256:d5861dbef8b391fcfce8686a700f1db12bedf50f64ea3b0ca1b5321bb0581bc6", size = 6241, upload-time = "2026-04-02T15:15:32.473Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/1c/0f550adebb6365a5a380ab20acd2e2a39176c50bd9576be52022d5cce46c/tensorboard_plugin_profile-2.21.6-cp311-none-any.whl", hash = "sha256:fb91ae8c0b84989befa10d8d42880540e66ce9d3885cbc0d4de7650d95535dfc", size = 5791, upload-time = "2026-02-09T09:58:15.507Z" },
 ]
 
 [[package]]
@@ -5456,7 +5467,7 @@ wheels = [
 
 [[package]]
 name = "xprof"
-version = "2.22.1"
+version = "2.21.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cheroot" },
@@ -5470,9 +5481,9 @@ dependencies = [
     { name = "werkzeug" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/ae/61804e1246a7556b5dfa5055d2101748e42dc1e3542fdce06daa07c25a2f/xprof-2.22.1-cp311-none-any.whl", hash = "sha256:54b3a503201f4653ff41cb666158336343475d5f03f7570b3eb8ca3a8d10a7af", size = 21958634, upload-time = "2026-04-02T15:50:56.829Z" },
-    { url = "https://files.pythonhosted.org/packages/7d/b2/4ce9f094eecb810d642e72cbcdb410323519820fb7dfee0819555a3158c0/xprof-2.22.1-cp311-none-manylinux_2_27_x86_64.whl", hash = "sha256:87114980fed1d49c68b9d4be06852e7725f1800a3aa02a152ea86aff69b5f793", size = 25883441, upload-time = "2026-04-02T15:31:31.072Z" },
-    { url = "https://files.pythonhosted.org/packages/e1/0e/6cc970f466d5abab24053f0e9551360b1acad85a182f117aa6786e1d4a8a/xprof-2.22.1-cp311-none-manylinux_2_35_aarch64.whl", hash = "sha256:31f5402b4be724abb9ca1c4aca69e4d582438f5ab302ed53c6085efb17c5968e", size = 26824885, upload-time = "2026-04-02T15:15:29.929Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/40/c63173557a4ee32205dba0019fe4463cc13da43b5035c454a5d4716ff89a/xprof-2.21.6-cp311-none-any.whl", hash = "sha256:f28aff36688e247dac1960002b50664835d0e5591166d2fd376dbfd4e6f6c528", size = 19204782, upload-time = "2026-02-09T10:10:45.683Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/41/edc46056dd6e25fd8d1042c9f543228d5920dee1aca482d883b2ef7d3b97/xprof-2.21.6-cp311-none-manylinux_2_27_x86_64.whl", hash = "sha256:80a5e69ed2217124a35be111742e7379a85e5c4a9dce4837166527655bfdfdc9", size = 22731161, upload-time = "2026-02-09T09:58:13.106Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/a5/c80bf771bce071cf112fbbb37cf737caa6789d74d95a02fd569599cbb98d/xprof-2.21.6-cp311-none-manylinux_2_35_aarch64.whl", hash = "sha256:58b4873d5a373f9d88d11e7151d381329b25626e0a60c6f11e66ab61076db30e", size = 23661498, upload-time = "2026-02-24T22:48:27.629Z" },
 ]
 
 [[package]]

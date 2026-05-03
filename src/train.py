@@ -4,18 +4,16 @@ import time
 
 import hydra
 import jax
-
-jax.distributed.initialize()
-
 import numpy as np
 from hydra.core.config_store import ConfigStore
 from jax.experimental.multihost_utils import sync_global_devices
 from jax.sharding import AxisType
 from omegaconf import DictConfig, OmegaConf
 from stax import init_distributed_jax
+from stax.logger import staxLogger as logger
 
 from src.constants import GLOBAL_IP, KEY, PORT, VM_IP, AsyncOptions, QueueManager
-from src.workers import AsyncTrainerWorker, TrainerConfig, Worker, AsyncInferenceWorker
+from src.workers import AsyncInferenceWorker, AsyncTrainerWorker, TrainerConfig, Worker
 
 cs = ConfigStore.instance()
 cs.store(name="base", node=TrainerConfig)
@@ -52,6 +50,7 @@ def get_queues():
 
 @hydra.main(version_base=None, config_path="./configs/train")
 def main(cfg: DictConfig) -> None:
+    init_distributed_jax()
 
     train_workers = cfg.async_config.train_workers
     assert (n_hosts := jax.process_count()) > train_workers > 0, (
@@ -105,7 +104,7 @@ def main(cfg: DictConfig) -> None:
         inference_mesh=inference_mesh,
     )
 
-    print(OmegaConf.to_yaml(cfg))
+    logger.info(OmegaConf.to_yaml(cfg), log_for_all=True)
 
     rank = jax.process_index()
     if rank < train_workers:
@@ -118,7 +117,7 @@ def main(cfg: DictConfig) -> None:
     sync_global_devices("workersReady")
     # worker.start()
 
-    print(f"Process at {VM_IP} finished.")
+    logger.info(f"Process at {VM_IP} finished.", log_for_all=True)
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ from stax import sync_over_mesh
 from stax.utils import metrics_all_reduce
 
 from src.constants import CHECKPOINTS, GS_BUCKET, PROFILE, AsyncOptions
-from src.data import DataLoader, RLBatch, InferenceRollout
+from src.data import DataLoader, InferenceRollout, RLBatch
 from src.model import Model
 
 from .config import TrainerConfig
@@ -292,6 +292,8 @@ class AsyncTrainerWorker(Worker):
         self.checkpointer = stax.Checkpointer(
             output_dir=path,
             max_to_keep=self.config.max_checkpoints_to_keep,
+            # only allow train workers to write checkpoints
+            active_processes=set(range(self.async_options.train_workers)),
         )
 
     def make_save_tree(
