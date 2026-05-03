@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import threading
 import time
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, AsyncIterator
 import shutil
 import os
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from scripts.premption_tooling.main import Runtime, TPUJob, TPUType, Zone, run_session
 
 logger = logging.getLogger(__name__)
+
+# Node IDs used for jobs / log filenames; reject path traversal.
+_SAFE_NODE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
 
 class RunJobRequest(BaseModel):
@@ -189,6 +195,40 @@ def delete_job(job_id: str) -> dict[str, Any]:
         get_state().delete_queue.append(job_id)
 
     return {"ok": True, "deleted": job_id}
+
+
+def _log_path_for_node(node_id: str) -> str:
+    if not _SAFE_NODE_ID.match(node_id):
+        raise HTTPException(status_code=400, detail="invalid node_id")
+    return os.path.join(os.path.expanduser("~"), "logs", f"{node_id}.txt")
+
+
+async def _wait_for_log_file(path: str, timeout_s: float = 120.0, poll_s: float = 0.25) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if os.path.isfile(path):
+            return
+        await asyncio.sleep(poll_s)
+    raise HTTPException(status_code=404, detail=f"log file not found: {path}")
+
+
+@app.get("/logs/{node_id}/stream")
+async def stream_job_log(node_id: str) -> StreamingResponse:
+    """Tail -f style stream of ~/logs/<node_id>.txt on the server host."""
+
+    path = _log_path_for_node(node_id)
+    await _wait_for_log_file(path)
+
+    async def lines() -> AsyncIterator[bytes]:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            while True:
+                line = await asyncio.to_thread(f.readline)
+                if line:
+                    yield line.encode("utf-8")
+                else:
+                    await asyncio.sleep(0.2)
+
+    return StreamingResponse(lines(), media_type="text/plain; charset=utf-8")
 
 
 if __name__ == "__main__":
