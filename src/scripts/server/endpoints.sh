@@ -54,3 +54,14 @@ server_delete() {
   curl -sS -f -X DELETE "${TPU_SERVER_URL%/}/jobs/${enc}"
   echo
 }
+
+server_stream() {
+  local node_id="$1"
+  if [[ -z "$node_id" ]]; then
+    echo "usage: server_stream <node_id>" >&2
+    return 1
+  fi
+  local enc
+  enc=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$node_id")
+  curl -sS -N -f "${TPU_SERVER_URL%/}/logs/${enc}/stream"
+}
