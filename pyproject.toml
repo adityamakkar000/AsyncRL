@@ -45,3 +45,6 @@ eval = [
     "vllm-tpu==0.12.0; platform_system == 'Linux'",
     "lm-eval>=0.4.11",
 ]
+
+[tool.uv.sources]
+stax = { git = "https://github.com/adityamakkar000/stax.git" }
