@@ -30,6 +30,7 @@ class RunJobRequest(BaseModel):
     cmd: str
     retries: int = 3
     launched_by: str = ""
+    cwd: str = ""
 
 
 class JobView(BaseModel):
@@ -109,6 +110,7 @@ class Server:
                 runtime=body.runtime,
                 cmd=body.cmd,
                 retries=body.retries,
+                cwd=body.cwd,
                 launched_by=body.launched_by,
             )
             self.jobs.append(job)

@@ -76,6 +76,7 @@ class TPUJob:
     tpu_type: TPUType
     runtime: Runtime
     cmd: str
+    cwd: str
     process: subprocess.Popen | None = None
     _log_file: object = field(default=None, init=False, repr=False)
     retries: int = 3
@@ -123,7 +124,7 @@ class TPUJob:
 
     @property
     def launch_dir(self) -> str:
-        return f"{self.home_dir}/{self.node_id}"
+        return f"{self.home_dir}/{self.cwd}"
 
     def setup_tpu(self) -> int:
         ips = tpu_get_ips(self.node_id, self.zone.value)

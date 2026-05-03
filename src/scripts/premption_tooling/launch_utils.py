@@ -114,11 +114,19 @@ def run_tpu_jobs(
     RUNTIME: Runtime,
     RETRIES: int,
 ):
-    NODE_COUNTER = 0
+    # warning: this is hard coded to current project structure
+    copy_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    # assuming that server is named "server" in cluster.yaml
+    user = getpass.getuser()
+    cwd_id = random.randint(0, 1000000)
+    server_dir = f"{user}_{EXPERIMENT_PREFIX}_{cwd_id}"
+    subprocess.run(["mesh", "copy", "server", f"~/{server_dir}"], cwd=copy_dir)
 
+    NODE_COUNTER = 0
     for combo in combos:
         NODE_COUNTER += 1
         rng_combo = random.randint(0, 1000000)
+        node_id = f"node_{NODE_COUNTER}_{rng_combo}"
 
         name = make_name(combo, EXPERIMENT_PREFIX)
         overrides = {**FIXED_OVERRIDES, **combo}
@@ -135,12 +143,6 @@ def run_tpu_jobs(
             inner_parts.append(f"{k}={v}")
         inner_cmd = " ".join(inner_parts)
 
-        # warning: this is hard coded to current project structure
-        copy_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        node_id = f"node_{NODE_COUNTER}_{rng_combo}"
-        # assuming that server is named "server" in cluster.yaml
-        subprocess.run(["mesh", "copy", "server", f"~/{node_id}"], cwd=copy_dir)
-
         post_args = {
             "node_id": node_id,
             "zone": ZONE,
@@ -148,7 +150,8 @@ def run_tpu_jobs(
             "runtime": RUNTIME,
             "cmd": inner_cmd,
             "retries": RETRIES,
-            "launched_by": getpass.getuser(),
+            "cwd": server_dir,
+            "launched_by": user,
         }
 
         response = requests.post(f"{TPU_SERVER_URL}/run_job", json=post_args, timeout=30)
