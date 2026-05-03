@@ -3,7 +3,7 @@ defaults:
   - _self_
 
 tasks:
-  - "aime"
+  - "gsm8k_boxed"
 
 vllm_config:
   max_sequences: 128
@@ -12,7 +12,7 @@ vllm_config:
   data_parallel_size: 4
 
 model_config:
-  model_name: "debug"
+  model_name: "test"
   use_best_ckpt: false
   step_number: -1 # take last step 
 

@@ -92,7 +92,7 @@ class TPUJob:
             raise ValueError(f"Invalid TPU type {self.tpu_type} for runtime {self.runtime}")
         if is_v5 and self.zone in {Zone.US_EAST1_D, Zone.EUROPE_WEST4_A}:
             raise ValueError(f"TPU type {self.tpu_type} is not available in zone {self.zone}")
-        if is_v6 and self.zone not in {Zone.US_EAST5_A, Zone.US_CENTRAL1_A}:
+        if is_v6 and self.zone in {Zone.US_EAST5_A, Zone.US_CENTRAL1_A}:
             raise ValueError(f"TPU type {self.tpu_type} is not available in zone {self.zone}")
         if self.process is not None:
             raise ValueError("Process should be initialized to None")

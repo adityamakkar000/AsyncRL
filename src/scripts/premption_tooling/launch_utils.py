@@ -126,9 +126,11 @@ def run_tpu_jobs(
             "python",
             "-m",
             JOB_TYPE.value,
-            f"--config-name={BASE_CONFIG}",
-            f"experiment_name={name}",
+            f"--config-name {BASE_CONFIG}",
         ]
+        if JOB_TYPE == JOB_TYPES.TRAIN:
+            inner_parts.append(f"experiment={name}")
+
         for k, v in overrides.items():
             inner_parts.append(f"{k}={v}")
         inner_cmd = " ".join(inner_parts)
