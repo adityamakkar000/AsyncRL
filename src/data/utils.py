@@ -6,7 +6,7 @@ import gcsfs
 import numpy as np
 from datasets import Dataset
 
-from src.data.config import RLBatch, Sample
+from .config import RLBatch, Sample
 
 
 def samples_to_dataset(samples: list[Sample]) -> Dataset:

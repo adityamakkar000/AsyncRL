@@ -4,9 +4,9 @@ import random
 from omegaconf import DictConfig
 
 from src.constants import DATA, GS_BUCKET
-from src.data.config import Sample
-from src.data.register import GLOBAL_DICT
-from src.data.utils import delete_local_file, samples_to_dataset, upload_local_file_to_gcs, write_dataset_to_local_jsonl
+from .config import Sample
+from .register import GLOBAL_DICT
+from .utils import delete_local_file, samples_to_dataset, upload_local_file_to_gcs, write_dataset_to_local_jsonl
 
 GREEN = "\033[92m"
 YELLOW = "\033[93m"

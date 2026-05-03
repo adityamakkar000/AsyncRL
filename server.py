@@ -128,7 +128,7 @@ def _maybe_update_params(params, state: AsyncState) -> jax.Array:
     if state.updated:
         state.updated = False
         new_params = state.MRUparams
-        print("New params have been updated to MRU params")
+        print("New params havse been updated to MRU params")
     new_params = jax.device_put(new_params, sharding)
 
     return new_params

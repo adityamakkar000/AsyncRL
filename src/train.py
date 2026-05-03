@@ -4,16 +4,18 @@ import time
 
 import hydra
 import jax
+
+jax.distributed.initialize()
+
 import numpy as np
 from hydra.core.config_store import ConfigStore
 from jax.experimental.multihost_utils import sync_global_devices
 from jax.sharding import AxisType
 from omegaconf import DictConfig, OmegaConf
 from stax import init_distributed_jax
-from stax import staxLogger as logger
 
-from src.constants import GLOBAL_IP, KEY, PORT, VM_IP, AsyncOptions, QueueManager, Worker
-from src.trainer import AsyncTrainerWorker, TrainerConfig
+from src.constants import GLOBAL_IP, KEY, PORT, VM_IP, AsyncOptions, QueueManager
+from src.workers import AsyncTrainerWorker, TrainerConfig, Worker, AsyncInferenceWorker
 
 cs = ConfigStore.instance()
 cs.store(name="base", node=TrainerConfig)
@@ -50,7 +52,6 @@ def get_queues():
 
 @hydra.main(version_base=None, config_path="./configs/train")
 def main(cfg: DictConfig) -> None:
-    init_distributed_jax()
 
     train_workers = cfg.async_config.train_workers
     assert (n_hosts := jax.process_count()) > train_workers > 0, (
@@ -68,17 +69,17 @@ def main(cfg: DictConfig) -> None:
         train_devices.shape,
         ("processes", "local_devices"),
         axis_types=(AxisType.Explicit, AxisType.Explicit),
-        devices=train_devices,  # type: ignore
+        devices=train_devices.reshape(-1),  # type: ignore
     )
     inference_mesh = jax.make_mesh(
         inference_devices.shape,
         ("processes", "local_devices"),
         axis_types=(AxisType.Explicit, AxisType.Explicit),
-        devices=inference_devices,  # type: ignore
+        devices=inference_devices.reshape(-1),  # type: ignore
     )
 
     local_prompt_queue = queue.Queue(
-        maxsize=cfg.async_config.prompt_queue_size * cfg.data_config.train_config.train_batch_size
+        maxsize=cfg.async_config.max_prompt_queue_size * cfg.data_config.train_config.batch_size
     )
     local_rollout_queue = queue.Queue()
     local_weight_sync_queue = queue.Queue(maxsize=inference_workers)
@@ -104,18 +105,20 @@ def main(cfg: DictConfig) -> None:
         inference_mesh=inference_mesh,
     )
 
-    logger.info(OmegaConf.to_yaml(cfg))
+    print(OmegaConf.to_yaml(cfg))
 
     rank = jax.process_index()
     if rank < train_workers:
         worker: Worker = AsyncTrainerWorker(cfg, async_options)
+        worker.train_sync_weights()
     else:
         worker: Worker = AsyncInferenceWorker(cfg, async_options)
+        worker.block_until_params_update()
 
-    sync_global_devices("workerReady")
-    worker.start()
+    sync_global_devices("workersReady")
+    # worker.start()
 
-    logger.info(f"Process at {VM_IP} finished.")
+    print(f"Process at {VM_IP} finished.")
 
 
 if __name__ == "__main__":

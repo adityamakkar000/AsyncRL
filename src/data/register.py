@@ -17,7 +17,7 @@ from typing import Callable
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-from src.data.config import Sample
+from .config import Sample
 
 # Registry: name -> function that returns list[Sample] and takes no inputs
 GLOBAL_DICT: dict[str, Callable[[], list[Sample]]] = {}

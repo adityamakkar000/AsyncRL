@@ -2,6 +2,3 @@ defaults:
   - rl_config: cispo
   - inference_config: main
   - _self_
-
-rl_config:
-  ppo_minibatch_size: 32

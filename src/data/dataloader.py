@@ -6,10 +6,10 @@ import stax
 from transformers import AutoTokenizer
 
 from src.constants import DATA, GS_BUCKET
-from src.data.config import DatasetConfig, RLBatch, Sample
-from src.data.utils import compute_aux_metrics, load_jsonl_from_gcs
-from src.data.verifier import Verifier, VerifierInput
-from src.inference_engine.config import InferenceRollout
+
+from .config import DatasetConfig, InferenceRollout, RLBatch, Sample
+from .utils import compute_aux_metrics, load_jsonl_from_gcs
+from .verifier import Verifier, VerifierInput
 
 
 class DataLoader:

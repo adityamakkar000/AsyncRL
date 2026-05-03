@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import jax
 import numpy as np
 from flax import struct
+from jaxtyping import Array
 
 
 @dataclass
@@ -65,3 +66,10 @@ class RLBatch:
             group_mean=np.zeros((batch_size,), dtype=np.float32),
             group_std=np.ones((batch_size,), dtype=np.float32),
         )
+
+@dataclass
+class InferenceRollout:
+    sample: Sample
+    rollout_strs: list[str]
+    rollouts_tokens: list[Array]
+    rollout_logprobs: list[Array]

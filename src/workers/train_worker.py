@@ -1,48 +1,52 @@
 import json
 import os
+import time
 from functools import partial
-from typing import Any, Dict, Optional
+from threading import Thread
+from typing import Any, Optional
 
 import jax
 import optax
 import stax
 from dotenv import load_dotenv
 from einops import rearrange
-from jax.experimental.multihost_utils import sync_global_devices
+from jax.experimental.multihost_utils import broadcast_one_to_all, sync_global_devices
 from jaxtyping import Array, PyTree
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf
 from stax import staxLogger as logger
+from stax import sync_over_mesh
 from stax.utils import metrics_all_reduce
 
-from src.constants import CHECKPOINTS, GS_BUCKET
-from src.data import DataLoader, RLBatch
-from src.inference_engine import InferenceEngine
+from src.constants import CHECKPOINTS, GS_BUCKET, PROFILE, AsyncOptions
+from src.data import DataLoader, RLBatch, InferenceRollout
 from src.model import Model
 
 from .config import TrainerConfig
 from .loss import get_single_step
 from .utils import Key, setup, write_to_gcs
+from .worker import Worker
 
 load_dotenv()
 
 
-class Trainer:
+class AsyncTrainerWorker(Worker):
     """
     A Trainer class to handle the training process of a machine learning model using JAX on TPUs.
     """
 
-    def __init__(self, config: TrainerConfig | DictConfig):
+    def __init__(self, config: TrainerConfig, async_options: AsyncOptions):
         """
         Initialize the training module.
 
         Args:
             config (TrainerConfig): Configuration object containing model, data, training parameters, etc.
+            async_options (AsyncOptions): Configuration object containing asynchronous training parameters.
         """
-        self._setup_jax()
         self.config = config
+        self.async_options = async_options
         self.validate_config()
 
-        logger.info(f"Starting training for {self.config.experiment_name}")
+        logger.info(f"Setting up {self.config.experiment_name}")
 
         with stax.Tracker(timer=True) as tracker:
             self._init_state()
@@ -52,8 +56,8 @@ class Trainer:
             self._setup_functions()
             self._setup_dataset()
             self._setup_train_state()
-            self._setup_inference_engine()
             self._setup_writer()
+            self.fill_queue_thread()
 
             if not self.resumed:
                 logger.info("Saving intial checkpoint ...")
@@ -64,7 +68,7 @@ class Trainer:
                 # block to ensure first checkpoint is written
                 self.block_until_checkpoints_saved()
 
-            sync_global_devices("Trainer initialization")
+            sync_over_mesh("Trainer initialization", self.async_options.train_mesh)
 
         logger.info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds")
 
@@ -93,12 +97,8 @@ class Trainer:
 
         n_hosts = jax.process_count()
         train_batch_size = cfg.data_config.train_config.batch_size
-        val_batch_size = cfg.data_config.val_config.batch_size
         assert train_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
             f"Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {train_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
-        )
-        assert val_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
-            f"Validation batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {val_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
         )
 
         n_devices = jax.device_count() if cfg.sharding_config.sharding_type in ["fsdp", "dp"] else 1
@@ -108,36 +108,29 @@ class Trainer:
                 "Single sharding type does not support distributed training across multiple hosts."
             )
 
-        ppo_minibatch_size = cfg.loss_config.rl_config.ppo_minibatch_size
-        assert train_batch_size % ppo_minibatch_size == 0, (
-            f"Train batch size must be divisible by PPO minibatch size for proper PPO updates, got {train_batch_size} batch size and {ppo_minibatch_size} PPO minibatch size."
-        )
-        assert ppo_minibatch_size % (n_devices * cfg.grad_accum_steps) == 0, (
-            f"PPO minibatch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation, got {ppo_minibatch_size} PPO minibatch size, {n_devices} devices, and {cfg.grad_accum_steps} grad_accum_steps."
+        assert train_batch_size % (n_devices * cfg.grad_accum_steps) == 0, (
+            f"Train batch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation, got {train_batch_size} train batch size, {n_devices} devices, and {cfg.grad_accum_steps} grad_accum_steps."
         )
 
         assert (train_batch_size // cfg.loss_config.inference_config.group_size) % jax.process_count() == 0, (
             f"Number of groups per step must be divisible by number of hosts for proper distribution of groups, got {train_batch_size} train batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
         )
-        assert (val_batch_size // cfg.loss_config.inference_config.group_size) % jax.process_count() == 0, (
-            f"Number of groups per validation step must be divisible by number of hosts for proper distribution of groups, got {val_batch_size} val batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
-        )
 
     @partial(setup, component="initialized state")
     def _init_state(self):
-        self.train_step = None
+        self.train_fn = None
 
         self.model = None
         self.tx = None
-        self.inference_engine = None
 
         self.params = None
         self.opt_state = None
         self.params_sharding = None
         self.opt_state_sharding = None
+        self.shard_data_fn = None
+        self.train_mesh = None
 
         self.train_dataset = None
-        self.val_dataset = None
 
         self.checkpointer = None
         self.best_checkpointer = None
@@ -172,11 +165,6 @@ class Trainer:
         self.writer_id = writer.id
         self.writer = writer
 
-    @partial(setup, component="JAX")
-    def _setup_jax(self):
-        """Setup JAX for distributed training on TPUs."""
-        stax.init_distributed_jax()
-
     @partial(setup, component="train and val functions")
     def _setup_functions(self):
         """Setup training and validation functions."""
@@ -189,13 +177,13 @@ class Trainer:
         step_fn = get_single_step(self.config.loss_config)
 
         # val fn not needed since we just care about val reward, not loss
-        train_fn, _val_fn, shardings = stax.fn.get_steps_fn(
+        self.train_fn, _val_fn, shardings = stax.fn.get_steps_fn(
             step_fn,
             self.model,
             self.tx,
             has_aux=True,
             grad_steps=self.config.grad_accum_steps,
-            val_steps=self.config.val_steps,
+            val_steps=0,  # val steps is not used
             sharding=stax.ShardingConfig(
                 params_shape=params_shape,
                 opt_state_shape=opt_state_shape,
@@ -205,76 +193,29 @@ class Trainer:
                 data_shard_dim=self.config.sharding_config.data_shard_dim,
                 weight_shard_dim=self.config.sharding_config.weight_shard_dim,
             ),
+            # only use devices on the train worker's mesh
+            devices=self.async_options.train_mesh.devices.reshape(-1),
         )
 
-        self.params_sharding, self.opt_state_sharding = shardings.param_sharding, shardings.opt_state_sharding
+        self.params_sharding, self.opt_state_sharding, self.shard_data_fn = (
+            shardings.param_sharding,
+            shardings.opt_state_sharding,
+            shardings.shard_data,
+        )
 
-        train_batch_size = self.config.data_config.train_config.batch_size
-        ppo_minibatch_size = self.config.loss_config.rl_config.ppo_minibatch_size
-        ppo_k_steps = train_batch_size // ppo_minibatch_size
-        grad_accum_steps = self.config.grad_accum_steps
-
-        def train_step(params: PyTree, opt_state: PyTree, batch: RLBatch) -> Dict[str, PyTree]:
-            """
-            Takes single step and implments PPO-k loss (k steps off-policy)
-            Args:
-                params (PyTree): Model parameters.
-                opt_state (PyTree): Optimizer state.
-                batch (RLBatch): Batch of training data.
-            Returns:
-                Dict[str, PyTree]: Updated parameters, optimizer state, and auxiliary metrics.
-            """
-
-            aux_metrics = {}
-            out = {
-                "params": params,
-                "opt_state": opt_state,
-            }
-
-            global_batch = shardings.shard_data(batch)  # [train_batch_size, T]
-            perm = jax.random.permutation(self.key(), train_batch_size)
-            global_batch_shuffled = jax.tree.map(lambda x: x[perm], global_batch)
-
-            ppo_global_batch = jax.tree.map(
-                lambda x: rearrange(
-                    x,
-                    "(b g k) ... -> k g b ...",
-                    b=ppo_minibatch_size // grad_accum_steps,
-                    g=grad_accum_steps,
-                    k=ppo_k_steps,
-                ),  # [ppo_steps, grad_accum_steps, ppo_minibatch_size // grad_accum_steps, T]
-                global_batch_shuffled,
-            )
-
-            for step in range(ppo_k_steps):
-                current_batch = jax.tree.map(
-                    lambda x: x[step],  # [grad_accum_steps, ppo_minibatch_size // grad_accum_steps, T]
-                    ppo_global_batch,
-                )
-                out = train_fn(out["params"], out["opt_state"], current_batch)
-                aux_metrics |= {f"{k}_step_{step}": v for k, v in out["metrics"].items()}
-
-            return {
-                "params": out["params"],
-                "opt_state": out["opt_state"],
-                "metrics": aux_metrics,
-            }
-
-        self.train_step = train_step
+        self.train_mesh = shardings.mesh
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
         self.train_n_prompts: int = self.config.data_config.train_config.batch_size // (
             self.config.loss_config.inference_config.group_size
         )
-        self.val_n_prompts: int = self.config.data_config.val_config.batch_size // (
-            self.config.loss_config.inference_config.group_size
-        )
+
+        self.train_n_prompts_per_host = self.train_n_prompts // self.async_options.train_workers
 
         max_seq_length = self.config.loss_config.inference_config.max_seq_len
         hf_model = self.config.model_config.hf_model_name
         self.train_dataset = DataLoader(self.config.data_config.train_config, max_seq_length, hf_model)
-        self.val_dataset = DataLoader(self.config.data_config.val_config, max_seq_length, hf_model)
 
     @partial(setup, component="model")
     def _setup_model(self):
@@ -303,22 +244,6 @@ class Trainer:
 
         logger.info(f"Params intialized with total size: {self.model.count_params(self.params):_} parameters.")
 
-    @partial(setup, component="inference engine")
-    def _setup_inference_engine(self):
-        """Setup the inference engine for evaluation and generation rollouts."""
-        if self.config.loss_config.inference_config is None:
-            logger.info("No inference config provided, skipping inference engine setup.")
-            return
-
-        assert self.model is not None, "Model must be set up before inference engine init."
-        assert self.params is not None, "Train state must be initialized before inference engine init."
-
-        inference_params = {"params": self.params}
-        # inference_engine requires {params: params...}
-        self.inference_engine = InferenceEngine(
-            model=self.model, params=inference_params, config=self.config.loss_config.inference_config
-        )
-
     @partial(setup, component="optimizer")
     def _setup_optimizer(self):
         """Setup the optimizer and learning rate scheduler."""
@@ -344,7 +269,7 @@ class Trainer:
             optax.clip_by_global_norm(self.config.grad_clip) if self.config.grad_clip is not None else optax.identity()
         )
 
-        optimizer_args = {
+        optimizer_args: dict = {
             "learning_rate": lr_scheduler,
         }
         if self.config.weight_decay is not None and self.config.optimizer == "adamw":
@@ -367,8 +292,6 @@ class Trainer:
         self.checkpointer = stax.Checkpointer(
             output_dir=path,
             max_to_keep=self.config.max_checkpoints_to_keep,
-            best_key=self.config.best_metric.name if self.has_best_ckpt else None,  # type: ignore
-            best_mode="max" if (self.has_best_ckpt and self.config.best_metric.maximize) else "min",  # type: ignore
         )
 
     def make_save_tree(
@@ -379,12 +302,9 @@ class Trainer:
         opt_state: Optional[PyTree] = None,
         metadata_metrics: Optional[dict[str, float]] = None,
     ):
-        dataset_state = None
-        if self.train_dataset is not None:
-            dataset_state = {"train": self.train_dataset.save_checkpoint()}
-        if self.val_dataset is not None:
-            dataset_state = dataset_state or {}
-            dataset_state["val"] = self.val_dataset.save_checkpoint()
+        assert self.train_dataset is not None, "Train dataset must be set up to make save tree."
+
+        dataset_state = {"train": self.train_dataset.save_checkpoint()}
 
         state = {
             "params": params if params else self.params,
@@ -406,9 +326,9 @@ class Trainer:
 
         return state, metadata
 
-    def save_checkpoint(self, step: int, metadata_metrics: Optional[dict[str, float]] = None):
+    def save_checkpoint(self, step: int):
         assert self.checkpointer is not None, "Checkpointer not set up."
-        state, metadata = self.make_save_tree(step, metadata_metrics=metadata_metrics)
+        state, metadata = self.make_save_tree(step)
         logger.info(f"Saving checkpoint at step {step} ...")
         self.checkpointer.save_checkpoint(step=step, save_tree=state, metadata=metadata)
 
@@ -418,17 +338,11 @@ class Trainer:
             return
         self.checkpointer.wait_until_finished()
 
-    def restore_save_tree(self, use_best: bool = False):
+    def restore_save_tree(self):
         assert self.checkpointer is not None, "Checkpointer not set up."
         assert self.model is not None, "Model not set up."
         assert self.tx is not None, "Optimizer not set up."
         assert self.train_dataset is not None, "Train dataset not set up."
-        assert self.val_dataset is not None, "Validation dataset not set up."
-        if use_best and not self.has_best_ckpt:
-            use_best = False
-            logger.warning(
-                "Best checkpoint requested but best_metric not set in config. Loading latest checkpoint instead."
-            )
 
         if self.checkpointer.latest_step is None:
             raise ValueError("No checkpoint found to restore from.")
@@ -448,7 +362,7 @@ class Trainer:
             opt_state=out["opt_state"],
         )
 
-        restored_ckpt = self.checkpointer.restore(state=save_tree, use_best=use_best)
+        restored_ckpt = self.checkpointer.restore(state=save_tree)
 
         state, metadata = restored_ckpt["state"], restored_ckpt["metadata"]
 
@@ -461,49 +375,140 @@ class Trainer:
         train_state = state["dataset"].get("train")
         self.train_dataset.restore_checkpoint(train_state)
 
-        val_state = state["dataset"].get("val")
-        self.val_dataset.restore_checkpoint(val_state)
+    def train_sync_weights(self):
+        assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
+
+        for _ in range(self.async_options.inference_workers):
+            self.async_options.weight_sync_queue.put("sync")
+
+        print(f"Placed sync signals for {self.async_options.inference_workers} inference workers.")
+        while not self.async_options.weight_sync_queue.empty():
+            time.sleep(0.1)
+
+        print("Syncing weights across devices.")
+
+        # NOTE: we sync over global devices here since inference workers
+        # should be aligned at this point (otherwise they won't have popped the sync polls from the queue)
+
+        sync_global_devices("weightSync")
+
+        replicate_sharding = jax.NamedSharding(self.train_mesh, jax.P())
+        params_gathered = jax.jit(lambda x: x, out_shardings=replicate_sharding)(self.params)
+
+        params_cpu = jax.device_get(params_gathered)
+        sync_global_devices("gathered")
+
+        print("Broadcasting params to inference workers...")
+
+        # broadcast over RDMA(ICI on TPU devices)
+        _params = broadcast_one_to_all(params_cpu)
+
+        # trainer doesn't need any of these variables, free up memory
+        del params_gathered
+        del params_cpu
+        del _params
+
+    def fill_queue_thread(self):
+        def _fill_queue_thread(async_config: AsyncOptions, train_dataset: DataLoader):
+            logger.info("Starting background thread to fill prompt queue...")
+            while True:
+                prompt_diff = async_config.prompt_queue.maxsize - async_config.prompt_queue.qsize()
+                if prompt_diff < self.train_n_prompts:
+                    time.sleep(0.1)
+                    continue
+
+                sync_over_mesh("prompt_queue_fill", async_config.train_mesh)
+                for s in train_dataset(self.train_n_prompts):
+                    async_config.prompt_queue.put(s)
+
+        self.background_thread = Thread(
+            target=_fill_queue_thread,
+            args=(self.async_options, self.train_dataset),
+            daemon=True,
+        )
+        self.background_thread.start()
+
+    def get_rollouts(self) -> tuple[list[InferenceRollout], dict]:
+        rollouts = []
+        with stax.Tracker(timer=True) as t:
+            while self.async_options.rollout_queue.qsize() < self.train_n_prompts:
+                time.sleep(0.1)
+
+        for _ in range(self.train_n_prompts_per_host):
+            rollouts.append(self.async_options.rollout_queue.get())
+        return rollouts, {"train/rollout_queue_wait_time": t.data["time"]}
+
+    def train_step(self, params, opt_state, local_batch, profile=False) -> tuple[PyTree, PyTree, dict]:
+        assert self.train_fn is not None, "Train function not set up."
+        assert self.shard_data_fn is not None, "Sharding function not set up."
+
+        global_train_batch = jax.tree.map(
+            lambda x: rearrange(
+                x,
+                "(m g) t -> g m t",
+                m=self.config.data_config.train_config.batch_size // self.config.grad_accum_steps,
+                g=self.config.grad_accum_steps,
+            ),  # [grad_accum_steps, minibatch_size, seq_len]
+            self.shard_data_fn(local_batch),
+        )
+        if profile:
+            trace_path = f"{self.gs_path}/{PROFILE}/step_{self.global_step}"
+            out = stax.get_perf_func(
+                trace_path,
+                self.train_fn,  # type: ignore
+                params,
+                opt_state,
+                global_train_batch,
+            )
+        else:
+            out = self.train_fn(params, opt_state, global_train_batch)
+
+        return out["params"], out["opt_state"], out["metrics"]
 
     def train(self):
-        assert self.train_step is not None, "Train function not set up."
-        assert self.inference_engine is not None, "Inference engine not set up."
+        assert self.params is not None and self.opt_state is not None, "Train state not initialized."
+        assert self.shard_data_fn is not None, "Sharding function not set up."
         assert self.train_dataset is not None, "Train dataset not set up."
-        assert self.val_dataset is not None, "Validation dataset not set up."
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
         logger.info("Starting training loop...")
+        logger.info("Precompiling test batch")
+
+        local_test_batch = RLBatch.get_test_batch(
+            batch_size=self.config.data_config.train_config.batch_size // jax.process_count(),
+            max_seq_len=self.config.loss_config.inference_config.max_seq_len,
+        )
+
+        # Profile first step to trigger compilation and get an estimate of step time
+        # We overlap this with inference workers as they are asynchronsouly filling rollout queue
+        # and so we have some time we can use to compile before we start the training loop
+        self.train_step(self.params, self.opt_state, local_test_batch, profile=True)
+
         while self.global_step < self.total_steps:
-            samples = self.train_dataset(num_prompts=self.train_n_prompts)
-            prompts = [s.prompt for s in samples]
-            generations = self.inference_engine(prompts, self.key(), {"params": self.params})
-            train_batch, train_data_metrics = self.train_dataset.prepare_batch(samples, generations, train=True)
-
-            out = self.train_step(self.params, self.opt_state, train_batch)
-
-            self.params, self.opt_state = out["params"], out["opt_state"]
-            metrics = out["metrics"] | metrics_all_reduce(generations.metrics) | metrics_all_reduce(train_data_metrics)
-
-            if self.global_step % self.config.val_interval == 0:
-                val_samples = self.val_dataset(num_prompts=self.val_n_prompts)
-                val_prompts = [s.prompt for s in val_samples]
-                val_generations = self.inference_engine(val_prompts, self.key(), {"params": self.params})
-                _val_batch, val_metrics = self.val_dataset.prepare_batch(val_samples, val_generations, train=False)
-
-                metrics |= val_metrics
+            generations, local_rollout_metrics = self.get_rollouts()
+            local_train_batch, local_train_batch_metrics = self.train_dataset.prepare_batch(generations, train=True)
+            self.params, self.opt_state, train_metrics = self.train_step(self.params, self.opt_state, local_train_batch)
+            self.train_sync_weights()
 
             min_mem, max_mem = stax.get_memory()
-            metrics |= {
+            other_metrics = {
                 "devices/memory_min": min_mem,
                 "devices/memory_max": max_mem,
                 "train/lr": self.opt_state[1].hyperparams["learning_rate"],
             }
 
+            metrics = (
+                train_metrics
+                | metrics_all_reduce(local_train_batch_metrics, self.async_options.train_mesh)
+                | metrics_all_reduce(local_rollout_metrics, self.async_options.train_mesh)
+                | other_metrics
+                # TODO: get generation metrics from inference worker channel
+            )
+
             generations_to_log = None
             if self.global_step % self.config.log_generations_every_n_steps == 0:
-                # do this to save storage on wandb
-                # since we can't log too much
-                generations_to_log = [(g, s.answer) for g, s in zip(generations.output_strs, samples)]
+                generations_to_log = [(g.rollout_strs, g.sample.answer) for g in generations]
 
             self.writer(self.global_step, metrics, generations=generations_to_log)
             self.global_step += 1
@@ -511,9 +516,16 @@ class Trainer:
             # save after you update state since if you want to save every 10 steps
             # you want to save after you have done 10 steps and resume at the 11th step
             if self.global_step % self.config.checkpoint_interval == 0 or self.global_step == self.total_steps:
-                self.save_checkpoint(step=self.global_step, metadata_metrics=metrics)
+                self.save_checkpoint(step=self.global_step)
 
         logger.info("Training complete.")
+
+    def start(self):
+        """Start the training process."""
+        try:
+            self.train()
+        finally:
+            self.finish()
 
     @partial(setup, component="cleanup")
     def finish(self):
@@ -524,10 +536,6 @@ class Trainer:
         if self.checkpointer:
             logger.info("Cleaning up checkpointer resources...")
             self.checkpointer.wait_until_finished()
-
-    @property
-    def has_best_ckpt(self):
-        return self.config.best_metric is not None
 
     @property
     def total_steps(self):

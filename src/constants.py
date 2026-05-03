@@ -39,13 +39,6 @@ VM_IP = socket.gethostbyname(socket.gethostname())
 GLOBAL_IP = GceTpuCluster.get_coordinator_address(60).split(":")[0]
 
 
-class Worker(abc.ABC):
-    @abc.abstractmethod
-    def start(self):
-        """Start the worker process."""
-        raise NotImplementedError("Worker subclasses must implement the start method.")
-
-
 @dataclass
 class AsyncOptions:
     train_workers: int
