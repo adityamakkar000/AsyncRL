@@ -114,12 +114,13 @@ def run_tpu_jobs(
     RUNTIME: Runtime,
     RETRIES: int,
 ):
-    # warning: this is hard coded to current project structure
-    copy_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    # assuming that server is named "server" in cluster.yaml
+    # this get's current project assuming you used launch.py from the project root
+    copy_dir = os.getcwd()
     user = getpass.getuser()
     cwd_id = random.randint(0, 1000000)
     server_dir = f"{user}_{EXPERIMENT_PREFIX}_{cwd_id}"
+
+    # NOTE: this assumes the launch server is named "server" in cluster.yaml
     subprocess.run(["mesh", "copy", "server", f"~/{server_dir}"], cwd=copy_dir)
 
     NODE_COUNTER = 0
