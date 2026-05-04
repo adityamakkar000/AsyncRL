@@ -149,7 +149,6 @@ class TPUJob:
             full_cmd = f'mesh run {self.node_id} "{self.cmd}"'
             log_path = f"{self.home_dir}/logs/{self.node_id}.txt"
 
-        with self.cleanup_lock:
             self._log_file = open(log_path, "a", buffering=1)
             self.process = subprocess.Popen(
                 full_cmd,
