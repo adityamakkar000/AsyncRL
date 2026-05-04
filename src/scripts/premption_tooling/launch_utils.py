@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from flax.linen.module import K
 import requests
 
 from .main import Runtime, TPUType, Zone
@@ -113,12 +114,22 @@ def run_tpu_jobs(
     TPU_TYPE: TPUType,
     RUNTIME: Runtime,
     RETRIES: int,
+    keep_logs: bool = True,
 ):
-    NODE_COUNTER = 0
+    # this get's current project assuming you used launch.py from the project root
+    copy_dir = os.getcwd()
+    user = getpass.getuser()
+    cwd_id = random.randint(0, 1000000)
+    server_dir = f"{user}_{EXPERIMENT_PREFIX}_{cwd_id}"
 
+    # NOTE: this assumes the launch server is named "server" in cluster.yaml
+    subprocess.run(["mesh", "copy", "server", f"~/{server_dir}"], cwd=copy_dir)
+
+    NODE_COUNTER = 0
     for combo in combos:
         NODE_COUNTER += 1
         rng_combo = random.randint(0, 1000000)
+        node_id = f"node_{NODE_COUNTER}_{rng_combo}"
 
         name = make_name(combo, EXPERIMENT_PREFIX)
         overrides = {**FIXED_OVERRIDES, **combo}
@@ -135,12 +146,6 @@ def run_tpu_jobs(
             inner_parts.append(f"{k}={v}")
         inner_cmd = " ".join(inner_parts)
 
-        # warning: this is hard coded to current project structure
-        copy_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        node_id = f"node_{NODE_COUNTER}_{rng_combo}"
-        # assuming that server is named "server" in cluster.yaml
-        subprocess.run(["mesh", "copy", "server", f"~/{node_id}"], cwd=copy_dir)
-
         post_args = {
             "node_id": node_id,
             "zone": ZONE,
@@ -148,7 +153,9 @@ def run_tpu_jobs(
             "runtime": RUNTIME,
             "cmd": inner_cmd,
             "retries": RETRIES,
-            "launched_by": getpass.getuser(),
+            "cwd": server_dir,
+            "launched_by": user,
+            "keep_logs": keep_logs,  # to keep logs after run ends
         }
 
         response = requests.post(f"{TPU_SERVER_URL}/run_job", json=post_args, timeout=30)
@@ -169,4 +176,5 @@ def launch(job: LAUNCH_JOB) -> None:
         job.TPU_TYPE,
         job.RUNTIME,
         job.RETRIES,
+        keep_logs=True,
     )

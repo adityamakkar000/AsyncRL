@@ -76,12 +76,14 @@ class TPUJob:
     tpu_type: TPUType
     runtime: Runtime
     cmd: str
+    cwd: str
     process: subprocess.Popen | None = None
     _log_file: object = field(default=None, init=False, repr=False)
     retries: int = 3
     launched_by: str = ""
     cleanup_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     cleanup_done: bool = field(default=False, init=False, repr=False)
+    keep_logs: bool = True  # log file will be kept unless keep_logs is False
 
     def __post_init__(self):
         is_v5 = self.tpu_type in TPUType.all_v5()
@@ -123,7 +125,7 @@ class TPUJob:
 
     @property
     def launch_dir(self) -> str:
-        return f"{self.home_dir}/{self.node_id}"
+        return f"{self.home_dir}/{self.cwd}"
 
     def setup_tpu(self) -> int:
         ips = tpu_get_ips(self.node_id, self.zone.value)
@@ -132,21 +134,21 @@ class TPUJob:
         return result.returncode
 
     def launch_job(self):
-        tpu_status = self.tpu_status
-
-        if tpu_status != TPUStatus.ACTIVE.value:
-            if tpu_status == TPUStatus.NOT_FOUND.value:
-                self.allocate_tpu()
-            return
-
-        if self.setup_tpu() != 0:
-            console.print(f"[yellow]mesh setup failed for {self.node_id}, will retry[/yellow]")
-            return
-
-        full_cmd = f'mesh run {self.node_id} "{self.cmd}"'
-        log_path = f"{self.home_dir}/logs/{self.node_id}.txt"
-
         with self.cleanup_lock:
+            tpu_status = self.tpu_status
+
+            if tpu_status != TPUStatus.ACTIVE.value:
+                if tpu_status == TPUStatus.NOT_FOUND.value:
+                    self.allocate_tpu()
+                return
+
+            if self.setup_tpu() != 0:
+                console.print(f"[yellow]mesh setup failed for {self.node_id}, will retry[/yellow]")
+                return
+
+            full_cmd = f'mesh run {self.node_id} "{self.cmd}"'
+            log_path = f"{self.home_dir}/logs/{self.node_id}.txt"
+
             self._log_file = open(log_path, "a", buffering=1)
             self.process = subprocess.Popen(
                 full_cmd,
