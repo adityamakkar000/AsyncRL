@@ -28,7 +28,6 @@ dependencies = [
     "optax==0.2.7",
     "wandb==0.25.0",
     "rich<14.0.0",
-    "epath>=0.7",
 ]
 
 [project.optional-dependencies]

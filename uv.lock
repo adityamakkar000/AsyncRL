@@ -146,7 +146,6 @@ source = { virtual = "." }
 dependencies = [
     { name = "datasets" },
     { name = "einops" },
-    { name = "epath" },
     { name = "gcsfs" },
     { name = "hydra-core" },
     { name = "jax" },
@@ -189,7 +188,6 @@ requires-dist = [
     { name = "datasets", specifier = ">=4.5.0" },
     { name = "datasets", marker = "extra == 'data'", specifier = ">=4.4.2" },
     { name = "einops", specifier = ">=0.8.1" },
-    { name = "epath", specifier = ">=0.7" },
     { name = "gcsfs", specifier = ">=2024.6.0" },
     { name = "gcsfs", marker = "extra == 'data'", specifier = ">=2025.3.0" },
     { name = "hydra-core", specifier = "==1.3.2" },
@@ -921,15 +919,6 @@ wheels = [
 ]
 
 [[package]]
-name = "epath"
-version = "0.7"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/5a/e7/a8ce60706f5b1ac3f697252b4356a7610e19045909f54500b1751e575e40/epath-0.7.tar.gz", hash = "sha256:7e420cf6c4b4c2e3a86f33a2e78968124e359613e8fae2bd5391644381886c78", size = 3306, upload-time = "2021-07-05T22:07:57.09Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ae/59/25ae9e12f586cad9865ab8f62f2abfcfde15bf0a54cc0243c3b4467a471e/epath-0.7-py3-none-any.whl", hash = "sha256:bb346c1efe30c45916394ae6140cc40a7bbe1d5f50a6b909d6ee27712a671d27", size = 3272, upload-time = "2021-07-05T22:07:55.61Z" },
-]
-
-[[package]]
 name = "etils"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1399,6 +1388,29 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/62/29/73ef0141b4732ff5eacd68430ff2512a65c004696997f70476a83e548e7e/grpcio-1.80.0-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:ce1794f4ea6cc3ca29463f42d665c32ba1b964b48958a66497917fe9069f26e6", size = 7851641, upload-time = "2026-03-30T08:47:05.462Z" },
     { url = "https://files.pythonhosted.org/packages/46/69/abbfa360eb229a8623bab5f5a4f8105e445bd38ce81a89514ba55d281ad0/grpcio-1.80.0-cp311-cp311-win32.whl", hash = "sha256:51b4a7189b0bef2aa30adce3c78f09c83526cf3dddb24c6a96555e3b97340440", size = 4154368, upload-time = "2026-03-30T08:47:08.027Z" },
     { url = "https://files.pythonhosted.org/packages/6f/d4/ae92206d01183b08613e846076115f5ac5991bae358d2a749fa864da5699/grpcio-1.80.0-cp311-cp311-win_amd64.whl", hash = "sha256:02e64bb0bb2da14d947a49e6f120a75e947250aebe65f9629b62bb1f5c14e6e9", size = 4894235, upload-time = "2026-03-30T08:47:10.839Z" },
+]
+
+[[package]]
+name = "grpcio-tools"
+version = "1.80.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "grpcio" },
+    { name = "protobuf" },
+    { name = "setuptools" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/94/c8/1223f29c84a143ae9a56c084fc96894de0ba84b6e8d60a26241abd81d278/grpcio_tools-1.80.0.tar.gz", hash = "sha256:26052b19c6ce0dcf52d1024496aea3e2bdfa864159f06dc7b97b22d041a94b26", size = 6133212, upload-time = "2026-03-30T08:52:39.077Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/d7/225dc91e6cb4f8d4830f16a478a468e9c6f342dcdf8cacc3772cc1d1f607/grpcio_tools-1.80.0-cp311-cp311-linux_armv7l.whl", hash = "sha256:1c43e5c768578fe0c6de3dbfaabe64af642951e1aa05c487cacedda63fa6c6c4", size = 2549937, upload-time = "2026-03-30T08:50:34.651Z" },
+    { url = "https://files.pythonhosted.org/packages/97/3d/a3684cb7677f3bea8db434eae02a9ce30135d7a268cd473b1bc8041c4722/grpcio_tools-1.80.0-cp311-cp311-macosx_11_0_universal2.whl", hash = "sha256:a225348456575f3ac7851d8e23163195e76d2a905ee340cf73f33da62fba08aa", size = 5713099, upload-time = "2026-03-30T08:50:37.158Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/81/5665c697173ec346076358bfbfed0f7386825852494593ca14386478dfee/grpcio_tools-1.80.0-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:a9396f02820d3f51c368c2c9dee15c55c77636c91be48a4d5c702e98d6fe0fdc", size = 2595776, upload-time = "2026-03-30T08:50:39.087Z" },
+    { url = "https://files.pythonhosted.org/packages/03/4f/fb81384f08a8226fa079972ba88272ac6277581fc72e8ab234d74c7e065b/grpcio_tools-1.80.0-cp311-cp311-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:797c08460cae16b402326eac329aec720dccf45c9f9279b95a352792eb53cf0f", size = 2909144, upload-time = "2026-03-30T08:50:40.922Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/9c/c957618f1c2a3195ecf5e83b03edcb364c2c1391f74183cb76e5763fa536/grpcio_tools-1.80.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1872a867eb6217de19edb70a4ce4a374ced9d94293533dfd42fa649713f55bf4", size = 2660477, upload-time = "2026-03-30T08:50:42.766Z" },
+    { url = "https://files.pythonhosted.org/packages/42/c7/23913da184febfd4eaf04de256a26bc5ff0411a5feb753e2adcff10fa86a/grpcio_tools-1.80.0-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:db122ba5ee357e3bb14e8944d69bbebcbdae91d5eace29ed4df3edc53cbc6528", size = 3110164, upload-time = "2026-03-30T08:50:44.761Z" },
+    { url = "https://files.pythonhosted.org/packages/af/fa/b25ed85ebdb0396910eaa250b1346d75527d22fca586265416bd4330dcd5/grpcio_tools-1.80.0-cp311-cp311-musllinux_1_2_i686.whl", hash = "sha256:ddefd48c227e6f4d640fe576fac5fb2c4a8898196f513604c8ec7671b3b3d421", size = 3658988, upload-time = "2026-03-30T08:50:47.546Z" },
+    { url = "https://files.pythonhosted.org/packages/60/85/2a55147cc9645e2ed777d1afcd2dc68cb34ba6f6c726bd4378ddb001a5ea/grpcio_tools-1.80.0-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:970ec058fa469dd6dae6ebc687501c5da670d95dead75f62f5b0933dce2c9794", size = 3326662, upload-time = "2026-03-30T08:50:49.59Z" },
+    { url = "https://files.pythonhosted.org/packages/68/ed/b05bee2a992e6f9bda81909692ea920d0896cfa05c5c9dd77ba03f2d22fb/grpcio_tools-1.80.0-cp311-cp311-win32.whl", hash = "sha256:526b4402d47a0e9b31cd6087e42b7674784617916cc73c764e0bc35ed41b4ee5", size = 997969, upload-time = "2026-03-30T08:50:51.539Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/9a/cb50c8270e2f6285ff2761130ae257ac4e51789ded4b9d9710ce0381814d/grpcio_tools-1.80.0-cp311-cp311-win_amd64.whl", hash = "sha256:ee101ecda7231770f6a5da1024a9a6ed587a7785f8fe23ab8283f4a1acb3ffe6", size = 1162742, upload-time = "2026-03-30T08:50:54.232Z" },
 ]
 
 [[package]]
@@ -3155,22 +3167,14 @@ wheels = [
 ]
 
 [[package]]
-name = "orbax"
-version = "0.1.9"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "orbax-checkpoint" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c7/78/0e144f12703c95d4495e9abc390c2f548ee9f24d2e487137108a921b1d81/orbax-0.1.9.tar.gz", hash = "sha256:42dd487ceef9fbf027f4720f3d041686af75120466a528a8a8141226bc197218", size = 1649, upload-time = "2023-09-06T20:43:02.819Z" }
-
-[[package]]
 name = "orbax-checkpoint"
-version = "0.11.34"
+version = "0.11.37"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
     { name = "aiofiles" },
     { name = "etils", extra = ["epath", "epy"] },
+    { name = "grpcio-tools" },
     { name = "humanize" },
     { name = "jax" },
     { name = "msgpack" },
@@ -3184,9 +3188,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4a/8d/ea7f1d4f84bae3c7c52d1655031e4af0110287b73a09a4fd620e80330885/orbax_checkpoint-0.11.34.tar.gz", hash = "sha256:ab7733a0839085b93fe7cb52ef9596c7b6f8310df4e234c75588289704367888", size = 575019, upload-time = "2026-04-08T00:34:13.699Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/14/35/990671ba4dc16e57fc7fec4c0edc70fbabcf44b9056ee443eaf5ef68d9be/orbax_checkpoint-0.11.37.tar.gz", hash = "sha256:50f9a11830b2575d5a2291e7e67e3156ba2c249dcf0533140a7b7b6adc173c34", size = 619522, upload-time = "2026-05-01T17:36:40.214Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/fc/55a2a089dbf600dc58ef957212559f89846ebde9d5a43e20d9fcd91be1b1/orbax_checkpoint-0.11.34-py3-none-any.whl", hash = "sha256:8b0c9d853089be40ad1b0dbe902ef4e1c3ba03a3393d508bf96bc864b85eee63", size = 1110265, upload-time = "2026-04-08T00:34:12.145Z" },
+    { url = "https://files.pythonhosted.org/packages/27/a7/b2d70d16b7aa13354f2042b639a422e886c943858014af18c42e2044cabe/orbax_checkpoint-0.11.37-py3-none-any.whl", hash = "sha256:35d8b450b17e33ea6bd2b213f672ebabc425bda877d980a2408ed448618b6e28", size = 1175122, upload-time = "2026-05-01T17:36:38.093Z" },
 ]
 
 [[package]]
@@ -4587,13 +4591,14 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FaddName#43b3fbc3438309b86ccdb6db8402d5dc40e1cb8e" }
+source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FaddName#1b273913853cc070b00698f92b31642f52e04725" }
 dependencies = [
+    { name = "etils", extra = ["epath"] },
     { name = "flax" },
     { name = "jax" },
     { name = "jaxtyping" },
     { name = "loguru" },
-    { name = "orbax" },
+    { name = "orbax-checkpoint" },
     { name = "pre-commit" },
     { name = "ruff" },
     { name = "tensorboard" },

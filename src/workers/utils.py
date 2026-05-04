@@ -24,7 +24,7 @@ def setup(setup_fn: Callable[[Any], None], component: str):
 
     @wraps(setup_fn)
     def wrapper(*args, **kwargs):
-        logger.info("Setting up {}", component)
+        logger.info(f"Setting up {component}")
         start = time.time()
         setup_fn(*args, **kwargs)
         end = time.time()

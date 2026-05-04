@@ -1,25 +1,19 @@
 import threading
 import time
-from functools import partial
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-import stax
 from jax.experimental.multihost_utils import broadcast_one_to_all, sync_global_devices
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, PyTree
-from stax import Tracker
-from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
 from src.constants import AsyncOptions
 from src.model import KVCache, Model
-from src.data import InferenceRollout
 
-from .worker import Worker
 from .config import AsyncState, InferenceShardings, InferenceState, TrainerConfig
-from .utils import _maybe_force_eos, _maybe_force_eot, naive_sample
+from .worker import Worker
 
 AXIS_NAME = "data"
 PADDING_BUFFER = 1024
@@ -35,6 +29,7 @@ Structure your response into two sections: Thought and Solution. In the Thought 
 Each thought should include detailed analysis, brainstorming, verification, and refinement of ideas.
 After \"</think>\n,\" in the Solution section, provide the final, logical, and accurate answer, clearly derived from the exploration in the Thought section."""
 
+
 def apply_prompt_template(text: str) -> str:
     return f"""Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
 {text}
@@ -44,12 +39,14 @@ Remember to put your answer inside \\boxed{{}}."""
 def apply_system_prompt_template() -> str:
     return SYSTEM_PROMPT
 
+
 def get_chat_template(system_prompt: bool, text: str) -> list[dict[str, str]]:
     chat = []
     if system_prompt:
         chat.append({"role": "system", "content": apply_system_prompt_template()})
     chat.append({"role": "user", "content": apply_prompt_template(text)})
     return chat
+
 
 class AsyncInferenceWorker(Worker):
     """
@@ -69,12 +66,15 @@ class AsyncInferenceWorker(Worker):
 
         self.shardings: InferenceShardings = self.get_shardings(dummy_params)
         self.params = jax.device_put(dummy_params, self.shardings.replicate_sharding)
-        
+
+        jax.block_until_ready(self.params)
+
         self.async_state = AsyncState(MRUparams=jax.device_get(self.params), updated=False)
 
-        self.monitor_thread = threading.Thread(target=self.monitor_weight_sync, args=(self.async_state, self.async_options), daemon=True)
+        self.monitor_thread = threading.Thread(
+            target=self.monitor_weight_sync, args=(self.async_state, self.async_options), daemon=True
+        )
         self.monitor_thread.start()
-
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model.config.hf_model_name)
         self.precompile_dict = {
@@ -87,11 +87,10 @@ class AsyncInferenceWorker(Worker):
             .input_ids[0]
             .tolist()
         )
-    
+
     def start(self):
         print("start")
 
-    
     def monitor_weight_sync(self, async_state: AsyncState, async_options: AsyncOptions):
         def inference_sync_weights(params_cpu, async_options: AsyncOptions):
             async_options.weight_sync_queue.get()
@@ -100,18 +99,20 @@ class AsyncInferenceWorker(Worker):
             sync_global_devices("weightSync")
             sync_global_devices("gathered")
 
+            print("Starting broadcast of params ")
             params_cpu = broadcast_one_to_all(params_cpu)
             print("Broadcasted params to all inf workers")
             return params_cpu
 
         while True:
+            print("checking for weight sync...")
             if async_options.weight_sync_queue.full():
                 async_state.MRUparams = inference_sync_weights(async_state.MRUparams, async_options)
                 async_state.updated = True
                 print("Updated weights on inference worker")
 
             time.sleep(0.1)
-    
+
     def _maybe_update_params(self, state: AsyncState) -> jax.Array:
         new_params = self.params
         sharding = self.params.sharding
@@ -124,7 +125,7 @@ class AsyncInferenceWorker(Worker):
     def block_until_params_update(self):
         while not self.async_state.updated:
             print("Waiting for initial parameters from training workers...")
-            time.sleep(1)
+            time.sleep(5)
         self.params = self._maybe_update_params(self.async_state)
 
     def validate_config(self):
@@ -145,15 +146,17 @@ class AsyncInferenceWorker(Worker):
         assert self.inference_config.max_prefill_sequence_len <= self.inference_config.max_seq_len, (
             f"max_prefill_sequence_len {self.inference_config.max_prefill_sequence_len} must be less than or equal to max_seq_len {self.inference_config.max_seq_len}"
         )
-        assert self.inference_config.max_prefill_sequence_len & (self.inference_config.max_prefill_sequence_len - 1) == 0, (
-            f"max_prefill_sequence_len must be a power of 2, got {self.inference_config.max_prefill_sequence_len}"
-        )
+        assert (
+            self.inference_config.max_prefill_sequence_len & (self.inference_config.max_prefill_sequence_len - 1) == 0
+        ), f"max_prefill_sequence_len must be a power of 2, got {self.inference_config.max_prefill_sequence_len}"
 
         assert self.inference_config._max_decode_prompts % (self.inference_config.n_replicas) == 0, (
             f"_max_decode_prompts {self.inference_config._max_decode_prompts} must be divisible by n_replicas {self.inference_config.n_replicas}"
         )
 
-        assert (self.inference_config._max_decode_prompts * self.inference_config.group_size) % (self.inference_config._max_decode_batch_size) == 0, (
+        assert (self.inference_config._max_decode_prompts * self.inference_config.group_size) % (
+            self.inference_config._max_decode_batch_size
+        ) == 0, (
             f"group_size * _max_decode_prompts {self.inference_config.group_size * self.inference_config._max_decode_prompts} must be divisible by _max_decode_batch_size {self.inference_config._max_decode_batch_size}"
         )
 
@@ -168,18 +171,24 @@ class AsyncInferenceWorker(Worker):
             )
 
         if not self.inference_config.think_mode:
-            assert self.inference_config.reasoning_budget is None, "Reasoning budget should be None when think_mode is disabled"
+            assert self.inference_config.reasoning_budget is None, (
+                "Reasoning budget should be None when think_mode is disabled"
+            )
 
         if self.inference_config.top_k is not None:
             assert self.inference_config.top_k > 0, f"top_k must be positive, got {self.inference_config.top_k}"
 
         if self.inference_config.top_p is not None:
-            assert 0.0 < self.inference_config.top_p <= 1.0, f"top_p must be in the range (0, 1], got {self.inference_config.top_p}"
+            assert 0.0 < self.inference_config.top_p <= 1.0, (
+                f"top_p must be in the range (0, 1], got {self.inference_config.top_p}"
+            )
 
     def get_shardings(self, params) -> InferenceShardings:
         """Get the shardings for the model parameters, kv cache, and inference state based on the configuration."""
         local_devices = np.array(jax.local_devices())
-        mesh = jax.make_mesh((self.inference_config.n_replicas,), (AXIS_NAME,), devices=local_devices[: self.inference_config.n_replicas])
+        mesh = jax.make_mesh(
+            (self.inference_config.n_replicas,), (AXIS_NAME,), devices=local_devices[: self.inference_config.n_replicas]
+        )
 
         replicate_sharding = jax.NamedSharding(mesh, P())
         split_sharding = jax.NamedSharding(mesh, P(AXIS_NAME))
@@ -638,7 +647,6 @@ class AsyncInferenceWorker(Worker):
     #         self.precompile_dict["decode"]["all_stop"] = jax.jit(
     #             self._decode_loop, donate_argnums=(0,), **self.shardings.decode_all_shardings
     #         )
-
 
     #     P = prompts.next_token.shape[0]
     #     prompt_queue: list[int] = [i for i in range(P) for _ in range(self.config.group_size)]

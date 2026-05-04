@@ -144,10 +144,13 @@ class AsyncTrainerWorker(Worker):
         self.n_devices = jax.device_count()
         self.gs_path = f"{GS_BUCKET}/runs/{self.config.experiment_name}"
 
-    @partial(setup, component="metric logger")
+    @partial(setup, component="metric_logger")
     def _setup_writer(self):
         if writer_config := self.config.wandb_config:
-            writer_kwargs: dict[str, Any] = {"metrics_to_print": self.config.metrics_to_log}
+            writer_kwargs: dict[str, Any] = {
+                "metrics_to_print": self.config.metrics_to_log,
+                "mesh": self.async_options.train_mesh,
+            }
             if self.writer_id is not None:
                 writer_kwargs["run_id"] = self.writer_id
             else:
@@ -294,6 +297,7 @@ class AsyncTrainerWorker(Worker):
             max_to_keep=self.config.max_checkpoints_to_keep,
             # only allow train workers to write checkpoints
             active_processes=set(range(self.async_options.train_workers)),
+            train_mesh=self.async_options.train_mesh,
         )
 
     def make_save_tree(
@@ -332,7 +336,7 @@ class AsyncTrainerWorker(Worker):
         assert self.checkpointer is not None, "Checkpointer not set up."
         state, metadata = self.make_save_tree(step)
         logger.info(f"Saving checkpoint at step {step} ...")
-        self.checkpointer.save_checkpoint(step=step, save_tree=state, metadata=metadata)
+        # self.checkpointer.save_checkpoint(step=step, save_tree=state, metadata=metadata)
 
     def block_until_checkpoints_saved(self):
         if not self.checkpointer:
@@ -411,17 +415,18 @@ class AsyncTrainerWorker(Worker):
         del _params
 
     def fill_queue_thread(self):
-        def _fill_queue_thread(async_config: AsyncOptions, train_dataset: DataLoader):
+        def _fill_queue_thread(async_options: AsyncOptions, train_dataset: DataLoader):
             logger.info("Starting background thread to fill prompt queue...")
             while True:
-                prompt_diff = async_config.prompt_queue.maxsize - async_config.prompt_queue.qsize()
+                max_prompts = self.config.async_config.max_prompt_queue_size * self.train_n_prompts
+                prompt_diff = max_prompts - async_options.prompt_queue.qsize()
                 if prompt_diff < self.train_n_prompts:
                     time.sleep(0.1)
                     continue
 
-                sync_over_mesh("prompt_queue_fill", async_config.train_mesh)
+                sync_over_mesh("prompt_queue_fill", async_options.train_mesh)
                 for s in train_dataset(self.train_n_prompts):
-                    async_config.prompt_queue.put(s)
+                    async_options.prompt_queue.put(s)
 
         self.background_thread = Thread(
             target=_fill_queue_thread,

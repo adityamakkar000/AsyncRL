@@ -1,7 +1,7 @@
 # note that name must be the same as registery function decorator name
 defaults:
-  - datasets@train_config: omnimath
-  - datasets@val_config: omnimath
+  - datasets@train_config: gsm8k
+  - datasets@val_config: gsm8k
 
 train_config:
   batch_size: 128
