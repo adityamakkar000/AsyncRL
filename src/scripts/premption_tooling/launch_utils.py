@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from flax.linen.module import K
 import requests
 
 from .main import Runtime, TPUType, Zone

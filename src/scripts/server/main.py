@@ -112,7 +112,8 @@ class Server:
             self.jobs.append(job)
 
     def list_jobs(self) -> list[JobView]:
-        snapshot = list(self.jobs)
+        with self.lock:
+            snapshot = list(self.jobs)
         out: list[JobView] = []
         for j in snapshot:
             out.append(
@@ -144,7 +145,10 @@ class Server:
             with self.lock:
                 self.jobs.append(job)
             return False
-        shutil.rmtree(f"{job.home_dir}/{job.node_id}")
+        try:
+            shutil.rmtree(f"{job.home_dir}/{job.cwd}")
+        except Exception:
+            logger.exception("rmtree failed for %s, skipping", job.cwd)
         log_path = f"{job.home_dir}/logs/{job.node_id}.txt"
         if os.path.exists(log_path) and not job.keep_logs:
             os.remove(log_path)
@@ -235,4 +239,4 @@ async def stream_job_log(node_id: str) -> StreamingResponse:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("scripts.server.main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("src.scripts.server.main:app", host="0.0.0.0", port=8000, reload=False)
