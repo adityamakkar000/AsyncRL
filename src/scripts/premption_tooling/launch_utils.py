@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from flax.linen.module import K
 import requests
 
 from .main import Runtime, TPUType, Zone
@@ -113,6 +114,7 @@ def run_tpu_jobs(
     TPU_TYPE: TPUType,
     RUNTIME: Runtime,
     RETRIES: int,
+    keep_logs: bool = True,
 ):
     # this get's current project assuming you used launch.py from the project root
     copy_dir = os.getcwd()
@@ -153,6 +155,7 @@ def run_tpu_jobs(
             "retries": RETRIES,
             "cwd": server_dir,
             "launched_by": user,
+            "keep_logs": keep_logs, # to keep logs after run ends
         }
 
         response = requests.post(f"{TPU_SERVER_URL}/run_job", json=post_args, timeout=30)
@@ -173,4 +176,5 @@ def launch(job: LAUNCH_JOB) -> None:
         job.TPU_TYPE,
         job.RUNTIME,
         job.RETRIES,
+        keep_logs=True,
     )

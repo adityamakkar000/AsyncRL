@@ -31,6 +31,7 @@ class RunJobRequest(BaseModel):
     retries: int = 3
     launched_by: str = ""
     cwd: str = ""
+    keep_logs: bool = True
 
 
 class JobView(BaseModel):
@@ -47,12 +48,11 @@ class JobView(BaseModel):
 
 class Server:
     def __init__(self) -> None:
-        self.lock = threading.Lock()
+        self.lock = threading.Lock() # lock for job and delete queue
         self.jobs: list[TPUJob] = []
         self.shutdown = threading.Event()
         self.worker: threading.Thread | None = None
         self.delete_queue: list[str] = []
-        self.delete_lock = threading.Lock()
 
     def start_worker(self) -> None:
         if self.worker is not None and self.worker.is_alive():
@@ -70,9 +70,7 @@ class Server:
         while not self.shutdown.is_set():
             with self.lock:
                 jobs_snapshot = list(self.jobs)
-            with self.delete_lock:
                 to_delete = list(self.delete_queue)
-            pending = [j for j in jobs_snapshot if not j.is_job_finished_without_error]
             for j in jobs_snapshot:
                 if j.is_job_finished_without_error:
                     to_delete.append(j.node_id)
@@ -82,14 +80,11 @@ class Server:
                         logger.info("deleted job %s", j)
                     else:
                         logger.info("failed to delete job %s, must send DELETE request again", j)
-                    with self.delete_lock:
+                    with self.lock:
                         if j in self.delete_queue:
                             self.delete_queue.remove(j)
                 except Exception:
                     logger.exception("delete_tpu failed for %s", j)
-            if len(pending) == 0:
-                time.sleep(1)
-                continue
             try:
                 with self.lock:
                     jobs_ref = list(self.jobs)
@@ -112,12 +107,12 @@ class Server:
                 retries=body.retries,
                 cwd=body.cwd,
                 launched_by=body.launched_by,
+                keep_logs=body.keep_logs,
             )
             self.jobs.append(job)
 
     def list_jobs(self) -> list[JobView]:
-        with self.lock:
-            snapshot = list(self.jobs)
+        snapshot = list(self.jobs)
         out: list[JobView] = []
         for j in snapshot:
             out.append(
@@ -151,7 +146,7 @@ class Server:
             return False
         shutil.rmtree(f"{job.home_dir}/{job.node_id}")
         log_path = f"{job.home_dir}/logs/{job.node_id}.txt"
-        if os.path.exists(log_path):
+        if os.path.exists(log_path) and not job.keep_logs:
             os.remove(log_path)
         return True
 
@@ -195,7 +190,7 @@ def get_jobs() -> list[JobView]:
 
 @app.delete("/jobs/{job_id}")
 def delete_job(job_id: str) -> dict[str, Any]:
-    with get_state().delete_lock:
+    with get_state().lock:
         if job_id in get_state().delete_queue:
             return {"ok": False, "deleted": job_id}
         get_state().delete_queue.append(job_id)
