@@ -48,7 +48,7 @@ class JobView(BaseModel):
 
 class Server:
     def __init__(self) -> None:
-        self.lock = threading.Lock() # lock for job and delete queue
+        self.lock = threading.Lock()  # lock for job and delete queue
         self.jobs: list[TPUJob] = []
         self.shutdown = threading.Event()
         self.worker: threading.Thread | None = None

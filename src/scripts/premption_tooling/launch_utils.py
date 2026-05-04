@@ -155,7 +155,7 @@ def run_tpu_jobs(
             "retries": RETRIES,
             "cwd": server_dir,
             "launched_by": user,
-            "keep_logs": keep_logs, # to keep logs after run ends
+            "keep_logs": keep_logs,  # to keep logs after run ends
         }
 
         response = requests.post(f"{TPU_SERVER_URL}/run_job", json=post_args, timeout=30)
