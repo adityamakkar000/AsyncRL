@@ -235,4 +235,4 @@ async def stream_job_log(node_id: str) -> StreamingResponse:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("scripts.server.main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("src.scripts.server.main:app", host="0.0.0.0", port=8000, reload=False)
