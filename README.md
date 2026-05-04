@@ -34,6 +34,7 @@ TPU_SERVER_URL="http://100.79.104.73:8000"
 Notes: 
 - Before you delete, GET the jobs. Do not delete on provisioning. if you do, then go manually to GCP to cleanup TPU
 - To get full command, redirect. Eg `server_ls > jobs.txt`
+- Always run `launch.py` from the root of the project
     
 
 #### Run using `launch.py`
