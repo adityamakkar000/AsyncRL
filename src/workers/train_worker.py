@@ -6,6 +6,7 @@ from threading import Thread
 from typing import Any, Optional
 
 import jax
+import numpy as np
 import optax
 import stax
 from dotenv import load_dotenv
@@ -317,8 +318,9 @@ class AsyncTrainerWorker(Worker):
             "opt_state": opt_state if opt_state else self.opt_state,
             "global_step": self.global_step,
             "dataset": dataset_state,
-            "key": jax.device_get(self.key.key),
+            "key": self.key.key,
         }
+        state = jax.tree.map(lambda x: jax.device_get(x), state)
         metadata = {
             "writer_id": self.writer_id,
         }
@@ -336,7 +338,7 @@ class AsyncTrainerWorker(Worker):
         assert self.checkpointer is not None, "Checkpointer not set up."
         state, metadata = self.make_save_tree(step)
         logger.info(f"Saving checkpoint at step {step} ...")
-        # self.checkpointer.save_checkpoint(step=step, save_tree=state, metadata=metadata)
+        self.checkpointer.save_checkpoint(step=step, save_tree=state, metadata=metadata)
 
     def block_until_checkpoints_saved(self):
         if not self.checkpointer:
@@ -361,11 +363,13 @@ class AsyncTrainerWorker(Worker):
         }
         out = self.model.init_state(rng=jax.random.PRNGKey(0), tx=self.tx, sharding=shardings, abstract=True)
 
+        dummy_state = jax.tree.map(lambda x, s: jax.device_put(np.zeros(x.shape, x.dtype), s), out, shardings)
+
         # don't need metadata
         save_tree, _ = self.make_save_tree(
             step=-1,
-            params=out["params"],
-            opt_state=out["opt_state"],
+            params=dummy_state["params"],
+            opt_state=dummy_state["opt_state"],
         )
 
         restored_ckpt = self.checkpointer.restore(state=save_tree)
@@ -387,31 +391,37 @@ class AsyncTrainerWorker(Worker):
         for _ in range(self.async_options.inference_workers):
             self.async_options.weight_sync_queue.put("sync")
 
-        print(f"Placed sync signals for {self.async_options.inference_workers} inference workers.")
+        logger.info(
+            f"Placed sync signals for {self.async_options.inference_workers} inference workers.", log_for_all=True
+        )
         while not self.async_options.weight_sync_queue.empty():
             time.sleep(0.1)
-
-        print("Syncing weights across devices.")
 
         # NOTE: we sync over global devices here since inference workers
         # should be aligned at this point (otherwise they won't have popped the sync polls from the queue)
 
         sync_global_devices("weightSync")
+        logger.info("Syncing weights across devices.", log_for_all=True)
 
         replicate_sharding = jax.NamedSharding(self.train_mesh, jax.P())
-        params_gathered = jax.jit(lambda x: x, out_shardings=replicate_sharding)(self.params)
+        param_dtype = self.config.loss_config.inference_config.params_dtype
 
-        params_cpu = jax.device_get(params_gathered)
+        # convert before gather / PCIE copy since inference dtype < training dtype
+        params_broadcast = jax.tree.map(lambda x: x.astype(param_dtype), self.params)
+        params_broadcast = jax.jit(lambda x: x, out_shardings=replicate_sharding)(params_broadcast)
+        params_broadcast = jax.device_get(params_broadcast)
+
         sync_global_devices("gathered")
 
-        print("Broadcasting params to inference workers...")
+        logger.info("Broadcasting params to inference workers.", log_for_all=True)
 
         # broadcast over RDMA(ICI on TPU devices)
-        _params = broadcast_one_to_all(params_cpu)
+        _params = broadcast_one_to_all(params_broadcast)
+
+        logger.info("Params broadcast complete.", log_for_all=True)
 
         # trainer doesn't need any of these variables, free up memory
-        del params_gathered
-        del params_cpu
+        del params_broadcast
         del _params
 
     def fill_queue_thread(self):

@@ -6,7 +6,7 @@ from flax import struct
 from jaxtyping import Array, PyTree
 from omegaconf import MISSING
 
-from src.data.config import DataConfig, RLBatch, Sample
+from src.data.config import DataConfig, RLBatch
 from src.model import KVCache, ModelConfig
 
 
@@ -22,6 +22,7 @@ class InferenceConfig:
     n_replicas: int = 1
     initial_sequence_len: int = 64
     kv_cache_dtype: str = "bfloat16"
+    params_dtype: str = "bfloat16"
     reasoning_budget: Optional[int] = None
     think_mode: bool = True
     max_prefill_sequence_len: int = 1024
@@ -54,12 +55,11 @@ class InferenceShardings:
     decode_all_shardings: dict[str, PyTree]
 
 
-
-
 @dataclass
 class AsyncState:
     MRUparams: jax.Array
     updated: bool
+
 
 class LossFunction(Protocol):
     """
@@ -106,6 +106,7 @@ class RLConfig:
     epsilon_high: float = 1.0
     epsilon_low: float = 0.1
 
+
 @dataclass
 class LossConfig:
     rl_config: RLConfig = field(default_factory=RLConfig)
@@ -117,7 +118,6 @@ class LossConfig:
 class AsyncConfig:
     train_workers: int = 1
     max_prompt_queue_size: int = 4  # multiple of num of prompts to keep
-
 
 
 @dataclass
@@ -157,4 +157,3 @@ class TrainerConfig:
 
     checkpoint_interval: int = 1000
     max_checkpoints_to_keep: int = 5
-

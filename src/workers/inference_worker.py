@@ -7,6 +7,7 @@ import numpy as np
 from jax.experimental.multihost_utils import broadcast_one_to_all, sync_global_devices
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, PyTree
+from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
 from src.constants import AsyncOptions
@@ -20,9 +21,6 @@ PADDING_BUFFER = 1024
 
 INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
 
-# SYSTEM_PROMPT = r"""You are a helpful AI assistant.
-# For every problem, you must reason step-by-step inside <think></think> tags before giving the final answer.
-# """
 SYSTEM_PROMPT = r"""Your task is to follow a systematic, thorough reasoning process before providing the final solution. 
 This involves analyzing, summarizing, exploring, reassessing, and refining your thought process through multiple iterations. 
 Structure your response into two sections: Thought and Solution. In the Thought section, present your reasoning using the format: \"<think>\n {thoughts} </think>\n\". 
@@ -60,7 +58,9 @@ class AsyncInferenceWorker(Worker):
 
         self.model = Model(trainer_config.model_config)
         abstract_output = self.model.init_state(rng=jax.random.PRNGKey(0), tx=None, sharding=None, abstract=True)
-        dummy_params = jax.tree.map(lambda x: jnp.zeros(x.shape, dtype=x.dtype), abstract_output["params"])
+        dummy_params = jax.tree.map(
+            lambda x: jnp.zeros(x.shape, dtype=self.inference_config.params_dtype), abstract_output["params"]
+        )
 
         self.validate_config()
 
@@ -99,34 +99,34 @@ class AsyncInferenceWorker(Worker):
             sync_global_devices("weightSync")
             sync_global_devices("gathered")
 
-            print("Starting broadcast of params ")
+            logger.info("Starting broadcast of params ", log_for_all=True)
             params_cpu = broadcast_one_to_all(params_cpu)
-            print("Broadcasted params to all inf workers")
+            logger.info("Broadcasted params to all inf workers", log_for_all=True)
             return params_cpu
 
         while True:
-            print("checking for weight sync...")
             if async_options.weight_sync_queue.full():
                 async_state.MRUparams = inference_sync_weights(async_state.MRUparams, async_options)
                 async_state.updated = True
-                print("Updated weights on inference worker")
+                logger.info("Updated weights on inference worker")
 
             time.sleep(0.1)
 
-    def _maybe_update_params(self, state: AsyncState) -> jax.Array:
-        new_params = self.params
-        sharding = self.params.sharding
+    def _maybe_update_params(self, state: AsyncState):
         if state.updated:
             state.updated = False
-            new_params = state.MRUparams
-            print("New params havse been updated to MRU params")
-        return jax.device_put(new_params, sharding)
+            self.params = jax.tree.map(
+                lambda x, s: jax.device_put(x, s),
+                state.MRUparams,
+                self.shardings.params_sharding,
+            )
+            logger.info("New params havse been updated to MRU params", log_for_all=True)
 
     def block_until_params_update(self):
         while not self.async_state.updated:
-            print("Waiting for initial parameters from training workers...")
+            logger.info("Waiting for initial parameters from training workers...", log_for_all=True)
             time.sleep(5)
-        self.params = self._maybe_update_params(self.async_state)
+        self._maybe_update_params(self.async_state)
 
     def validate_config(self):
         """Validate the inference configuration to ensure it meets the requirements for the inference engine."""
