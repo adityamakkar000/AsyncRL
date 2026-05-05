@@ -7,10 +7,12 @@ import numpy as np
 from jax.experimental.multihost_utils import broadcast_one_to_all, sync_global_devices
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, PyTree
+from stax import Tracker
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
 from src.constants import AsyncOptions
+from src.data import InferenceRollout
 from src.model import KVCache, Model
 
 from .config import AsyncState, InferenceShardings, InferenceState, TrainerConfig
@@ -298,122 +300,124 @@ class AsyncInferenceWorker(Worker):
         """Compute the maximum padding length for the input batch based on the sequence lengths and the maximum sequence length."""
         return self.compute_max_power_of_two(max(seq_lens).item(), self.inference_config.max_seq_len)
 
-    # def tokenize(self, texts: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    #     inputs: list[list[int]] = [
-    #         self.tokenizer.apply_chat_template(
-    #             get_chat_template(self.inference_config.system_prompt, text),
-    #             add_generation_prompt=True,
-    #             enable_thinking=self.inference_config.think_mode,
-    #             tokenize=True,
-    #         )
-    #         for text in texts
-    #     ]
+    def tokenize(self, texts: list[str]) -> tuple[np.ndarray, np.ndarray]:
+        inputs: list[list[int]] = [
+            self.tokenizer.apply_chat_template(
+                get_chat_template(self.inference_config.system_prompt, text),
+                add_generation_prompt=True,
+                enable_thinking=self.inference_config.think_mode,
+                tokenize=True,
+            )
+            for text in texts
+        ]
 
-    #     seq_lens = np.array([len(x) for x in inputs], dtype=np.int32)
-    #     padding_length = max(self.compute_max_padding_length(seq_lens), self.inference_config.initial_sequence_len)
-    #     inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
-    #     tokens = np.array(inputs, dtype=np.int32)
+        seq_lens = np.array([len(x) for x in inputs], dtype=np.int32)
+        padding_length = max(self.compute_max_padding_length(seq_lens), self.inference_config.initial_sequence_len)
+        inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
+        tokens = np.array(inputs, dtype=np.int32)
 
-    #     if padding_length > PADDING_BUFFER:
-    #         raise ValueError(
-    #             f"Input sequence padded prompts (T={padding_length}) was greater than kv-cache length with padding, either implement roll cache or add additional buffer space"
-    #         )
+        if padding_length > PADDING_BUFFER:
+            raise ValueError(
+                f"Input sequence padded prompts (T={padding_length}) was greater than kv-cache length with padding, either implement roll cache or add additional buffer space"
+            )
 
-    #     return tokens, seq_lens
+        return tokens, seq_lens
 
-    # def cleanup_rollouts(self, rollouts: list[InferenceRollout]) -> list[InferenceRollout]:
-    #     pad_id = self.tokenizer.pad_token_id
-    #     eos_id = self.tokenizer.eos_token_id
+    def cleanup_rollouts(self, rollouts: list[InferenceRollout]) -> list[InferenceRollout]:
+        pad_id = self.tokenizer.pad_token_id
+        eos_id = self.tokenizer.eos_token_id
 
-    #     def clean_sequence(tokens: np.ndarray, logprobs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    #         non_pad = tokens != pad_id
-    #         tokens = tokens[non_pad]
-    #         logprobs = logprobs[non_pad]
+        def clean_sequence(tokens: np.ndarray, logprobs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            non_pad = tokens != pad_id
+            tokens = tokens[non_pad]
+            logprobs = logprobs[non_pad]
 
-    #         eos_positions = np.where(tokens != eos_id)[0]
-    #         cutoff = eos_positions[-1] + 2  # keep one token after eos
-    #         tokens = tokens[:cutoff]
-    #         logprobs = logprobs[:cutoff]
+            eos_positions = np.where(tokens != eos_id)[0]
+            cutoff = eos_positions[-1] + 2  # keep one token after eos
+            tokens = tokens[:cutoff]
+            logprobs = logprobs[:cutoff]
 
-    #         return tokens, logprobs
+            return tokens, logprobs
 
-    #     cleaned = []
-    #     for rollout in rollouts:
-    #         new_rollouts = []
-    #         new_logprobs = []
-    #         for tokens, lps in zip(rollout.rollouts, rollout.logprobs):
-    #             t, lp = clean_sequence(np.asarray(tokens), np.asarray(lps))
-    #             new_rollouts.append(t)
-    #             new_logprobs.append(lp)
-    #         cleaned.append(InferenceRollout(rollouts=new_rollouts, logprobs=new_logprobs))
+        cleaned = []
+        for rollout in rollouts:
+            new_rollouts = []
+            new_logprobs = []
+            for tokens, lps in zip(rollout.rollouts, rollout.logprobs):
+                t, lp = clean_sequence(np.asarray(tokens), np.asarray(lps))
+                new_rollouts.append(t)
+                new_logprobs.append(lp)
+            cleaned.append(InferenceRollout(rollouts=new_rollouts, logprobs=new_logprobs))
 
-    #     return cleaned
+        return cleaned
 
-    # def detokenizer(self, tokens: list[InferenceRollout] | InferenceRollout) -> list[list[str]]:
-    #     if isinstance(tokens, InferenceRollout):
-    #         tokens = [tokens]
+    def detokenizer(self, tokens: list[InferenceRollout] | InferenceRollout) -> list[list[str]]:
+        if isinstance(tokens, InferenceRollout):
+            tokens = [tokens]
 
-    #     output_strs = []
-    #     for rollout in tokens:
-    #         rollout_strs = self.tokenizer.batch_decode(rollout.rollouts, skip_special_tokens=False)
-    #         output_strs.append(rollout_strs)
+        output_strs = []
+        for rollout in tokens:
+            rollout_strs = self.tokenizer.batch_decode(rollout.rollouts, skip_special_tokens=False)
+            output_strs.append(rollout_strs)
 
-    #     return output_strs
+        return output_strs
 
-    # def prefill(self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array) -> InferenceState:
-    #     logger.info(f"Compiling prefill for sequence length {input_tokens.shape[1]}")
+    def prefill(self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array) -> InferenceState:
+        logger.info(f"Compiling prefill for sequence length {input_tokens.shape[1]}")
 
-    #     with jax.named_scope("prefill"):
-    #         kv_cache = self.model.init_kv_cache(
-    #             self.config._max_decode_prompts,
-    #             length=self.max_attention_length,
-    #             dtype=self.config.kv_cache_dtype,
-    #             sharding=KVCache(
-    #                 k=self.shardings.replicate_sharding,  # type: ignore
-    #                 v=self.shardings.replicate_sharding,  # type: ignore
-    #                 length=self.shardings.replicate_sharding,  # type: ignore
-    #             ),
-    #         )
-    #         logits, out_cache = self.model.apply(
-    #             params, x=input_tokens[:, :-1], sequence_lens=seq_lens - 1, kv_cache=kv_cache
-    #         )
-    #         out_tokens = (
-    #             jnp.ones((self.config._max_decode_prompts, self.max_attention_length), dtype=jnp.int32)
-    #             * self.tokenizer.pad_token_id
-    #         )
-    #         out_logprobs = jnp.zeros((self.config._max_decode_prompts, self.max_attention_length), dtype=jnp.float32)
-    #         out_tokens = jax.lax.dynamic_update_slice_in_dim(out_tokens, input_tokens, 0, axis=1)
-    #         out_logprobs = jax.lax.dynamic_update_slice_in_dim(
-    #             out_logprobs, -jnp.inf * jnp.ones_like(input_tokens, dtype=jnp.float32), 0, axis=1
-    #         )
+        max_decode_prompts = self.inference_config._max_decode_prompts
+        kv_cache_dtype = self.inference_config.kv_cache_dtype
 
-    #     return InferenceState(
-    #         next_token=input_tokens[:, -1:],
-    #         seq_lens=seq_lens,
-    #         kv_cache=out_cache,
-    #         key=key,
-    #         stop_mask=jnp.zeros((self.config._max_decode_prompts, 1), dtype=bool),
-    #         end_of_think=jnp.zeros((self.config._max_decode_prompts, 1), dtype=bool),
-    #         out_tokens=out_tokens,
-    #         out_logprobs=out_logprobs,
-    #         prompt_id=jnp.arange(input_tokens.shape[0])[:, None],
-    #     )
+        with jax.named_scope("prefill"):
+            kv_cache = self.model.init_kv_cache(
+                max_decode_prompts,
+                length=self.max_attention_length,
+                dtype=kv_cache_dtype,
+                sharding=KVCache(
+                    k=self.shardings.replicate_sharding,  # type: ignore
+                    v=self.shardings.replicate_sharding,  # type: ignore
+                    length=self.shardings.replicate_sharding,  # type: ignore
+                ),
+            )
+            logits, out_cache = self.model.apply(
+                params, x=input_tokens[:, :-1], sequence_lens=seq_lens - 1, kv_cache=kv_cache
+            )
+            out_tokens = (
+                jnp.ones((max_decode_prompts, self.max_attention_length), dtype=jnp.int32) * self.tokenizer.pad_token_id
+            )
+            out_logprobs = jnp.zeros((max_decode_prompts, self.max_attention_length), dtype=jnp.float32)
+            out_tokens = jax.lax.dynamic_update_slice_in_dim(out_tokens, input_tokens, 0, axis=1)
+            out_logprobs = jax.lax.dynamic_update_slice_in_dim(
+                out_logprobs, -jnp.inf * jnp.ones_like(input_tokens, dtype=jnp.float32), 0, axis=1
+            )
 
-    # def prefill_step(
-    #     self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array
-    # ) -> tuple[InferenceState, dict[str, float]]:
-    #     if self.precompile_dict["prefill"].get((precompiled_length := input_tokens.shape[1])) is None:
-    #         self.precompile_dict["prefill"][precompiled_length] = jax.jit(
-    #             self.prefill,
-    #             **self.shardings.prefill_shardings,
-    #         )
+        return InferenceState(
+            next_token=input_tokens[:, -1:],
+            seq_lens=seq_lens,
+            kv_cache=out_cache,
+            key=key,
+            stop_mask=jnp.zeros((max_decode_prompts, 1), dtype=bool),
+            end_of_think=jnp.zeros((max_decode_prompts, 1), dtype=bool),
+            out_tokens=out_tokens,
+            out_logprobs=out_logprobs,
+            prompt_id=jnp.arange(input_tokens.shape[0])[:, None],
+        )
 
-    #     with Tracker(timer=True) as t:
-    #         out: InferenceState = self.precompile_dict["prefill"][precompiled_length](
-    #             input_tokens, seq_lens, params, key
-    #         )
-    #         jax.tree.map(lambda x: x.block_until_ready(), out)
-    #     return out, {"ttft": t.data["time"]}
+    def prefill_step(
+        self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array
+    ) -> tuple[InferenceState, dict[str, float]]:
+        if self.precompile_dict["prefill"].get((precompiled_length := input_tokens.shape[1])) is None:
+            self.precompile_dict["prefill"][precompiled_length] = jax.jit(
+                self.prefill,
+                **self.shardings.prefill_shardings,
+            )
+
+        with Tracker(timer=True) as t:
+            out: InferenceState = self.precompile_dict["prefill"][precompiled_length](
+                input_tokens, seq_lens, params, key
+            )
+            jax.tree.map(lambda x: x.block_until_ready(), out)
+        return out, {"ttft": t.data["time"]}
 
     # def decode(self, state: InferenceState, params: PyTree) -> InferenceState:
     #     logger.info(f"Compiling decode step for attention length {state.kv_cache[0].k.shape[1]}")
@@ -808,6 +812,6 @@ class AsyncInferenceWorker(Worker):
     #     metrics = {f"inference_metrics/{k}": v for k, v in metrics.items()}
     #     return InferenceResults(rollouts=output_rollouts, output_strs=output_strs, metrics=metrics)
 
-    # @property
-    # def max_attention_length(self) -> int:
-    #     return min(self.config.max_seq_len, self.model.sequence_len) + PADDING_BUFFER
+    @property
+    def max_attention_length(self) -> int:
+        return min(self.inference_config.max_seq_len, self.model.sequence_len) + PADDING_BUFFER
