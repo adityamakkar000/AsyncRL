@@ -104,9 +104,8 @@ class AsyncInferenceWorker(Worker):
             sync_global_devices("weightSync")
             sync_global_devices("gathered")
 
-            logger.info("Starting broadcast of params ", log_for_all=True)
             params_cpu = broadcast_one_to_all(params_cpu)
-            logger.info("Broadcasted params to all inf workers", log_for_all=True)
+            logger.info("Inference workers received updated params", log_for_all=True)
             return params_cpu
 
         while True:
@@ -115,8 +114,6 @@ class AsyncInferenceWorker(Worker):
                 with async_state.update_lock:
                     async_state.MRUparams = new_params
                     async_state.updated = True
-                logger.info("Updated weights on inference worker")
-
             time.sleep(0.1)
 
     def _maybe_update_params(self):
@@ -128,7 +125,7 @@ class AsyncInferenceWorker(Worker):
                     self.async_state.MRUparams,
                     self.shardings.params_sharding,
                 )
-                logger.info("New params havse been updated to MRU params", log_for_all=True)
+                logger.info("Params updated on inference worker", log_for_all=True)
 
     def block_until_params_update(self):
         logger.info("Waiting for initial parameters from training workers...", log_for_all=True)
@@ -734,7 +731,7 @@ class AsyncInferenceWorker(Worker):
                 del self.global_rollouts[pid]
 
             logger.info(
-                f"put {len(pid_ready_to_process)} rollouts into rollout queue, queue size: {self.async_options.rollout_queue.qsize()}",
+                f"Put {len(pid_ready_to_process)} rollouts into rollout queue, queue size: {self.async_options.rollout_queue.qsize()}, prompt queue size {self.async_options.prompt_queue.qsize()}",
                 log_for_all=True,
             )
 

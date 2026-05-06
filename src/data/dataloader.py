@@ -48,13 +48,10 @@ class DataLoader:
         return self._last_samples
 
     def __call__(self, num_prompts: int) -> list[Sample]:
-        self.total_per_device = num_prompts // jax.process_count()
-        self.start_idx = self._current_idx + self.rank * self.total_per_device
-        self.process_end_idx = self.start_idx + self.total_per_device
-        samples = [self.samples[i % self.total_samples] for i in range(self.start_idx, self.process_end_idx)]
-        self._last_samples = samples
+        samples = [
+            self.samples[i % self.total_samples] for i in range(self._current_idx, self._current_idx + num_prompts)
+        ]
         self._current_idx = (self._current_idx + num_prompts) % self.total_samples
-
         return samples
 
     def _get_rewards(self, generations: list[InferenceRollout]) -> tuple[np.ndarray, int]:

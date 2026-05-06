@@ -1,0 +1,59 @@
+defaults:
+  - base 
+  - data_config: debug
+  - model_config: qwen_0.6b_base
+  - sharding_config: fsdp
+  - loss_config: loss
+  - override loss_config/inference_config: debug
+  - _self_
+
+grad_accum_steps: 1
+seed: 0
+num_steps: 250
+
+optimizer: "adamw"
+weight_decay: 0.01
+grad_clip: 1.0
+
+learning_rate_init: 1e-6
+learning_rate_peak: 1e-6
+learning_rate_end: 1e-6
+warmup_steps: 0.0
+decay_steps: 1.0
+
+spot_training: true 
+checkpoint_interval: 50
+max_checkpoints_to_keep: 1
+
+wandb_config: 
+  project: "Debug"
+  notes: null
+  tags: null
+
+data_config:
+  train_config:
+    batch_size: 512
+  val_config:
+    batch_size: 512
+loss_config:
+  inference_config:
+    max_seq_len: 512
+    _max_decode_prompts: 8
+    _max_decode_batch_size: 64
+    n_replicas: 4
+    group_size: 16
+    temperature: 1.0
+    reasoning_budget: null 
+    think_mode: true
+    system_prompt: false
+
+async_config:
+  train_workers: 1
+  max_prompt_queue_size: 2
+
+metrics_to_log:
+  - "train/loss"
+  - "train/is_ratio_step_0"
+  - "train/mean_reward"
+  - "val/mean_reward"
+  - "train/num_unparsable"

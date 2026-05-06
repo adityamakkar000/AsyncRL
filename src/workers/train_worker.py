@@ -1,8 +1,6 @@
 import json
 import os
-import time
 from functools import partial
-from threading import Thread
 from typing import Any, Optional
 
 import jax
@@ -58,7 +56,7 @@ class AsyncTrainerWorker(Worker):
             self._setup_dataset()
             self._setup_train_state()
             self._setup_writer()
-            self.fill_queue_thread()
+            self.fill_queue()
 
             if not self.resumed:
                 logger.info("Saving intial checkpoint ...")
@@ -392,17 +390,13 @@ class AsyncTrainerWorker(Worker):
             for _ in range(self.async_options.inference_workers):
                 self.async_options.weight_sync_queue.put("sync")
 
-            logger.info(
-                f"Placed sync signals for {self.async_options.inference_workers} inference workers.", log_for_all=True
-            )
             while not self.async_options.weight_sync_queue.empty():
-                time.sleep(0.1)
+                continue
 
             # NOTE: we sync over global devices here since inference workers
             # should be aligned at this point (otherwise they won't have popped the sync polls from the queue)
 
             sync_global_devices("weightSync")
-            logger.info("Syncing weights across devices.", log_for_all=True)
 
             replicate_sharding = jax.NamedSharding(self.train_mesh, jax.P())
             param_dtype = self.config.loss_config.inference_config.params_dtype
@@ -414,37 +408,19 @@ class AsyncTrainerWorker(Worker):
 
             sync_global_devices("gathered")
 
-            logger.info("Broadcasting params to inference workers.", log_for_all=True)
-
             # broadcast over RDMA(ICI on TPU devices)
             _params = broadcast_one_to_all({"params": params_broadcast})
-
-            logger.info("Params broadcast complete.", log_for_all=True)
-
-            # trainer doesn't need any of these variables, free up memory
             del params_broadcast
             del _params
+
+        logger.info(f"Weights sent to inference worker in {t.data['time']:.2f} seconds", log_for_all=True)
         return {"train/weight_sync_time": t.data["time"]}
 
-    def fill_queue_thread(self):
-        def _fill_queue_thread():
-            logger.info("Starting background thread to fill prompt queue...")
-            while True:
-                max_prompts = self.config.async_config.max_prompt_queue_size * self.train_n_prompts
-                prompt_diff = max_prompts - self.async_options.prompt_queue.qsize()
-                if prompt_diff < self.train_n_prompts:
-                    time.sleep(0.1)
-                    continue
-
-                sync_over_mesh("prompt_queue_fill", self.async_options.train_mesh)
-                for sample in self.train_dataset(self.train_n_prompts):
-                    self.async_options.prompt_queue.put(sample)
-
-        self.background_thread = Thread(
-            target=_fill_queue_thread,
-            daemon=True,
-        )
-        self.background_thread.start()
+    def fill_queue(self):
+        assert self.train_dataset is not None, "Train dataset must be set up to fill queue."
+        while not self.async_options.prompt_queue.full():
+            sync_over_mesh("fill_queue", self.async_options.train_mesh)
+            self.async_options.prompt_queue.put(self.train_dataset(1)[0])
 
     def get_rollouts(self) -> tuple[list[InferenceRollout], dict]:
         rollouts = []
@@ -489,7 +465,6 @@ class AsyncTrainerWorker(Worker):
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
-        logger.info("Starting training loop...", log_for_all=True)
         logger.info("Precompiling test batch", log_for_all=True)
 
         local_test_batch = RLBatch.get_test_batch(
@@ -500,8 +475,9 @@ class AsyncTrainerWorker(Worker):
         # Profile first step to trigger compilation and get an estimate of step time
         # We overlap this with inference workers as they are asynchronsouly filling rollout queue
         # and so we have some time we can use to compile before we start the training loop
-        self.train_step(self.params, self.opt_state, local_test_batch, profile=True)
+        # self.train_step(self.params, self.opt_state, local_test_batch, profile=True)
 
+        logger.info(f"Starting training loop at step {self.global_step}", log_for_all=True)
         while self.global_step < self.total_steps:
             with stax.Tracker(timer=True) as t:
                 generations, local_rollout_metrics = self.get_rollouts()
@@ -510,6 +486,7 @@ class AsyncTrainerWorker(Worker):
                     self.params, self.opt_state, local_train_batch
                 )
                 weight_sync_time = self.train_sync_weights()
+                self.fill_queue()
 
             min_mem, max_mem = stax.get_memory()
             other_metrics = {
