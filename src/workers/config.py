@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import List, Optional, Protocol
 
 import jax
@@ -59,6 +60,7 @@ class InferenceShardings:
 class AsyncState:
     MRUparams: jax.Array
     updated: bool
+    update_lock: Lock = field(default_factory=Lock)
 
 
 class LossFunction(Protocol):

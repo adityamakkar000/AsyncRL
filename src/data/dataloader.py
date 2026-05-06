@@ -62,7 +62,7 @@ class DataLoader:
         total_rewards = []
         for inference_rollout in generations:
             token_rewards = []
-            for tokens in inference_rollout.rollouts_tokens:
+            for tokens in inference_rollout.rollout_tokens:
                 reward = self.get_reward(self.tokenizer.decode(tokens), inference_rollout.sample.answer)
                 if reward is None:
                     num_unparsable += 1
@@ -74,11 +74,11 @@ class DataLoader:
         return np.array(total_rewards, dtype=np.int32), num_unparsable
 
     def prepare_batch(self, generations: list[InferenceRollout], train: bool) -> tuple[RLBatch, dict]:
-        tokens = self.pad_tokens(generations, self.tokenizer.pad_token_id, "rollouts_tokens")
+        tokens = self.pad_tokens(generations, self.tokenizer.pad_token_id, "rollout_tokens")
         reference_model_logprobs = self.pad_tokens(generations, -np.inf, "rollout_logprobs")
 
         seq_lens = np.array(
-            [[len(tokens) for tokens in inference_rollout.rollouts_tokens] for inference_rollout in generations],
+            [[len(tokens) for tokens in inference_rollout.rollout_tokens] for inference_rollout in generations],
             dtype=np.int32,
         )
 
