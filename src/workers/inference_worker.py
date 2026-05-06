@@ -64,14 +64,13 @@ class AsyncInferenceWorker(Worker):
         self.model = Model(trainer_config.model_config)
         abstract_output = self.model.init_state(rng=jax.random.PRNGKey(0), tx=None, sharding=None, abstract=True)
         dummy_params = jax.tree.map(
-            lambda x: jnp.zeros(x.shape, dtype=self.inference_config.params_dtype), abstract_output["params"]
+            lambda x: jnp.zeros(x.shape, dtype=self.inference_config.params_dtype), abstract_output
         )
 
         self.validate_config()
 
         self.shardings: InferenceShardings = self.get_shardings(dummy_params)
         self.params = jax.device_put(dummy_params, self.shardings.replicate_sharding)
-
         jax.block_until_ready(self.params)
 
         self.async_state = AsyncState(MRUparams=jax.device_get(self.params), updated=False)
@@ -246,14 +245,6 @@ class AsyncInferenceWorker(Worker):
             ),
         }
 
-        decode_all_shardings = {
-            "in_shardings": (
-                state_sharding,
-                params_sharding,
-            ),
-            "out_shardings": (state_sharding, replicate_sharding),
-        }
-
         return InferenceShardings(
             mesh=mesh,
             split_sharding=split_sharding,
@@ -263,7 +254,6 @@ class AsyncInferenceWorker(Worker):
             params_sharding=params_sharding,
             prefill_shardings=prefill_shardings,
             decode_any_shardings=decode_any_sharding,
-            decode_all_shardings=decode_all_shardings,
         )
 
     def replicate_across_axis(self, value: Array) -> Array:
@@ -605,16 +595,6 @@ class AsyncInferenceWorker(Worker):
         )
         return stacked_state
 
-    def _decode_loop(self, state: InferenceState, params: PyTree) -> tuple[InferenceState, int]:
-        before_length = state.kv_cache[0].length
-        state = jax.lax.while_loop(
-            lambda state: ~jnp.all(state.stop_mask),
-            lambda state: self.decode(state, params),
-            state,
-        )
-        after_length = state.kv_cache[0].length
-        return state, (after_length - before_length)
-
     def _decode_single_loop(
         self, state: InferenceState, params: PyTree, prompts: InferenceState, next_index: int
     ) -> tuple[InferenceState, Array, Array, Array, int]:
@@ -648,11 +628,6 @@ class AsyncInferenceWorker(Worker):
                 self._decode_single_loop, donate_argnums=(0,), **self.shardings.decode_any_shardings
             )
 
-        if self.precompile_dict["decode"].get("all_stop") is None:
-            self.precompile_dict["decode"]["all_stop"] = jax.jit(
-                self._decode_loop, donate_argnums=(0,), **self.shardings.decode_all_shardings
-            )
-
         P = prompts.next_token.shape[0]
         prompt_queue: list[int] = [i for i in range(P) for _ in range(self.inference_config.group_size)]
 
@@ -677,7 +652,7 @@ class AsyncInferenceWorker(Worker):
             while len(prompt_queue) > 0:
                 next_index = prompt_queue.pop()
 
-                state, tokens, logprobs, prompt_ids, n_steps = self.precompile_dict["decode"]["any_stop"](
+                (state, tokens, logprobs, prompt_ids, n_steps) = self.precompile_dict["decode"]["any_stop"](
                     state, self.params, prompts, next_index
                 )
 

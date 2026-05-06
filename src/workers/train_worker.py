@@ -416,7 +416,7 @@ class AsyncTrainerWorker(Worker):
         logger.info("Broadcasting params to inference workers.", log_for_all=True)
 
         # broadcast over RDMA(ICI on TPU devices)
-        _params = broadcast_one_to_all(params_broadcast)
+        _params = broadcast_one_to_all({"params": params_broadcast})
 
         logger.info("Params broadcast complete.", log_for_all=True)
 
@@ -539,6 +539,7 @@ class AsyncTrainerWorker(Worker):
 
     def start(self):
         """Start the training process."""
+        breakpoint()
         try:
             self.train()
         finally:

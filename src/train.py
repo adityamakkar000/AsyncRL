@@ -114,10 +114,8 @@ def main(cfg: DictConfig) -> None:
         worker: Worker = AsyncInferenceWorker(cfg, async_options)
         worker.block_until_params_update()
 
-    logger.info("Reached", log_for_all=True)
-    breakpoint()
     sync_global_devices("workersReady")
-    # worker.start()
+    worker.start()
 
     logger.info(f"Process at {VM_IP} finished.", log_for_all=True)
 

@@ -53,7 +53,6 @@ class InferenceShardings:
     params_sharding: PyTree
     prefill_shardings: dict[str, PyTree]
     decode_any_shardings: dict[str, PyTree]
-    decode_all_shardings: dict[str, PyTree]
 
 
 @dataclass
@@ -97,11 +96,6 @@ class WandBConfig:
     tags: Optional[List[str]] = None
 
 
-# TODO: actual experiment config
-@dataclass
-class AnnealedLoss: ...
-
-
 @dataclass
 class RLConfig:
     algorithm: str = "grpo"
@@ -113,7 +107,6 @@ class RLConfig:
 class LossConfig:
     rl_config: RLConfig = field(default_factory=RLConfig)
     inference_config: InferenceConfig = field(default_factory=InferenceConfig)
-    annealing_config: Optional[AnnealedLoss] = None  # TODO: Annealed RL config will go here
 
 
 @dataclass
