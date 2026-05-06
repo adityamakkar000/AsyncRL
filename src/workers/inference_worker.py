@@ -92,6 +92,10 @@ class AsyncInferenceWorker(Worker):
             .tolist()
         )
 
+        self.prompt_id_offset = 0
+        self.pid_to_sample = dict()
+        self.global_rollouts: dict[int, InferenceRollout] = dict()
+
     def monitor_weight_sync(self, async_state: AsyncState, async_options: AsyncOptions):
         def inference_sync_weights(params_cpu, async_options: AsyncOptions):
             async_options.weight_sync_queue.get()
@@ -127,11 +131,11 @@ class AsyncInferenceWorker(Worker):
                 logger.info("New params havse been updated to MRU params", log_for_all=True)
 
     def block_until_params_update(self):
+        logger.info("Waiting for initial parameters from training workers...", log_for_all=True)
         while True:
             with self.async_state.update_lock:
                 if self.async_state.updated:
                     break
-            logger.info("Waiting for initial parameters from training workers...", log_for_all=True)
             time.sleep(0.1)
         self._maybe_update_params()
 
@@ -230,6 +234,7 @@ class AsyncInferenceWorker(Worker):
                 replicate_sharding,
                 replicate_sharding,
                 replicate_sharding,
+                replicate_sharding,
             ),
             "out_shardings": replicate_state_sharding,
         }
@@ -313,9 +318,7 @@ class AsyncInferenceWorker(Worker):
 
         return tokens, seq_lens
 
-    def cleanup_rollouts(
-        self, rollouts: list[tuple[list[np.ndarray], list[np.ndarray]]]
-    ) -> list[tuple[list[np.ndarray], list[np.ndarray]]]:
+    def cleanup_rollouts(self, pids: list[int]):
         pad_id = self.tokenizer.pad_token_id
         eos_id = self.tokenizer.eos_token_id
 
@@ -331,27 +334,28 @@ class AsyncInferenceWorker(Worker):
 
             return tokens, logprobs
 
-        cleaned = []
-        for rollout_tokens, rollout_logprobs in rollouts:
-            new_rollouts = []
-            new_logprobs = []
-            for tokens, lps in zip(rollout_tokens, rollout_logprobs):
-                t, lp = clean_sequence(np.asarray(tokens), np.asarray(lps))
-                new_rollouts.append(t)
-                new_logprobs.append(lp)
-            cleaned.append((new_rollouts, new_logprobs))
+        for i in pids:
+            for rollout_tokens, rollout_logprobs in zip(
+                self.global_rollouts[i].rollout_tokens, self.global_rollouts[i].rollout_logprobs
+            ):
+                new_rollouts = []
+                new_logprobs = []
+                for tokens, lps in zip(rollout_tokens, rollout_logprobs):
+                    t, lp = clean_sequence(np.asarray(tokens), np.asarray(lps))
+                    new_rollouts.append(t)
+                    new_logprobs.append(lp)
+                self.global_rollouts[i].rollout_tokens = new_rollouts
+                self.global_rollouts[i].rollout_logprobs = new_logprobs
 
-        return cleaned
-
-    def detokenizer(self, rollouts: list[tuple[list[np.ndarray], list[np.ndarray]]]) -> list[list[str]]:
-        output_strs = []
-        for rollout_tokens, _rollout_logprobs in rollouts:
+    def detokenizer(self, pids: list[int]):
+        for pid in pids:
+            rollout_tokens = self.global_rollouts[pid].rollout_tokens
             rollout_strs = self.tokenizer.batch_decode(rollout_tokens, skip_special_tokens=False)
-            output_strs.append(rollout_strs)
+            self.global_rollouts[pid].rollout_strs = rollout_strs
 
-        return output_strs
-
-    def prefill(self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array) -> InferenceState:
+    def prefill(
+        self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array, prompt_id_offset: int
+    ) -> InferenceState:
         logger.info(f"Compiling prefill for sequence length {input_tokens.shape[1]}")
 
         max_decode_prompts = self.inference_config._max_decode_prompts
@@ -389,7 +393,7 @@ class AsyncInferenceWorker(Worker):
             end_of_think=jnp.zeros((max_decode_prompts, 1), dtype=bool),
             out_tokens=out_tokens,
             out_logprobs=out_logprobs,
-            prompt_id=jnp.arange(input_tokens.shape[0])[:, None],
+            prompt_id=jnp.arange(input_tokens.shape[0])[:, None] + prompt_id_offset,
         )
 
     def prefill_step(
@@ -403,7 +407,7 @@ class AsyncInferenceWorker(Worker):
 
         with Tracker(timer=True) as t:
             out: InferenceState = self.precompile_dict["prefill"][precompiled_length](
-                input_tokens, seq_lens, params, key
+                input_tokens, seq_lens, params, key, self.prompt_id_offset
             )
             jax.tree.map(lambda x: x.block_until_ready(), out)
         return out, {"ttft": t.data["time"]}
@@ -622,21 +626,19 @@ class AsyncInferenceWorker(Worker):
 
     def continuous_batch(
         self, prompts: InferenceState, state: InferenceState | None
-    ) -> tuple[list[tuple[list[np.ndarray], list[np.ndarray]]], dict[str, float], PyTree]:
+    ) -> tuple[InferenceState, dict[str, float]]:
         if self.precompile_dict["decode"].get("any_stop") is None:
             self.precompile_dict["decode"]["any_stop"] = jax.jit(
                 self._decode_single_loop, donate_argnums=(0,), **self.shardings.decode_any_shardings
             )
 
         P = prompts.next_token.shape[0]
-        prompt_queue: list[int] = [i for i in range(P) for _ in range(self.inference_config.group_size)]
 
-        grouped_tokens: list[list[np.ndarray]] = [[] for _ in range(P)]
-        grouped_logprobs: list[list[np.ndarray]] = [[] for _ in range(P)]
+        prompt_queue: list[int] = [i for i in range(P) for _ in range(self.inference_config.group_size)]
 
         finished_tokens = []
         finished_logprobs = []
-        finished_prompt_ids = []
+        finished_pids = []
 
         queued_steps = 0
         subbed_steps = 0
@@ -658,7 +660,7 @@ class AsyncInferenceWorker(Worker):
 
                 finished_tokens.append(tokens)
                 finished_logprobs.append(logprobs)
-                finished_prompt_ids.append(prompt_ids)
+                finished_pids.append(prompt_ids)
 
                 queued_steps += n_steps
                 subbed_steps += 1
@@ -666,43 +668,40 @@ class AsyncInferenceWorker(Worker):
 
             finished_tokens_cpu = list(map(lambda x: jax.device_get(x), finished_tokens))
             finished_logprobs_cpu = list(map(lambda x: jax.device_get(x), finished_logprobs))
-            finished_prompt_ids_cpu = list(map(lambda x: jax.device_get(x), finished_prompt_ids))
+            finished_pids_cpu = list(map(lambda x: jax.device_get(x), finished_pids))
 
             if isinstance(queued_steps, jnp.ndarray):
                 queued_steps = queued_steps.item()
 
         finished_tokens_cpu = np.concat(finished_tokens_cpu, axis=0)
         finished_logprobs_cpu = np.concat(finished_logprobs_cpu, axis=0)
-        finished_prompt_ids_cpu = np.concat(finished_prompt_ids_cpu, axis=0)
+        finished_pids_cpu = np.concat(finished_pids_cpu, axis=0)
 
         for i in range(finished_tokens_cpu.shape[0]):
-            pid = finished_prompt_ids_cpu[i].item()
-            grouped_tokens[pid].append(finished_tokens_cpu[i])
-            grouped_logprobs[pid].append(finished_logprobs_cpu[i])
-
-        rollouts = [(t, lp) for t, lp in zip(grouped_tokens, grouped_logprobs)]
+            pid = finished_pids_cpu[i].item()
+            self.global_rollouts[pid].rollout_tokens.append(finished_tokens_cpu[i])
+            self.global_rollouts[pid].rollout_logprobs.append(finished_logprobs_cpu[i])
 
         decode_metrics = {
             "queued_steps": queued_steps,
             "subbed_steps": subbed_steps,
             "decode_time": t.data["time"],
         }
-        return rollouts, decode_metrics, state
+        return state, decode_metrics
 
     def batch_rollout(
-        self, batch_tokens: np.ndarray, seq_lens: np.ndarray, key: Array, prev_state: InferenceState | None = None
-    ):
+        self, batch_tokens: np.ndarray, seq_lens: np.ndarray, key: Array, prev_state: InferenceState | None
+    ) -> tuple[InferenceState, dict[str, float]]:
         x_batch_sharded, seq_lens_sharded, key_sharded = self.put_batch_on_device(batch_tokens, seq_lens, key)
 
         prefill_state, prefill_metrics = self.prefill_step(x_batch_sharded, seq_lens_sharded, self.params, key_sharded)
 
-        batch_rollouts, batch_metrics, prev_state = self.continuous_batch(prefill_state, prev_state)
+        prev_state, metrics = self.continuous_batch(prefill_state, prev_state)
 
-        return batch_rollouts, prev_state
+        return prev_state, metrics
 
     def inference(self):
         key = jax.device_get(jax.random.fold_in(jax.random.PRNGKey(1024), stax.get_rank()))
-
         prev_state = None
 
         while True:
@@ -710,23 +709,34 @@ class AsyncInferenceWorker(Worker):
             while len(samples) < self.inference_config._max_decode_prompts:
                 samples.append(self.async_options.prompt_queue.get())
 
-            prompts = [sample.prompt for sample in samples]
-            tokens, seq_lens = self.tokenize(prompts)
-            key, gen_key = jax.random.split(key)
-            batch_rollouts, prev_state = self.batch_rollout(tokens, seq_lens, gen_key, prev_state)
-
-            cleaned_rollouts = self.cleanup_rollouts(batch_rollouts)
-            detokenized_rollouts = self.detokenizer(cleaned_rollouts)
-
-            for sample, detokenized_str, (tokens, logprobs) in zip(samples, detokenized_rollouts, cleaned_rollouts):
-                self.async_options.rollout_queue.put(
-                    InferenceRollout(
-                        sample=sample,
-                        rollout_strs=detokenized_str,
-                        rollout_tokens=tokens,
-                        rollout_logprobs=logprobs,
-                    )
+            for i, sample in enumerate(samples):
+                self.global_rollouts[self.prompt_id_offset + i] = InferenceRollout(
+                    sample=sample,
+                    rollout_tokens=[],
+                    rollout_logprobs=[],
+                    rollout_strs=[],
                 )
+
+            prompts = [sample.prompt for sample in samples]
+            input_tokens, seq_lens = self.tokenize(prompts)
+
+            key, gen_key = jax.random.split(key)
+            prev_state, metrics = self.batch_rollout(input_tokens, seq_lens, gen_key, prev_state)
+            self.prompt_id_offset += self.inference_config._max_decode_prompts
+
+            pid_ready_to_process: list[int] = []
+            for k, v in self.global_rollouts.items():
+                if len(v) == self.inference_config.group_size:
+                    pid_ready_to_process.append(k)
+
+            self.cleanup_rollouts(pid_ready_to_process)
+            self.detokenizer(pid_ready_to_process)
+
+            for pid in pid_ready_to_process:
+                self.async_options.rollout_queue.put(self.global_rollouts[pid])
+                del self.global_rollouts[pid]
+
+            logger.info(f"put {len(pid_ready_to_process)} rollouts into rollout queue", log_for_all=True)
 
     def start(self):
         with jax.set_mesh(self.shardings.mesh):

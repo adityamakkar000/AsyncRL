@@ -388,59 +388,60 @@ class AsyncTrainerWorker(Worker):
     def train_sync_weights(self):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
 
-        for _ in range(self.async_options.inference_workers):
-            self.async_options.weight_sync_queue.put("sync")
+        with stax.Tracker(timer=True) as t:
+            for _ in range(self.async_options.inference_workers):
+                self.async_options.weight_sync_queue.put("sync")
 
-        logger.info(
-            f"Placed sync signals for {self.async_options.inference_workers} inference workers.", log_for_all=True
-        )
-        while not self.async_options.weight_sync_queue.empty():
-            time.sleep(0.1)
+            logger.info(
+                f"Placed sync signals for {self.async_options.inference_workers} inference workers.", log_for_all=True
+            )
+            while not self.async_options.weight_sync_queue.empty():
+                time.sleep(0.1)
 
-        # NOTE: we sync over global devices here since inference workers
-        # should be aligned at this point (otherwise they won't have popped the sync polls from the queue)
+            # NOTE: we sync over global devices here since inference workers
+            # should be aligned at this point (otherwise they won't have popped the sync polls from the queue)
 
-        sync_global_devices("weightSync")
-        logger.info("Syncing weights across devices.", log_for_all=True)
+            sync_global_devices("weightSync")
+            logger.info("Syncing weights across devices.", log_for_all=True)
 
-        replicate_sharding = jax.NamedSharding(self.train_mesh, jax.P())
-        param_dtype = self.config.loss_config.inference_config.params_dtype
+            replicate_sharding = jax.NamedSharding(self.train_mesh, jax.P())
+            param_dtype = self.config.loss_config.inference_config.params_dtype
 
-        # convert before gather / PCIE copy since inference dtype < training dtype
-        params_broadcast = jax.tree.map(lambda x: x.astype(param_dtype), self.params)
-        params_broadcast = jax.jit(lambda x: x, out_shardings=replicate_sharding)(params_broadcast)
-        params_broadcast = jax.device_get(params_broadcast)
+            # convert before gather / PCIE copy since inference dtype < training dtype
+            params_broadcast = jax.tree.map(lambda x: x.astype(param_dtype), self.params)
+            params_broadcast = jax.jit(lambda x: x, out_shardings=replicate_sharding)(params_broadcast)
+            params_broadcast = jax.device_get(params_broadcast)
 
-        sync_global_devices("gathered")
+            sync_global_devices("gathered")
 
-        logger.info("Broadcasting params to inference workers.", log_for_all=True)
+            logger.info("Broadcasting params to inference workers.", log_for_all=True)
 
-        # broadcast over RDMA(ICI on TPU devices)
-        _params = broadcast_one_to_all({"params": params_broadcast})
+            # broadcast over RDMA(ICI on TPU devices)
+            _params = broadcast_one_to_all({"params": params_broadcast})
 
-        logger.info("Params broadcast complete.", log_for_all=True)
+            logger.info("Params broadcast complete.", log_for_all=True)
 
-        # trainer doesn't need any of these variables, free up memory
-        del params_broadcast
-        del _params
+            # trainer doesn't need any of these variables, free up memory
+            del params_broadcast
+            del _params
+        return {"train/weight_sync_time": t.data["time"]}
 
     def fill_queue_thread(self):
-        def _fill_queue_thread(async_options: AsyncOptions, train_dataset: DataLoader):
+        def _fill_queue_thread():
             logger.info("Starting background thread to fill prompt queue...")
             while True:
                 max_prompts = self.config.async_config.max_prompt_queue_size * self.train_n_prompts
-                prompt_diff = max_prompts - async_options.prompt_queue.qsize()
+                prompt_diff = max_prompts - self.async_options.prompt_queue.qsize()
                 if prompt_diff < self.train_n_prompts:
                     time.sleep(0.1)
                     continue
 
-                sync_over_mesh("prompt_queue_fill", async_options.train_mesh)
-                for s in train_dataset(self.train_n_prompts):
-                    async_options.prompt_queue.put(s)
+                sync_over_mesh("prompt_queue_fill", self.async_options.train_mesh)
+                for sample in self.train_dataset(self.train_n_prompts):
+                    self.async_options.prompt_queue.put(sample)
 
         self.background_thread = Thread(
             target=_fill_queue_thread,
-            args=(self.async_options, self.train_dataset),
             daemon=True,
         )
         self.background_thread.start()
@@ -448,11 +449,10 @@ class AsyncTrainerWorker(Worker):
     def get_rollouts(self) -> tuple[list[InferenceRollout], dict]:
         rollouts = []
         with stax.Tracker(timer=True) as t:
-            while self.async_options.rollout_queue.qsize() < self.train_n_prompts:
-                time.sleep(0.1)
+            while len(rollouts) < self.train_n_prompts:
+                for _ in range(self.train_n_prompts_per_host):
+                    rollouts.append(self.async_options.rollout_queue.get())
 
-        for _ in range(self.train_n_prompts_per_host):
-            rollouts.append(self.async_options.rollout_queue.get())
         return rollouts, {"train/rollout_queue_wait_time": t.data["time"]}
 
     def train_step(self, params, opt_state, local_batch, profile=False) -> tuple[PyTree, PyTree, dict]:
@@ -462,7 +462,7 @@ class AsyncTrainerWorker(Worker):
         global_train_batch = jax.tree.map(
             lambda x: rearrange(
                 x,
-                "(m g) t -> g m t",
+                "(m g) ... -> g m ...",
                 m=self.config.data_config.train_config.batch_size // self.config.grad_accum_steps,
                 g=self.config.grad_accum_steps,
             ),  # [grad_accum_steps, minibatch_size, seq_len]
@@ -489,11 +489,11 @@ class AsyncTrainerWorker(Worker):
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
-        logger.info("Starting training loop...")
-        logger.info("Precompiling test batch")
+        logger.info("Starting training loop...", log_for_all=True)
+        logger.info("Precompiling test batch", log_for_all=True)
 
         local_test_batch = RLBatch.get_test_batch(
-            batch_size=self.config.data_config.train_config.batch_size // jax.process_count(),
+            batch_size=self.config.data_config.train_config.batch_size // self.config.async_config.train_workers,
             max_seq_len=self.config.loss_config.inference_config.max_seq_len,
         )
 
@@ -503,16 +503,21 @@ class AsyncTrainerWorker(Worker):
         self.train_step(self.params, self.opt_state, local_test_batch, profile=True)
 
         while self.global_step < self.total_steps:
-            generations, local_rollout_metrics = self.get_rollouts()
-            local_train_batch, local_train_batch_metrics = self.train_dataset.prepare_batch(generations, train=True)
-            self.params, self.opt_state, train_metrics = self.train_step(self.params, self.opt_state, local_train_batch)
-            self.train_sync_weights()
+            with stax.Tracker(timer=True) as t:
+                generations, local_rollout_metrics = self.get_rollouts()
+                local_train_batch, local_train_batch_metrics = self.train_dataset.prepare_batch(generations, train=True)
+                self.params, self.opt_state, train_metrics = self.train_step(
+                    self.params, self.opt_state, local_train_batch
+                )
+                weight_sync_time = self.train_sync_weights()
 
             min_mem, max_mem = stax.get_memory()
             other_metrics = {
                 "devices/memory_min": min_mem,
                 "devices/memory_max": max_mem,
                 "train/lr": self.opt_state[1].hyperparams["learning_rate"],
+                "train/weight_sync_time": weight_sync_time["train/weight_sync_time"],
+                "train/step_time": t.data["time"],
             }
 
             metrics = (
@@ -538,8 +543,6 @@ class AsyncTrainerWorker(Worker):
         logger.info("Training complete.")
 
     def start(self):
-        """Start the training process."""
-        breakpoint()
         try:
             self.train()
         finally:

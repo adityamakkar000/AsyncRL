@@ -25,7 +25,7 @@ checkpoint_interval: 100
 max_checkpoints_to_keep: 5
 
 wandb_config: 
-  project: "AnnealedRL"
+  project: "AsyncRL"
   notes: null
   tags: null
 

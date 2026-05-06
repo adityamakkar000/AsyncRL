@@ -23,7 +23,7 @@ def start_server():
     def _start_server():
         manager = QueueManager(address=("0.0.0.0", PORT), authkey=KEY)
         server = manager.get_server()
-        print(f"[Server] Queue server listening on {GLOBAL_IP}:{PORT}...")
+        logger.info(f"[Server] Queue server listening on {GLOBAL_IP}:{PORT}...")
         server.serve_forever()
 
     server_thread = threading.Thread(target=_start_server, daemon=True)
@@ -42,7 +42,7 @@ def get_queues():
                 manager.get_weight_sync_queue(),  # type: ignore
             )
         except ConnectionError:
-            print(f"[Client] Waiting for server at {GLOBAL_IP}...")
+            logger.info(f"[Client] Waiting for server at {GLOBAL_IP}...", log_for_all=True)
             time.sleep(1)
 
     raise ConnectionError(f"Could not connect to server at {GLOBAL_IP} after multiple attempts.")

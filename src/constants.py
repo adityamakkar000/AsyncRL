@@ -1,4 +1,3 @@
-import abc
 import os
 import queue
 import socket
@@ -45,6 +44,6 @@ class AsyncOptions:
     inference_workers: int
     prompt_queue: queue.Queue
     rollout_queue: queue.Queue
-    weight_sync_queue: queue.Queue
+    weight_sync_queue: queue.Queue[str]
     train_mesh: jax.sharding.Mesh
     inference_mesh: jax.sharding.Mesh

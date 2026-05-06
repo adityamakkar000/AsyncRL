@@ -73,3 +73,9 @@ class InferenceRollout:
     rollout_strs: list[str]
     rollout_tokens: list[np.ndarray]
     rollout_logprobs: list[np.ndarray]
+
+    def __len__(self):
+        assert len(self.rollout_logprobs) == len(self.rollout_tokens), (
+            "rollout_logprobs and rollout_tokens must have the same length"
+        )
+        return len(self.rollout_tokens)
