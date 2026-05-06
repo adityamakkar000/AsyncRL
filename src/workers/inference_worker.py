@@ -335,17 +335,14 @@ class AsyncInferenceWorker(Worker):
             return tokens, logprobs
 
         for i in pids:
-            for rollout_tokens, rollout_logprobs in zip(
-                self.global_rollouts[i].rollout_tokens, self.global_rollouts[i].rollout_logprobs
-            ):
-                new_rollouts = []
-                new_logprobs = []
-                for tokens, lps in zip(rollout_tokens, rollout_logprobs):
-                    t, lp = clean_sequence(np.asarray(tokens), np.asarray(lps))
-                    new_rollouts.append(t)
-                    new_logprobs.append(lp)
-                self.global_rollouts[i].rollout_tokens = new_rollouts
-                self.global_rollouts[i].rollout_logprobs = new_logprobs
+            new_rollouts = []
+            new_logprobs = []
+            for t, lps in zip(self.global_rollouts[i].rollout_tokens, self.global_rollouts[i].rollout_logprobs):
+                t, lp = clean_sequence(t, lps)
+                new_rollouts.append(t)
+                new_logprobs.append(lp)
+            self.global_rollouts[i].rollout_tokens = new_rollouts
+            self.global_rollouts[i].rollout_logprobs = new_logprobs
 
     def detokenizer(self, pids: list[int]):
         for pid in pids:
@@ -736,7 +733,10 @@ class AsyncInferenceWorker(Worker):
                 self.async_options.rollout_queue.put(self.global_rollouts[pid])
                 del self.global_rollouts[pid]
 
-            logger.info(f"put {len(pid_ready_to_process)} rollouts into rollout queue", log_for_all=True)
+            logger.info(
+                f"put {len(pid_ready_to_process)} rollouts into rollout queue, queue size: {self.async_options.rollout_queue.qsize()}",
+                log_for_all=True,
+            )
 
     def start(self):
         with jax.set_mesh(self.shardings.mesh):
