@@ -98,9 +98,6 @@ class AsyncInferenceWorker(Worker):
 
     def monitor_weight_sync(self, async_state: AsyncState, async_options: AsyncOptions):
         def inference_sync_weights(params_cpu, async_options: AsyncOptions):
-            async_options.weight_sync_queue.get()
-            while not async_options.weight_sync_queue.empty():
-                time.sleep(0.1)
             sync_global_devices("weightSync")
             sync_global_devices("gathered")
 
@@ -109,12 +106,15 @@ class AsyncInferenceWorker(Worker):
             return params_cpu
 
         while True:
-            if async_options.weight_sync_queue.full():
-                new_params = inference_sync_weights(async_state.MRUparams, async_options)
-                with async_state.update_lock:
-                    async_state.MRUparams = new_params
-                    async_state.updated = True
-            time.sleep(0.1)
+            async_options.weight_sync_queue.get()
+            logger.info(
+                f"Rank {jax.process_index()} received sync signal from train worker, syncing weights to latest parameters...",
+                log_for_all=True,
+            )
+            new_params = inference_sync_weights(async_state.MRUparams, async_options)
+            with async_state.update_lock:
+                async_state.MRUparams = new_params
+                async_state.updated = True
 
     def _maybe_update_params(self):
         with self.async_state.update_lock:
