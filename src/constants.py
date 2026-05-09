@@ -45,5 +45,6 @@ class AsyncOptions:
     prompt_queue: queue.Queue
     rollout_queue: queue.Queue
     weight_sync_queue: queue.Queue[str]
+    inference_metrics_queue: queue.Queue[dict]
     train_mesh: jax.sharding.Mesh
     inference_mesh: jax.sharding.Mesh

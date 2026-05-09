@@ -60,6 +60,7 @@ class AsyncState:
     MRUparams: jax.Array
     updated: bool
     update_lock: Lock = field(default_factory=Lock)
+    weight_iteration: int = 0
 
 
 class LossFunction(Protocol):

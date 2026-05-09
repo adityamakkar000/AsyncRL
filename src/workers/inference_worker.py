@@ -22,7 +22,6 @@ from .utils import _maybe_force_eos, _maybe_force_eot, naive_sample
 from .worker import Worker
 
 AXIS_NAME = "data"
-PADDING_BUFFER = 1024
 
 INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
 
@@ -96,6 +95,11 @@ class AsyncInferenceWorker(Worker):
         self.pid_to_sample = dict()
         self.global_rollouts: dict[int, InferenceRollout] = dict()
 
+        self.weight_iteration = 0
+        self.worker_rank = jax.process_index() - self.async_options.train_workers
+
+        self.block_until_params_update()
+
     def monitor_weight_sync(self, async_state: AsyncState, async_options: AsyncOptions):
         def inference_sync_weights(params_cpu, async_options: AsyncOptions):
             sync_global_devices("weightSync")
@@ -115,6 +119,7 @@ class AsyncInferenceWorker(Worker):
             with async_state.update_lock:
                 async_state.MRUparams = new_params
                 async_state.updated = True
+                async_state.weight_iteration += 1
 
     def _maybe_update_params(self):
         with self.async_state.update_lock:
@@ -126,6 +131,7 @@ class AsyncInferenceWorker(Worker):
                     self.shardings.params_sharding,
                 )
                 logger.info("Params updated on inference worker", log_for_all=True)
+                self.weight_iteration = self.async_state.weight_iteration
 
     def block_until_params_update(self):
         logger.info("Waiting for initial parameters from training workers...", log_for_all=True)
@@ -308,11 +314,6 @@ class AsyncInferenceWorker(Worker):
         inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
         tokens = np.array(inputs, dtype=np.int32)
 
-        if padding_length > PADDING_BUFFER:
-            raise ValueError(
-                f"Input sequence padded prompts (T={padding_length}) was greater than kv-cache length with padding, either implement roll cache or add additional buffer space"
-            )
-
         return tokens, seq_lens
 
     def cleanup_rollouts(self, pids: list[int]):
@@ -494,32 +495,47 @@ class AsyncInferenceWorker(Worker):
             out_logprobs=jnp.roll(state.out_logprobs, diff, axis=1),
         )
 
+    def sub(self, old_state, new_state, index):
+        return InferenceState(
+            next_token=old_state.next_token.at[index].set(new_state.next_token),
+            kv_cache=[
+                KVCache(
+                    k=old_state.kv_cache[i].k.at[index].set(new_state.kv_cache[i].k),
+                    v=old_state.kv_cache[i].v.at[index].set(new_state.kv_cache[i].v),
+                    length=old_state.kv_cache[i].length.copy(),
+                )
+                for i in range(len(old_state.kv_cache))
+            ],
+            key=old_state.key,
+            seq_lens=old_state.seq_lens.at[index].set(new_state.seq_lens),
+            stop_mask=old_state.stop_mask.at[index].set(new_state.stop_mask),
+            end_of_think=old_state.end_of_think.at[index].set(new_state.end_of_think),
+            out_tokens=old_state.out_tokens.at[index].set(new_state.out_tokens),
+            out_logprobs=old_state.out_logprobs.at[index].set(new_state.out_logprobs),
+            prompt_id=old_state.prompt_id.at[index].set(new_state.prompt_id),
+        )
+
+    def shift_batch(self, state: InferenceState):
+        max_seq = jnp.max(state.seq_lens)
+        shift_back = -(state.kv_cache[0].length - max_seq)
+        return state.replace(  # type: ignore
+            kv_cache=[
+                KVCache(
+                    k=jnp.roll(kv.k, shift_back, axis=1),
+                    v=jnp.roll(kv.v, shift_back, axis=1),
+                    length=max_seq.copy(),  # type: ignore
+                )
+                for kv in state.kv_cache
+            ],
+            out_tokens=jnp.roll(state.out_tokens, shift_back, axis=1),
+            out_logprobs=jnp.roll(state.out_logprobs, shift_back, axis=1),
+        )
+
     def sub_batch(self, state: InferenceState, new_batch: InferenceState) -> InferenceState:
         logger.info("compiling sub batch")
 
         index = jnp.argmax(state.stop_mask[:, 0], keepdims=True)
-        current_length = state.kv_cache[0].length
-        new_batch = self.roll_cache_to_length(new_batch, current_length)
-
-        def sub(old_state, new_state, index):
-            return InferenceState(
-                next_token=old_state.next_token.at[index].set(new_state.next_token),
-                kv_cache=[
-                    KVCache(
-                        k=old_state.kv_cache[i].k.at[index].set(new_state.kv_cache[i].k),
-                        v=old_state.kv_cache[i].v.at[index].set(new_state.kv_cache[i].v),
-                        length=current_length.copy(),  # type: ignore
-                    )
-                    for i in range(len(state.kv_cache))
-                ],
-                key=old_state.key,
-                seq_lens=old_state.seq_lens.at[index].set(new_state.seq_lens),
-                stop_mask=old_state.stop_mask.at[index].set(new_state.stop_mask),
-                end_of_think=old_state.end_of_think.at[index].set(new_state.end_of_think),
-                out_tokens=old_state.out_tokens.at[index].set(new_state.out_tokens),
-                out_logprobs=old_state.out_logprobs.at[index].set(new_state.out_logprobs),
-                prompt_id=old_state.prompt_id.at[index].set(new_state.prompt_id),
-            )
+        new_batch = self.roll_cache_to_length(new_batch, state.kv_cache[0].length)
 
         @partial(
             jax.shard_map,
@@ -542,26 +558,14 @@ class AsyncInferenceWorker(Worker):
 
             sub_on_this_device = (index >= start_idx) & (index < end_idx)
 
-            old_state = jax.lax.cond(sub_on_this_device[0], sub, lambda o, _n, _i: o, old_state, new_state, local_idx)
+            old_state = jax.lax.cond(
+                sub_on_this_device[0], self.sub, lambda o, _n, _i: o, old_state, new_state, local_idx
+            )
 
             return old_state
 
         state = _sub(state, new_batch, index)
-
-        max_seq = jnp.max(state.seq_lens)
-        shift_back = -(current_length - max_seq)
-        state = state.replace(
-            kv_cache=[
-                KVCache(
-                    k=jnp.roll(kv.k, shift_back, axis=1),
-                    v=jnp.roll(kv.v, shift_back, axis=1),
-                    length=max_seq.copy(),  # type: ignore
-                )
-                for kv in state.kv_cache
-            ],
-            out_tokens=jnp.roll(state.out_tokens, shift_back, axis=1),
-            out_logprobs=jnp.roll(state.out_logprobs, shift_back, axis=1),
-        )
+        state = self.shift_batch(state)
 
         return state
 
@@ -591,7 +595,8 @@ class AsyncInferenceWorker(Worker):
             out_logprobs=stacked_state.out_logprobs[:, 0],
             prompt_id=stacked_state.prompt_id[:, 0],
         )
-        return stacked_state
+        stacked_state_shifted = self.shift_batch(stacked_state)
+        return stacked_state_shifted
 
     def _decode_single_loop(
         self, state: InferenceState, params: PyTree, prompts: InferenceState, next_index: int
@@ -628,6 +633,9 @@ class AsyncInferenceWorker(Worker):
 
         P = prompts.next_token.shape[0]
 
+        global_ids = jax.device_get(prompts.prompt_id).flatten().tolist()
+        local_to_global = {i: gid for i, gid in enumerate(global_ids)}
+
         prompt_queue: list[int] = [i for i in range(P) for _ in range(self.inference_config.group_size)]
 
         finished_tokens = []
@@ -639,11 +647,12 @@ class AsyncInferenceWorker(Worker):
 
         with Tracker(timer=True) as t:
             if state is None:
-                intial_ids: Array = jnp.array(
-                    [prompt_queue.pop() for _ in range(self.inference_config._max_decode_batch_size)], dtype=jnp.int32
-                )
-                intial_ids = jax.device_put(intial_ids, self.shardings.split_sharding)
-                state = self.create_initial_state(prompts, intial_ids)
+                ids = [prompt_queue.pop() for _ in range(self.inference_config._max_decode_batch_size)]
+                initial_ids: Array = jnp.array(ids, dtype=jnp.int32)
+                initial_ids = jax.device_put(initial_ids, self.shardings.split_sharding)
+                state = self.create_initial_state(prompts, initial_ids)
+                for i in ids:
+                    self.global_rollouts[local_to_global[i]].weight_iteration = self.weight_iteration
 
             while len(prompt_queue) > 0:
                 next_index = prompt_queue.pop()
@@ -659,6 +668,7 @@ class AsyncInferenceWorker(Worker):
                 queued_steps += n_steps
                 subbed_steps += 1
                 self._maybe_update_params()
+                self.global_rollouts[local_to_global[next_index]].weight_iteration = self.weight_iteration
 
             finished_tokens_cpu = list(map(lambda x: jax.device_get(x), finished_tokens))
             finished_logprobs_cpu = list(map(lambda x: jax.device_get(x), finished_logprobs))
@@ -676,10 +686,14 @@ class AsyncInferenceWorker(Worker):
             self.global_rollouts[pid].rollout_tokens.append(finished_tokens_cpu[i])
             self.global_rollouts[pid].rollout_logprobs.append(finished_logprobs_cpu[i])
 
+        tokens_per_second = queued_steps * self.inference_config._max_decode_batch_size / t.data["time"]
+        sequences_per_second = queued_steps / t.data["time"]
         decode_metrics = {
-            "queued_steps": queued_steps,
-            "subbed_steps": subbed_steps,
+            "decode_steps": queued_steps,
+            "decode_steps_subbed": subbed_steps,
             "decode_time": t.data["time"],
+            "decode_tps": tokens_per_second,
+            "decode_sps": sequences_per_second,
         }
         return state, decode_metrics
 
@@ -690,7 +704,9 @@ class AsyncInferenceWorker(Worker):
 
         prefill_state, prefill_metrics = self.prefill_step(x_batch_sharded, seq_lens_sharded, self.params, key_sharded)
 
-        prev_state, metrics = self.continuous_batch(prefill_state, prev_state)
+        prev_state, decode_metrics = self.continuous_batch(prefill_state, prev_state)
+
+        metrics = prefill_metrics | decode_metrics | {"worker_id": self.worker_rank}
 
         return prev_state, metrics
 
@@ -705,10 +721,7 @@ class AsyncInferenceWorker(Worker):
 
             for i, sample in enumerate(samples):
                 self.global_rollouts[self.prompt_id_offset + i] = InferenceRollout(
-                    sample=sample,
-                    rollout_tokens=[],
-                    rollout_logprobs=[],
-                    rollout_strs=[],
+                    sample=sample, rollout_tokens=[], rollout_logprobs=[], rollout_strs=[], weight_iteration=-1
                 )
 
             prompts = [sample.prompt for sample in samples]
@@ -730,6 +743,8 @@ class AsyncInferenceWorker(Worker):
                 self.async_options.rollout_queue.put(self.global_rollouts[pid])
                 del self.global_rollouts[pid]
 
+            self.async_options.inference_metrics_queue.put(metrics)
+
             logger.info(
                 f"Put {len(pid_ready_to_process)} rollouts into rollout queue, queue size: {self.async_options.rollout_queue.qsize()}, prompt queue size {self.async_options.prompt_queue.qsize()}",
                 log_for_all=True,
@@ -741,4 +756,4 @@ class AsyncInferenceWorker(Worker):
 
     @property
     def max_attention_length(self) -> int:
-        return min(self.inference_config.max_seq_len, self.model.sequence_len) + PADDING_BUFFER
+        return min(self.inference_config.max_seq_len, self.model.sequence_len)

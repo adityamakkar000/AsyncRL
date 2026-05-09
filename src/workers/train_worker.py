@@ -64,8 +64,9 @@ class AsyncTrainerWorker(Worker):
                 dict_config = json.dumps(OmegaConf.to_container(self.config))
                 config_path = f"{self.gs_path}/config.json"
                 write_to_gcs(config_path, dict_config)
-                # block to ensure first checkpoint is written
-                self.block_until_checkpoints_saved()
+
+            self.train_sync_weights()
+            self.block_until_checkpoints_saved()
 
             sync_over_mesh("Trainer initialization", self.async_options.train_mesh)
 
@@ -142,6 +143,8 @@ class AsyncTrainerWorker(Worker):
         self.n_hosts = jax.process_count()
         self.n_devices = jax.device_count()
         self.gs_path = f"{GS_BUCKET}/runs/{self.config.experiment_name}"
+
+        self.weight_iteration = 0
 
     @partial(setup, component="metric_logger")
     def _setup_writer(self):
@@ -413,6 +416,7 @@ class AsyncTrainerWorker(Worker):
             del params_broadcast
             del _params
 
+        self.weight_iteration += 1
         logger.info(f"Weights sent to inference worker in {t.data['time']:.2f} seconds", log_for_all=True)
         return {"train/weight_sync_time": t.data["time"]}
 
@@ -424,12 +428,44 @@ class AsyncTrainerWorker(Worker):
 
     def get_rollouts(self) -> tuple[list[InferenceRollout], dict]:
         rollouts = []
+        weight_iterations = []
         with stax.Tracker(timer=True) as t:
             while len(rollouts) < self.train_n_prompts:
                 for _ in range(self.train_n_prompts_per_host):
                     rollouts.append(self.async_options.rollout_queue.get())
+                    weight_iterations.append(self.weight_iteration - rollouts[-1].weight_iteration)
 
-        return rollouts, {"train/rollout_queue_wait_time": t.data["time"]}
+        metrics = {
+            "train/rollout_queue_wait_time": t.data["time"],
+            "train/max_off_policy": max(weight_iterations),
+            "train/min_off_policy": min(weight_iterations),
+            "train/mean_off_policy": sum(weight_iterations) / len(weight_iterations),
+        }
+
+        return rollouts, metrics
+
+    def get_inference_metrics(self):
+        metrics_per_worker = {i: [] for i in range(self.async_options.inference_workers)}
+        while not self.async_options.inference_metrics_queue.empty():
+            metrics = self.async_options.inference_metrics_queue.get()
+            metrics_per_worker[metrics["worker_id"]].append(metrics)
+
+        averaged_metrics = {
+            f"inference/worker_{worker_id}/{k}": sum(d[k] for d in metrics_list) / len(metrics_list)
+            if len(metrics_list) > 0
+            else 0.0
+            for worker_id, metrics_list in metrics_per_worker.items()
+            for k in metrics_list[0].keys()
+            if k != "worker_id"
+        }
+
+        metrics = averaged_metrics | {
+            "inference/total_tps": sum(
+                averaged_metrics[f"inference/worker_{worker_id}/decode_tps"] for worker_id in metrics_per_worker.keys()
+            ),
+        }
+
+        return metrics
 
     def train_step(self, params, opt_state, local_batch, profile=False) -> tuple[PyTree, PyTree, dict]:
         assert self.train_fn is not None, "Train function not set up."
@@ -502,8 +538,10 @@ class AsyncTrainerWorker(Worker):
                 | metrics_all_reduce(local_train_batch_metrics, self.async_options.train_mesh)
                 | metrics_all_reduce(local_rollout_metrics, self.async_options.train_mesh)
                 | other_metrics
-                # TODO: get generation metrics from inference worker channel
             )
+
+            if stax.get_rank() == 0:
+                metrics |= self.get_inference_metrics()
 
             generations_to_log = None
             if self.global_step % self.config.log_generations_every_n_steps == 0:

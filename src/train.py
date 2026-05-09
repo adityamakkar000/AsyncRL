@@ -13,7 +13,7 @@ from stax import init_distributed_jax
 from stax.logger import staxLogger as logger
 
 from src.constants import GLOBAL_IP, KEY, PORT, VM_IP, AsyncOptions, QueueManager
-from src.workers import AsyncInferenceWorker, AsyncTrainerWorker, TrainerConfig, Worker
+from src.workers import AsyncInferenceWorker, AsyncTrainerWorker, TrainerConfig
 
 cs = ConfigStore.instance()
 cs.store(name="base", node=TrainerConfig)
@@ -40,6 +40,7 @@ def get_queues():
                 manager.get_prompt_queue(),  # type: ignore
                 manager.get_rollout_queue(),  # type: ignore
                 manager.get_weight_sync_queue(),  # type: ignore
+                manager.get_inference_metrics_queue(),  # type: ignore
             )
         except ConnectionError:
             logger.info(f"[Client] Waiting for server at {GLOBAL_IP}...", log_for_all=True)
@@ -84,17 +85,19 @@ def main(cfg: DictConfig) -> None:
     )
     local_rollout_queue = queue.Queue()
     local_weight_sync_queue = queue.Queue(maxsize=inference_workers)
+    local_inference_metrics_queue = queue.Queue()
 
     QueueManager.register("get_prompt_queue", callable=lambda: local_prompt_queue)
     QueueManager.register("get_rollout_queue", callable=lambda: local_rollout_queue)
     QueueManager.register("get_weight_sync_queue", callable=lambda: local_weight_sync_queue)
+    QueueManager.register("get_inference_metrics_queue", callable=lambda: local_inference_metrics_queue)
 
     if VM_IP == GLOBAL_IP:
         start_server()
 
     sync_global_devices("serverReady")
 
-    global_prompt_queue, global_rollout_queue, global_weight_sync_queue = get_queues()
+    global_prompt_queue, global_rollout_queue, global_weight_sync_queue, global_inference_metrics_queue = get_queues()
 
     async_options = AsyncOptions(
         train_workers=train_workers,
@@ -102,6 +105,7 @@ def main(cfg: DictConfig) -> None:
         prompt_queue=global_prompt_queue,
         rollout_queue=global_rollout_queue,
         weight_sync_queue=global_weight_sync_queue,
+        inference_metrics_queue=global_inference_metrics_queue,
         train_mesh=train_mesh,
         inference_mesh=inference_mesh,
     )
@@ -109,14 +113,7 @@ def main(cfg: DictConfig) -> None:
     logger.info(OmegaConf.to_yaml(cfg), log_for_all=True)
 
     rank = jax.process_index()
-    if rank < train_workers:
-        worker: Worker = AsyncTrainerWorker(cfg, async_options)
-        worker.train_sync_weights()
-    else:
-        worker: Worker = AsyncInferenceWorker(cfg, async_options)
-        worker.block_until_params_update()
-
-    sync_global_devices("workersReady")
+    worker = (AsyncTrainerWorker if rank < train_workers else AsyncInferenceWorker)(cfg, async_options)  # type: ignore
     worker.start()
 
     logger.info(f"Process at {VM_IP} finished.", log_for_all=True)
