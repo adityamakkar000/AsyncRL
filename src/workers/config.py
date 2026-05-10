@@ -114,6 +114,7 @@ class LossConfig:
 class AsyncConfig:
     train_workers: int = 1
     max_prompt_queue_size: int = 4  # multiple of num of prompts to keep
+    max_lag: int = 4
 
 
 @dataclass
