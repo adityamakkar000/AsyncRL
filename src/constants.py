@@ -36,7 +36,7 @@ PORT = 9000
 KEY = b"aaa"
 VM_IP = socket.gethostbyname(socket.gethostname())
 GLOBAL_IP = GceTpuCluster.get_coordinator_address(60).split(":")[0]
-
+MAX_LAG = 4
 
 @dataclass
 class AsyncOptions:

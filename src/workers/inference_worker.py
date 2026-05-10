@@ -13,7 +13,7 @@ from stax import Tracker
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
-from src.constants import AsyncOptions
+from src.constants import AsyncOptions, MAX_LAG
 from src.data import InferenceRollout, Sample
 from src.model import KVCache, Model
 
@@ -351,7 +351,7 @@ class AsyncInferenceWorker(Worker):
     def prefill(
         self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array, prompt_id_offset: int
     ) -> InferenceState:
-        logger.info(f"Compiling prefill for sequence length {input_tokens.shape[1]}")
+        logger.info(f"Compiling prefill for sequence length {input_tokens.shape[1]}", log_for_all=True)
 
         max_decode_prompts = self.inference_config._max_decode_prompts
         kv_cache_dtype = self.inference_config.kv_cache_dtype
@@ -408,7 +408,7 @@ class AsyncInferenceWorker(Worker):
         return out, {"ttft": t.data["time"]}
 
     def decode(self, state: InferenceState, params: PyTree) -> InferenceState:
-        logger.info(f"Compiling decode step for attention length {state.kv_cache[0].k.shape[1]}")
+        logger.info(f"Compiling decode step for attention length {state.kv_cache[0].k.shape[1]}", log_for_all=True)
         key, sample_key = jax.random.split(state.key)
 
         with jax.named_scope("fwd_pass"):
@@ -701,24 +701,18 @@ class AsyncInferenceWorker(Worker):
         self, batch_tokens: np.ndarray, seq_lens: np.ndarray, key: Array, prev_state: InferenceState | None
     ) -> tuple[InferenceState, dict[str, float]]:
         x_batch_sharded, seq_lens_sharded, key_sharded = self.put_batch_on_device(batch_tokens, seq_lens, key)
-
         prefill_state, prefill_metrics = self.prefill_step(x_batch_sharded, seq_lens_sharded, self.params, key_sharded)
-
         prev_state, decode_metrics = self.continuous_batch(prefill_state, prev_state)
 
-        metrics = prefill_metrics | decode_metrics | {"worker_id": self.worker_rank}
+        return prev_state, prefill_metrics | decode_metrics
 
-        return prev_state, metrics
-
-    def inference(self):
-        key = jax.device_get(jax.random.fold_in(jax.random.PRNGKey(1024), stax.get_rank()))
-        prev_state = None
-
-        while True:
+    def get_samples(self):
+        with Tracker(timer=True) as t1:
             samples: list[Sample] = []
             while len(samples) < self.inference_config._max_decode_prompts:
                 samples.append(self.async_options.prompt_queue.get())
 
+        with Tracker(timer=True) as t2:
             for i, sample in enumerate(samples):
                 self.global_rollouts[self.prompt_id_offset + i] = InferenceRollout(
                     sample=sample, rollout_tokens=[], rollout_logprobs=[], rollout_strs=[], weight_iteration=-1
@@ -727,10 +721,10 @@ class AsyncInferenceWorker(Worker):
             prompts = [sample.prompt for sample in samples]
             input_tokens, seq_lens = self.tokenize(prompts)
 
-            key, gen_key = jax.random.split(key)
-            prev_state, metrics = self.batch_rollout(input_tokens, seq_lens, gen_key, prev_state)
-            self.prompt_id_offset += self.inference_config._max_decode_prompts
+        return input_tokens, seq_lens, {"get_prompts_time": t1.data["time"], "tokenize_time": t2.data["time"]}
 
+    def gather_rollouts(self):
+        with Tracker(timer=True) as t:
             pid_ready_to_process: list[int] = []
             for k, v in self.global_rollouts.items():
                 if len(v) == self.inference_config.group_size:
@@ -740,15 +734,37 @@ class AsyncInferenceWorker(Worker):
             self.detokenizer(pid_ready_to_process)
 
             for pid in pid_ready_to_process:
-                self.async_options.rollout_queue.put(self.global_rollouts[pid])
+                if (self.weight_iteration - self.global_rollouts[pid].weight_iteration) <= MAX_LAG:
+                    self.async_options.rollout_queue.put(self.global_rollouts[pid])
                 del self.global_rollouts[pid]
-
-            self.async_options.inference_metrics_queue.put(metrics)
 
             logger.info(
                 f"Put {len(pid_ready_to_process)} rollouts into rollout queue, queue size: {self.async_options.rollout_queue.qsize()}, prompt queue size {self.async_options.prompt_queue.qsize()}",
                 log_for_all=True,
             )
+
+        return {"gather_time": t.data["time"], "ready_rollouts": len(pid_ready_to_process)}
+
+    def inference(self):
+        key = jax.device_get(jax.random.fold_in(jax.random.PRNGKey(1024), stax.get_rank()))
+        prev_state = None
+
+        while True:
+            with Tracker(timer=True) as t:
+                input_tokens, seq_lens, prompt_metrics = self.get_samples()
+                key, gen_key = jax.random.split(key)
+                prev_state, batch_metrics = self.batch_rollout(input_tokens, seq_lens, gen_key, prev_state)
+                gather_metrics = self.gather_rollouts()
+
+                self.prompt_id_offset += self.inference_config._max_decode_prompts
+
+            metrics = (
+                batch_metrics
+                | gather_metrics
+                | prompt_metrics
+                | {"total_time": t.data["time"], "worker_id": self.worker_rank}
+            )
+            self.async_options.inference_metrics_queue.put(metrics)
 
     def start(self):
         with jax.set_mesh(self.shardings.mesh):
