@@ -13,7 +13,7 @@ from stax import Tracker
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
-from src.constants import AsyncOptions, MAX_LAG
+from src.constants import AsyncOptions
 from src.data import InferenceRollout, Sample
 from src.model import KVCache, Model
 
@@ -734,8 +734,7 @@ class AsyncInferenceWorker(Worker):
             self.detokenizer(pid_ready_to_process)
 
             for pid in pid_ready_to_process:
-                if (self.weight_iteration - self.global_rollouts[pid].weight_iteration) <= MAX_LAG:
-                    self.async_options.rollout_queue.put(self.global_rollouts[pid])
+                self.async_options.rollout_queue.put(self.global_rollouts[pid])
                 del self.global_rollouts[pid]
 
             logger.info(

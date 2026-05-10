@@ -429,17 +429,23 @@ class AsyncTrainerWorker(Worker):
     def get_rollouts(self) -> tuple[list[InferenceRollout], dict]:
         rollouts = []
         weight_iterations = []
+        num_filtered_rollouts = 0
         with stax.Tracker(timer=True) as t:
             while len(rollouts) < self.train_n_prompts:
                 for _ in range(self.train_n_prompts_per_host):
-                    rollouts.append(self.async_options.rollout_queue.get())
-                    weight_iterations.append(self.weight_iteration - rollouts[-1].weight_iteration)
+                    rollout = self.async_options.rollout_queue.get()
+                    if (lag_diff := (self.weight_iteration - rollout.weight_iteration)) <= self.config.async_config.max_lag:
+                        rollouts.append(rollout)
+                        weight_iterations.append(lag_diff)
+                    else:
+                        num_filtered_rollouts += 1
 
         metrics = {
             "train/rollout_queue_wait_time": t.data["time"],
             "train/max_off_policy": max(weight_iterations),
             "train/min_off_policy": min(weight_iterations),
             "train/mean_off_policy": sum(weight_iterations) / len(weight_iterations),
+            "train/num_filtered_rollouts": num_filtered_rollouts,
         }
 
         return rollouts, metrics
