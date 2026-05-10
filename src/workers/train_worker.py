@@ -401,13 +401,14 @@ class AsyncTrainerWorker(Worker):
 
             sync_global_devices("weightSync")
 
-            replicate_sharding = jax.NamedSharding(self.train_mesh, jax.P())
-            param_dtype = self.config.loss_config.inference_config.params_dtype
-
-            # convert before gather / PCIE copy since inference dtype < training dtype
-            params_broadcast = jax.tree.map(lambda x: x.astype(param_dtype), self.params)
-            params_broadcast = jax.jit(lambda x: x, out_shardings=replicate_sharding)(params_broadcast)
-            params_broadcast = jax.device_get(params_broadcast)
+            params_broadcast = jax.device_get(
+                jax.jit(
+                    lambda x: jax.tree.map(
+                        lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), x
+                    ),
+                    out_shardings=jax.NamedSharding(self.async_options.train_mesh, jax.P("local_devices")),
+                )(self.params)
+            )
 
             sync_global_devices("gathered")
 
@@ -572,9 +573,6 @@ class AsyncTrainerWorker(Worker):
     @partial(setup, component="cleanup")
     def finish(self):
         """Finalize training and clean up resources."""
-        if self.writer:
-            logger.info("Cleaning up writer resources...")
-            self.writer.finish()
         if self.checkpointer:
             logger.info("Cleaning up checkpointer resources...")
             self.checkpointer.wait_until_finished()
