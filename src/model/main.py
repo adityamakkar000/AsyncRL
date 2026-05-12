@@ -55,7 +55,7 @@ class Model(HFModelBase):
         out_state["params"] = self.load_from_hf(out_state["params"], self.config.hf_model_name)
 
         if sharding is None:
-            single_sharding = SingleDeviceSharding(jax.devices()[0])
+            single_sharding = SingleDeviceSharding(jax.local_devices()[0])
             sharding = jax.tree.map(lambda _: single_sharding, out_state)
 
         if out_state.keys() != sharding.keys():

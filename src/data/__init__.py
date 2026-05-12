@@ -1,4 +1,4 @@
-from .config import DataConfig, RLBatch, Sample
+from .config import DataConfig, InferenceRollout, RLBatch, Sample
 from .dataloader import DataLoader
 from .math_utils import grade_answer_verl
 from .utils import filter_rejection_sampled_data, load_jsonl_from_gcs
@@ -14,4 +14,5 @@ __all__ = [
     "VerifierInput",
     "filter_rejection_sampled_data",
     "grade_answer_verl",
+    "InferenceRollout",
 ]

@@ -1,7 +1,7 @@
 defaults:
   - base 
   - data_config: debug
-  - model_config: qwen_0.6b
+  - model_config: qwen_0.6b_base
   - sharding_config: fsdp
   - loss_config: loss
   - override loss_config/inference_config: debug
@@ -10,8 +10,6 @@ defaults:
 grad_accum_steps: 1
 seed: 0
 num_steps: 250
-val_steps: 1
-val_interval: 50
 
 optimizer: "adamw"
 weight_decay: 0.01
@@ -25,7 +23,6 @@ decay_steps: 1.0
 
 spot_training: true 
 checkpoint_interval: 50
-best_metric: null
 max_checkpoints_to_keep: 1
 
 wandb_config: 
@@ -35,22 +32,24 @@ wandb_config:
 
 data_config:
   train_config:
-    batch_size: 1024
+    batch_size: 512
   val_config:
-    batch_size: 1024
+    batch_size: 512
 loss_config:
   inference_config:
     max_seq_len: 512
-    _max_decode_prompts: 32
-    _max_decode_batch_size: 128
+    _max_decode_prompts: 8
+    _max_decode_batch_size: 64
     n_replicas: 4
-    group_size: 8
+    group_size: 16
     temperature: 1.0
-    reasoning_budget: 150
+    reasoning_budget: null 
     think_mode: true
     system_prompt: false
-  rl_config:
-    ppo_minibatch_size: 64
+
+async_config:
+  train_workers: 1
+  max_prompt_queue_size: 2
 
 metrics_to_log:
   - "train/loss"

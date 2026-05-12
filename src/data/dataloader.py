@@ -1,16 +1,15 @@
-from typing import Any, Optional
+from typing import Any
 
 import jax
 import numpy as np
-import optax
 import stax
 from transformers import AutoTokenizer
 
 from src.constants import DATA, GS_BUCKET
-from src.data.config import DatasetConfig, RLBatch, Sample
-from src.data.utils import compute_aux_metrics, load_jsonl_from_gcs
-from src.data.verifier import Verifier, VerifierInput
-from src.inference_engine.config import InferenceResults, InferenceRollout
+
+from .config import DatasetConfig, InferenceRollout, RLBatch, Sample
+from .utils import compute_aux_metrics, load_jsonl_from_gcs
+from .verifier import Verifier, VerifierInput
 
 
 class DataLoader:
@@ -19,7 +18,6 @@ class DataLoader:
         dataset_config: DatasetConfig,
         max_seq_length: int,
         hf_model: str,
-        annealing_schedule: Optional[optax.Schedule],
     ) -> None:
         self.dataset_config = dataset_config
         self.max_seq_length = max_seq_length
@@ -30,7 +28,6 @@ class DataLoader:
         self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
         self.rank = stax.get_rank()
         self.total_samples = len(self.samples)
-        self.annealing_schedule = annealing_schedule
 
     def _resolve_gcs_path(self) -> str:
         if self.dataset_config.gcs_path:
@@ -45,40 +42,25 @@ class DataLoader:
         samples = [Sample.from_dict(r) for r in rows]
         return samples
 
-    def _get_annealing_rate(self, step: int) -> float:
-        if (
-            self.annealing_schedule is None
-        ):  # we will initialize the schedule to none if not using annealing in the trainer
-            return 0.0
-        return self.annealing_schedule(step).item()
-
     @property
     def last_samples(self) -> list[Sample]:
         """Return examples aligned with last batch."""
         return self._last_samples
 
-    def __call__(self, num_prompts: int, step: int) -> list[Sample]:
-        self.total_per_device = num_prompts // jax.process_count()
-        self.start_idx = self._current_idx + self.rank * self.total_per_device
-        self.process_end_idx = self.start_idx + self.total_per_device
-        samples = [self.samples[i % self.total_samples] for i in range(self.start_idx, self.process_end_idx)]
-
-        annealing_percentage = self._get_annealing_rate(step)
-        for sample in samples:
-            sample.annealing_percentage = annealing_percentage
-
-        self._last_samples = samples
+    def __call__(self, num_prompts: int) -> list[Sample]:
+        samples = [
+            self.samples[i % self.total_samples] for i in range(self._current_idx, self._current_idx + num_prompts)
+        ]
         self._current_idx = (self._current_idx + num_prompts) % self.total_samples
-
         return samples
 
-    def _get_rewards(self, samples: list[Sample], generations: InferenceResults) -> tuple[np.ndarray, int]:
+    def _get_rewards(self, generations: list[InferenceRollout]) -> tuple[np.ndarray, int]:
         num_unparsable = 0
         total_rewards = []
-        for sample, inference_rollout in zip(samples, generations.rollouts):
+        for inference_rollout in generations:
             token_rewards = []
-            for tokens in inference_rollout.rollouts:
-                reward = self.get_reward(self.tokenizer.decode(tokens), sample.answer)
+            for tokens in inference_rollout.rollout_tokens:
+                reward = self.get_reward(self.tokenizer.decode(tokens), inference_rollout.sample.answer)
                 if reward is None:
                     num_unparsable += 1
                     reward = 0.0
@@ -88,27 +70,27 @@ class DataLoader:
 
         return np.array(total_rewards, dtype=np.int32), num_unparsable
 
-    def prepare_batch(self, samples: list[Sample], generations: InferenceResults, train: bool) -> tuple[RLBatch, dict]:
-        tokens = self.pad_tokens(generations.rollouts, self.tokenizer.pad_token_id, "rollouts")
-        reference_model_logprobs = self.pad_tokens(generations.rollouts, -np.inf, "logprobs")
+    def prepare_batch(self, generations: list[InferenceRollout], train: bool) -> tuple[RLBatch, dict]:
+        tokens = self.pad_tokens(generations, self.tokenizer.pad_token_id, "rollout_tokens")
+        reference_model_logprobs = self.pad_tokens(generations, -np.inf, "rollout_logprobs")
 
         seq_lens = np.array(
-            [[len(tokens) for tokens in inference_rollout.rollouts] for inference_rollout in generations.rollouts],
+            [[len(tokens) for tokens in inference_rollout.rollout_tokens] for inference_rollout in generations],
             dtype=np.int32,
         )
 
-        rewards, num_unparsable = self._get_rewards(samples, generations)
+        rewards, num_unparsable = self._get_rewards(generations)
 
         group_mean = rewards.mean(axis=1, keepdims=True) * np.ones_like(rewards)
         group_std = rewards.std(axis=1, keepdims=True) * np.ones_like(rewards) + 1e-8
-
-        rl_batch = RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std)
 
         def compress(x):
             x = x.reshape(x.shape[0] * x.shape[1], -1)
             return x.squeeze(-1) if x.shape[-1] == 1 else x
 
-        rl_batch = jax.tree.map(compress, rl_batch)
+        rl_batch = jax.tree.map(
+            compress, RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std)
+        )
 
         num_unparsable = num_unparsable / self.dataset_config.batch_size
 

@@ -9,7 +9,7 @@ dependencies = [
     "einops>=0.8.1",
     "gcsfs>=2024.6.0",
     "hydra-core==1.3.2",
-    "jax==0.8.2; platform_system != 'Linux'",
+    "jax==0.8.0; platform_system != 'Linux'",
     "jax[tpu]==0.8.0; platform_system == 'Linux'",
     "jaxtyping>=0.3.4",
     "pre-commit>=4.5.1",
@@ -28,7 +28,6 @@ dependencies = [
     "optax==0.2.7",
     "wandb==0.25.0",
     "rich<14.0.0",
-    "fastapi>=0.136.1",
 ]
 
 [project.optional-dependencies]
@@ -47,5 +46,6 @@ eval = [
     "lm-eval>=0.4.11",
 ]
 
+
 [tool.uv.sources]
-stax = { git = "https://github.com/adityamakkar000/stax.git" }
+stax = { git = "https://github.com/adityamakkar000/stax.git", branch="aditya/addName"}
