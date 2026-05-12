@@ -90,13 +90,13 @@ class AsyncTrainerWorker(Worker):
             raise ValueError("warmup_steps and decay_steps must sum to at most 1.0")
         if cfg.sharding_config.sharding_type not in ["single", "dp", "fsdp"]:
             raise ValueError("sharding_type must be one of 'single', 'dp', or 'fsdp'")
-        if cfg.data_config.train_config.batch_size % cfg.loss_config.inference_config.group_size != 0:
+        if cfg.data_config.batch_size % cfg.loss_config.inference_config.group_size != 0:
             raise ValueError(
-                f"Batch size must be divisible by group size for proper batching in inference, got {cfg.data_config.train_config.batch_size} batch size and {cfg.loss_config.inference_config.group_size} group size."
+                f"Batch size must be divisible by group size for proper batching in inference, got {cfg.data_config.batch_size} batch size and {cfg.loss_config.inference_config.group_size} group size."
             )
 
         n_hosts = jax.process_count()
-        train_batch_size = cfg.data_config.train_config.batch_size
+        train_batch_size = cfg.data_config.batch_size
         assert train_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
             f"Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {train_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
         )
@@ -212,7 +212,7 @@ class AsyncTrainerWorker(Worker):
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
-        self.train_n_prompts: int = self.config.data_config.train_config.batch_size // (
+        self.train_n_prompts: int = self.config.data_config.batch_size // (
             self.config.loss_config.inference_config.group_size
         )
 
@@ -220,7 +220,7 @@ class AsyncTrainerWorker(Worker):
 
         max_seq_length = self.config.loss_config.inference_config.max_seq_len
         hf_model = self.config.model_config.hf_model_name
-        self.train_dataset = DataLoader(self.config.data_config.train_config, max_seq_length, hf_model)
+        self.train_dataset = DataLoader(self.config.data_config, max_seq_length, hf_model)
 
     @partial(setup, component="model")
     def _setup_model(self):
@@ -484,7 +484,7 @@ class AsyncTrainerWorker(Worker):
             lambda x: rearrange(
                 x,
                 "(m g) ... -> g m ...",
-                m=self.config.data_config.train_config.batch_size // self.config.grad_accum_steps,
+                m=self.config.data_config.batch_size // self.config.grad_accum_steps,
                 g=self.config.grad_accum_steps,
             ),  # [grad_accum_steps, minibatch_size, seq_len]
             self.shard_data_fn(local_batch),

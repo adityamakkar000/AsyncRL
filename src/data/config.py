@@ -40,12 +40,6 @@ class DatasetConfig:
     gcs_path: str | None = None
 
 
-@dataclass
-class DataConfig:
-    train_config: DatasetConfig
-    val_config: DatasetConfig
-
-
 @struct.dataclass
 class RLBatch:
     tokens: jax.Array | np.ndarray  # [B, max_seq_len] where B = P * G, P = num prompts, G = group size

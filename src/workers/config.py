@@ -7,7 +7,7 @@ from flax import struct
 from jaxtyping import Array, PyTree
 from omegaconf import MISSING
 
-from src.data.config import DataConfig, RLBatch
+from src.data import DatasetConfig, RLBatch
 from src.model import KVCache, ModelConfig
 
 
@@ -120,7 +120,7 @@ class AsyncConfig:
 @dataclass
 class TrainerConfig:
     experiment_name: str = MISSING  # The name of the experiment
-    data_config: DataConfig = MISSING  # The configuration for the data module
+    data_config: DatasetConfig = MISSING  # The configuration for the data module
     model_config: ModelConfig = MISSING  # The configuration for the model
     loss_config: LossConfig = MISSING  # The configuration for the loss function
 
