@@ -1,11 +1,14 @@
 defaults:
   - base 
-  - data_config: debug
   - model_config: qwen_0.6b_base
   - sharding_config: fsdp
   - loss_config: loss
+  - datasets@data_config: gsm8k
   - override loss_config/inference_config: debug
   - _self_
+
+data_config:
+  batch_size: 512
 
 grad_accum_steps: 1
 seed: 0
@@ -30,11 +33,6 @@ wandb_config:
   notes: null
   tags: null
 
-data_config:
-  train_config:
-    batch_size: 512
-  val_config:
-    batch_size: 512
 loss_config:
   inference_config:
     max_seq_len: 512

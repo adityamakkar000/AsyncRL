@@ -4,6 +4,7 @@ defaults:
   - model_config: qwen_1.7b_base
   - sharding_config: fsdp
   - loss_config: loss
+  - datasets@data_config: dapo_math_17k
   - _self_
 
 grad_accum_steps: 1
@@ -28,15 +29,15 @@ best_metric: null
 max_checkpoints_to_keep: 5
 
 wandb_config:
-  project: "AnnealedRL"
+  project: "Baseline"
   notes: null
   tags: null
 
 data_config:
   train_config:
-    batch_size: 1024
+    batch_size: 512
   val_config:
-    batch_size: 1024
+    batch_size: 512
 
 loss_config:
   inference_config:
@@ -53,7 +54,6 @@ loss_config:
     algorithm: cispo
     epsilon_high: 4
     epsilon_low: 4
-    ppo_minibatch_size: 256
 
     
 metrics_to_log:

@@ -1,6 +1,0 @@
-defaults:
-  - base 
-  - run1 
-  - override data_config: run_2
-  - _self_
-
