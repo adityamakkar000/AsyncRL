@@ -17,7 +17,8 @@ from typing import Callable
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-from .config import Sample
+from src.constants import SYSTEM_PROMPT
+from src.data.config import Sample
 
 # Registry: name -> function that returns list[Sample] and takes no inputs
 GLOBAL_DICT: dict[str, Callable[[], list[Sample]]] = {}
@@ -31,6 +32,45 @@ def register_dataset(name: str) -> Callable[[Callable[[], list[Sample]]], Callab
         return fn
 
     return decorator
+
+
+def apply_prompt_template(text: str) -> str:
+    return f"""Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
+{text}
+Remember to put your answer inside \\boxed{{}}."""
+
+
+def apply_system_prompt_template() -> str:
+    return SYSTEM_PROMPT
+
+
+def get_chat_template(system_prompt: bool, text: str) -> list[dict[str, str]]:
+    chat = []
+    if system_prompt:
+        chat.append({"role": "system", "content": apply_system_prompt_template()})
+    chat.append({"role": "user", "content": apply_prompt_template(text)})
+    return chat
+
+
+def filter_dataset(samples: list[Sample], max_length: int, tokenizer: AutoTokenizer) -> list[Sample]:
+    """Filter a dataset to only include samples where the prompt is less than max_length tokens."""
+
+    tokenized_prompts = [
+        tokenizer.apply_chat_template(
+            get_chat_template(system_prompt=True, text=sample.prompt),
+            add_generation_prompt=True,
+            tokenize=True,
+        )["input_ids"]
+        for sample in samples
+    ]
+
+    filtered_samples = [sample for sample, ids in zip(samples, tokenized_prompts) if len(ids) < max_length]
+
+    print(
+        f"Filtered {len(samples) - len(filtered_samples)} samples that were too long for the model. Remaining samples: {len(filtered_samples)}"
+    )
+
+    return filtered_samples
 
 
 @register_dataset("omnimath")
@@ -214,23 +254,68 @@ def load_polaris_1024_filtered() -> list[Sample]:
     ds = load_dataset("POLARIS-Project/Polaris-Dataset-53K")["train"]
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B", trust_remote_code=True)
 
-    prompts = list(ds["problem"])
-    encoded = tokenizer(
-        prompts,
-        add_special_tokens=False,
-        truncation=False,
-        return_attention_mask=False,
-    )
+    samples = [Sample(prompt=example["problem"], answer=str(example["answer"]), solution=None) for example in ds]
+
+    filtered_samples = filter_dataset(samples, 1024, tokenizer)
+    ds.cleanup_cache_files()
+    return filtered_samples
+
+
+@register_dataset("troll-17k-train")
+def load_troll_17k() -> list[Sample]:
+    ds = load_dataset("philippbecker/troll_data")["train"]
+    samples = [
+        Sample(
+            prompt=example["prompt"][1]["content"], answer=str(example["reward_model"]["ground_truth"]), solution=None
+        )
+        for example in ds
+    ]
+    ds.cleanup_cache_files()
+    return samples
+
+
+@register_dataset("troll-17k-train-filtered")
+def load_troll_17k_train_filtered() -> list[Sample]:
+    ds = load_dataset("philippbecker/troll_data")["train"]
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B", trust_remote_code=True)
 
     samples = [
-        Sample(prompt=example["problem"], answer=str(example["answer"]), solution=None)
-        for example, ids in zip(ds, encoded["input_ids"])
-        if len(ids) < 1024
+        Sample(
+            prompt=example["prompt"][1]["content"], answer=str(example["reward_model"]["ground_truth"]), solution=None
+        )
+        for example in ds
     ]
-    print(
-        f"Filtered {len(ds) - len(samples)} samples that were too long for the model. Remaining samples: {len(samples)}"
-    )
 
+    filtered_samples = filter_dataset(samples, 1024, tokenizer)
     ds.cleanup_cache_files()
+    return filtered_samples
 
+
+@register_dataset("troll-10k-test")
+def load_troll_10k_test() -> list[Sample]:
+    ds = load_dataset("philippbecker/troll_data")["test"]
+    samples = [
+        Sample(
+            prompt=example["prompt"][1]["content"], answer=str(example["reward_model"]["ground_truth"]), solution=None
+        )
+        for example in ds
+    ]
+    ds.cleanup_cache_files()
     return samples
+
+
+@register_dataset("troll-10k-test-filtered")
+def load_troll_10k_test_filtered() -> list[Sample]:
+    ds = load_dataset("philippbecker/troll_data")["test"]
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B", trust_remote_code=True)
+
+    samples = [
+        Sample(
+            prompt=example["prompt"][1]["content"], answer=str(example["reward_model"]["ground_truth"]), solution=None
+        )
+        for example in ds
+    ]
+
+    filtered_samples = filter_dataset(samples, 1024, tokenizer)
+    ds.cleanup_cache_files()
+    return filtered_samples
