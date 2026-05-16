@@ -1,6 +1,5 @@
 defaults:
   - base
-  - data_config: baseline
   - model_config: qwen_1.7b_base
   - sharding_config: fsdp
   - loss_config: loss
@@ -26,7 +25,7 @@ checkpoint_interval: 25
 max_checkpoints_to_keep: 5
 
 wandb_config:
-  project: "Baseline"
+  project: "Baselinev2"
   notes: null
   tags: null
 
