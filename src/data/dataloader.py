@@ -165,7 +165,7 @@ class DataLoader:
 
         prefix = "train" if train else "val"
         metrics = {"num_unparsable": num_unparsable} | compute_aux_metrics(rl_batch) | stage_metrics
-        metrics = {f"{prefix}/{k}": f"{v}" for k, v in metrics.items()}
+        metrics = {f"{prefix}/{k}": v for k, v in metrics.items()}
 
         return rl_batch, metrics
 

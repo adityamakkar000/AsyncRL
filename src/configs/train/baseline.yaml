@@ -6,7 +6,7 @@ defaults:
   - datasets@data_config: troll-17k-train-filtered
   - _self_
 
-grad_accum_steps: 1
+grad_accum_steps: 8
 seed: 0
 num_steps: 1000
 
