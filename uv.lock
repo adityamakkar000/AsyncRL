@@ -4684,7 +4684,7 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FaddName#6a8c949a02f7729ada44f8aa216c137a32cdb0b5" }
+source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2FaddName#dfd1b982620c68b00c8bba215d8fc831bdc4199a" }
 dependencies = [
     { name = "etils", extra = ["epath"] },
     { name = "flax" },

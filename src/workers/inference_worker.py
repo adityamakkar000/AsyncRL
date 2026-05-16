@@ -13,7 +13,7 @@ from stax import Tracker
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
-from src.constants import AsyncOptions
+from src.constants import INTERUPT_THINKING_PHARSE, SYSTEM_PROMPT, AsyncOptions
 from src.data import InferenceRollout, Sample
 from src.model import KVCache, Model
 
@@ -23,14 +23,6 @@ from .worker import Worker
 
 AXIS_NAME = "data"
 
-INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
-
-SYSTEM_PROMPT = r"""Your task is to follow a systematic, thorough reasoning process before providing the final solution. 
-This involves analyzing, summarizing, exploring, reassessing, and refining your thought process through multiple iterations. 
-Structure your response into two sections: Thought and Solution. In the Thought section, present your reasoning using the format: \"<think>\n {thoughts} </think>\n\". 
-Each thought should include detailed analysis, brainstorming, verification, and refinement of ideas.
-After \"</think>\n,\" in the Solution section, provide the final, logical, and accurate answer, clearly derived from the exploration in the Thought section."""
-
 
 def apply_prompt_template(text: str) -> str:
     return f"""Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
@@ -38,14 +30,10 @@ def apply_prompt_template(text: str) -> str:
 Remember to put your answer inside \\boxed{{}}."""
 
 
-def apply_system_prompt_template() -> str:
-    return SYSTEM_PROMPT
-
-
 def get_chat_template(system_prompt: bool, text: str) -> list[dict[str, str]]:
     chat = []
     if system_prompt:
-        chat.append({"role": "system", "content": apply_system_prompt_template()})
+        chat.append({"role": "system", "content": SYSTEM_PROMPT})
     chat.append({"role": "user", "content": apply_prompt_template(text)})
     return chat
 

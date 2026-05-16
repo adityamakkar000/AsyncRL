@@ -1,17 +1,24 @@
 defaults:
   - base 
-  - data_config: debug
-  - model_config: qwen_0.6_base
+  - model_config: qwen_0.6b_base
   - sharding_config: fsdp
   - loss_config: loss
+  - datasets@data_config: gsm8k
   - override loss_config/inference_config: debug
   - _self_
+
+data_config:
+  batch_size: 512
+  annealing_config:
+    use_annealing: True
+    name: gsm8k
+    gcs_path: gs://arl-experiments/data/gsm8k
+    throw_away_after_n_steps: 2
+    max_annealing_percentage: 0.8
 
 grad_accum_steps: 1
 seed: 0
 num_steps: 250
-val_steps: 1
-val_interval: 10
 
 optimizer: "adamw"
 weight_decay: 0.01
@@ -24,36 +31,30 @@ warmup_steps: 0.0
 decay_steps: 1.0
 
 spot_training: true 
-checkpoint_interval: 5
-best_metric: null
+checkpoint_interval: 50
 max_checkpoints_to_keep: 1
-log_generations_every_n_steps: 10
 
 wandb_config: 
   project: "Debug"
   notes: null
   tags: null
 
-data_config:
-  train_config:
-    batch_size: 1024
-  val_config:
-    batch_size: 1024
 loss_config:
   inference_config:
-    max_seq_len: 2048
-    _max_decode_prompts: 16
+    max_seq_len: 512
+    _max_decode_prompts: 8
     _max_decode_batch_size: 64
     n_replicas: 4
-    group_size: 8
+    group_size: 16
     temperature: 1.0
-    reasoning_budget: null
+    reasoning_budget: null 
     think_mode: true
-    system_prompt: true
-  rl_config:
-    epsilon_high: 4.0
-    epsilon_low: 4.0
-    ppo_minibatch_size: 64
+    system_prompt: false
+
+async_config:
+  train_workers: 1
+  max_prompt_queue_size: 2
+  max_lag: 4
 
 metrics_to_log:
   - "train/loss"
@@ -61,5 +62,3 @@ metrics_to_log:
   - "train/mean_reward"
   - "val/mean_reward"
   - "train/num_unparsable"
-  - "train/annealing_percentage"
-  - "val/annealing_percentage"

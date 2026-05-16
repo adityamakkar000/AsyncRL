@@ -10,6 +10,7 @@ class Sample:
     prompt: str
     answer: str
     solution: str | None
+    annealing_percentage: float | None = None
 
     @classmethod
     def from_dict(cls, data: dict):
@@ -34,10 +35,20 @@ class ProcessDatasetConfig:
 
 
 @dataclass
+class AnnealedConfig:
+    use_annealing: bool
+    name: str
+    gcs_path: str | None = None
+    throw_away_after_n_steps: int = 1
+    max_annealing_percentage: float = 0.8
+
+
+@dataclass
 class DatasetConfig:
     name: str
     batch_size: int
     gcs_path: str | None = None
+    annealing_config: AnnealedConfig | None = None
 
 
 @struct.dataclass

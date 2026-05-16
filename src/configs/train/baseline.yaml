@@ -4,14 +4,12 @@ defaults:
   - model_config: qwen_1.7b_base
   - sharding_config: fsdp
   - loss_config: loss
-  - datasets@data_config: dapo_math_17k
+  - datasets@data_config: troll-17k-train-filtered
   - _self_
 
 grad_accum_steps: 1
-val_steps: 1
 seed: 0
 num_steps: 1000
-val_interval: 25
 
 optimizer: "adamw"
 weight_decay: 0.01
@@ -25,7 +23,6 @@ decay_steps: 0.9
 
 spot_training: true
 checkpoint_interval: 25
-best_metric: null
 max_checkpoints_to_keep: 5
 
 wandb_config:
@@ -34,10 +31,7 @@ wandb_config:
   tags: null
 
 data_config:
-  train_config:
-    batch_size: 512
-  val_config:
-    batch_size: 512
+  batch_size: 512
 
 loss_config:
   inference_config:
@@ -47,14 +41,14 @@ loss_config:
     n_replicas: 4
     group_size: 16
     temperature: 1.0
-    reasoning_budget: null
+    reasoning_budget: null 
     think_mode: true
     system_prompt: true
-  rl_config:
-    algorithm: cispo
-    epsilon_high: 4
-    epsilon_low: 4
 
+async_config:
+  train_workers: 1
+  max_prompt_queue_size: 2
+  max_lag: 4
     
 metrics_to_log:
   - "train/loss"

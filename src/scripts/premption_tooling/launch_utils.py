@@ -139,7 +139,7 @@ def run_tpu_jobs(
             f"--config-name {BASE_CONFIG}",
         ]
         if JOB_TYPE == JOB_TYPES.TRAIN:
-            inner_parts.append(f"experiment={name}")
+            inner_parts.append(f"experiment_name={name}")
 
         for k, v in overrides.items():
             inner_parts.append(f"{k}={v}")

@@ -127,6 +127,10 @@ class TPUJob:
     def launch_dir(self) -> str:
         return f"{self.home_dir}/{self.cwd}"
 
+    @property
+    def command(self) -> str:
+        return f'mesh run {self.node_id} "{self.cmd}"'
+
     def setup_tpu(self) -> int:
         ips = tpu_get_ips(self.node_id, self.zone.value)
         update_mesh_config(self.node_id, ips)
@@ -146,15 +150,14 @@ class TPUJob:
                 console.print(f"[yellow]mesh setup failed for {self.node_id}, will retry[/yellow]")
                 return
 
-            full_cmd = f'mesh run {self.node_id} "{self.cmd}"'
             log_path = f"{self.home_dir}/logs/{self.node_id}.txt"
 
             self._log_file = open(log_path, "a", buffering=1)
             self.process = subprocess.Popen(
-                full_cmd,
+                self.command,
                 shell=True,
                 stdout=self._log_file,
-                stderr=subprocess.STDOUT,
+                stderr=self._log_file,
                 text=True,
                 cwd=self.launch_dir,
             )
