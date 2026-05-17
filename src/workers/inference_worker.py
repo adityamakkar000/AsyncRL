@@ -1,3 +1,5 @@
+from numpy.ma import shape
+from fsspec.asyn import sync
 import threading
 import time
 from functools import partial
@@ -18,7 +20,7 @@ from src.data import InferenceRollout, Sample
 from src.model import KVCache, Model
 
 from .config import AsyncState, InferenceShardings, InferenceState, TrainerConfig
-from .utils import _maybe_force_eos, _maybe_force_eot, naive_sample
+from .utils import _maybe_force_eos, _maybe_force_eot, naive_sample, setup_transfer_server, get_global_ip, get_current_vm_internal_ip
 from .worker import Worker
 
 AXIS_NAME = "data"
@@ -59,8 +61,9 @@ class AsyncInferenceWorker(Worker):
         self.shardings: InferenceShardings = self.get_shardings(dummy_params)
         self.params = jax.device_put(dummy_params, self.shardings.replicate_sharding)
         jax.block_until_ready(self.params)
+        self.shape_dtype = jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype, self.shardings.replicate_sharding), self.params)
 
-        self.async_state = AsyncState(MRUparams=jax.device_get(self.params), updated=False)
+        self.async_state = AsyncState(MRUparams=jax.tree.map(lambda x: x.clone(), self.params), updated=False)
 
         self.monitor_thread = threading.Thread(
             target=self.monitor_weight_sync, args=(self.async_state, self.async_options), daemon=True
@@ -86,24 +89,23 @@ class AsyncInferenceWorker(Worker):
         self.weight_iteration = 0
         self.worker_rank = jax.process_index() - self.async_options.train_workers
 
+        self.ip = get_current_vm_internal_ip()
+        self.transfer_server = setup_transfer_server(self.ip, port=8000)
+        self.client = self.transfer_server.connect()
+
         self.block_until_params_update()
 
     def monitor_weight_sync(self, async_state: AsyncState, async_options: AsyncOptions):
-        def inference_sync_weights(params_cpu, async_options: AsyncOptions):
-            sync_global_devices("weightSync")
-            sync_global_devices("gathered")
-
-            params_cpu = broadcast_one_to_all(params_cpu)
-            logger.info("Inference workers received updated params", log_for_all=True)
-            return params_cpu
-
         while True:
             async_options.weight_sync_queue.get()
             logger.info(
                 f"Rank {jax.process_index()} received sync signal from train worker, syncing weights to latest parameters...",
                 log_for_all=True,
             )
-            new_params = inference_sync_weights(async_state.MRUparams, async_options)
+            
+            new_params = self.client.pull(self.weight_iteration * self.async_options.inference_workers + self.worker_rank, self.shape_dtype)
+            new_params = jax.tree.map(lambda x: x.block_until_ready(), new_params)
+
             with async_state.update_lock:
                 async_state.MRUparams = new_params
                 async_state.updated = True

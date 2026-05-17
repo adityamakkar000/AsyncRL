@@ -22,7 +22,7 @@ from src.model import Model
 
 from .config import TrainerConfig
 from .loss import get_single_step
-from .utils import Key, setup, write_to_gcs
+from .utils import Key, setup, write_to_gcs, setup_transfer_server, get_global_ip, get_current_vm_internal_ip
 from .worker import Worker
 
 load_dotenv()
@@ -46,6 +46,9 @@ class AsyncTrainerWorker(Worker):
         self.validate_config()
 
         logger.info(f"Setting up {self.config.experiment_name}")
+
+        self.ip = get_current_vm_internal_ip()
+        self.transfer_server = setup_transfer_server(self.ip, port=8000)
 
         with stax.Tracker(timer=True) as tracker:
             self._init_state()
@@ -397,27 +400,18 @@ class AsyncTrainerWorker(Worker):
 
             while not self.async_options.weight_sync_queue.empty():
                 continue
+            
+            # replicate across hosts, shard across devices in a host
+            sharded_params = jax.jit(
+                lambda x: jax.tree.map(
+                    lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), x
+                ),
+                out_shardings=jax.NamedSharding(self.async_options.train_mesh, jax.P("local_devices")),
+            )(self.params)
 
-            # NOTE: we sync over global devices here since inference workers
-            # should be aligned at this point (otherwise they won't have popped the sync polls from the queue)
-
-            sync_global_devices("weightSync")
-
-            params_broadcast = jax.device_get(
-                jax.jit(
-                    lambda x: jax.tree.map(
-                        lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), x
-                    ),
-                    out_shardings=jax.NamedSharding(self.async_options.train_mesh, jax.P("local_devices")),
-                )(self.params)
-            )
-
-            sync_global_devices("gathered")
-
-            # broadcast over RDMA(ICI on TPU devices)
-            _params = broadcast_one_to_all({"params": params_broadcast})
-            del params_broadcast
-            del _params
+            if jax.process_count() == 0:
+                for i in range(self.async_options.inference_workers):
+                    self.transfer_server.await_pull(self.weight_iteration * self.async_options.inference_workers + i, sharded_params)
 
         self.weight_iteration += 1
         logger.info(f"Weights sent to inference worker in {t.data['time']:.2f} seconds", log_for_all=True)

@@ -1,11 +1,14 @@
+import socket
 import time
-from functools import wraps
+from functools import lru_cache, wraps
 from typing import Any, Callable, Optional
 
 import gcsfs
 import jax
 import jax.numpy as jnp
 import stax
+from jax._src.clusters.cloud_tpu_cluster import GceTpuCluster
+from jax.experimental.transfer import start_transfer_server
 from jaxtyping import Array
 from stax import staxLogger as logger
 
@@ -161,3 +164,19 @@ def _maybe_force_eos(
     next_log_prob = jnp.where(length_stop_mask, 0, next_log_prob)
 
     return next_token, next_log_prob, stop_mask
+
+def setup_transfer_server(local_ip: str, port: int):
+    backend_client = jax.devices()[0].client
+    server = start_transfer_server(
+        backend_client,
+        f"{local_ip}:{port}",
+        [f"{local_ip}:0"] * jax.device_count(),
+    )
+    return server
+
+def get_current_vm_internal_ip():
+    return socket.gethostbyname(socket.gethostname())
+
+@lru_cache
+def get_global_ip():
+    return GceTpuCluster.get_coordinator_address(60).split(":")[0]
