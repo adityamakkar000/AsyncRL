@@ -148,6 +148,12 @@ class AsyncTrainerWorker(Worker):
         self.gs_path = f"{GS_BUCKET}/runs/{self.config.experiment_name}"
 
         self.weight_iteration = 0
+        self.local_mesh = jax.make_mesh(
+            (jax.local_device_count(),),
+            ("local_devices",),
+            axis_types=(jax.sharding.AxisType.Explicit,),
+            devices=np.array(jax.local_devices()),
+        )
 
     @partial(setup, component="metric_logger")
     def _setup_writer(self):
@@ -395,57 +401,35 @@ class AsyncTrainerWorker(Worker):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
 
         with stax.Tracker(timer=True) as t:
-            with stax.Tracker(timer=True) as t_broadcast:
-                if self.worker_rank == 0:
-                    address = self.transfer_server.address()
-                    for _ in range(self.async_options.inference_workers):
-                        self.async_options.weight_sync_queue.put(address)
-            logger.info(f"[weight_sync_trainer] broadcast_address: {t_broadcast.data['time']:.3f}s", log_for_all=True)
-
-            with stax.Tracker(timer=True) as t_dequeue_wait:
-                while not self.async_options.weight_sync_queue.empty():
-                    continue
-            logger.info(f"[weight_sync_trainer] wait_address_dequeued: {t_dequeue_wait.data['time']:.3f}s", log_for_all=True)
-
-            logger.info("getting sharded params")
-
-            with stax.Tracker(timer=True) as t_sync:
-                self.sync_train_workers("weight_sync")
-            logger.info(f"[weight_sync_trainer] sync_train_workers: {t_sync.data['time']:.3f}s", log_for_all=True)
-
-            with stax.Tracker(timer=True) as t_cast:
-                params_cpu = jax.device_get(
-                    jax.jit(
-                        lambda x: jax.tree.map(
-                            lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), x
-                        ),
-                        out_shardings=jax.NamedSharding(self.async_options.train_mesh, jax.P("local_devices")),
-                    )
-                )(self.params)
-            logger.info(f"[weight_sync_trainer] cast_and_device_get: {t_cast.data['time']:.3f}s", log_for_all=True)
-
-            logger.info("awaiting pull")
             if self.worker_rank == 0:
-                local_mesh = jax.make_mesh(
-                    (jax.local_device_count(),),
-                    ("local_devices",),
-                    axis_types=(jax.sharding.AxisType.Explicit,),
-                    devices=np.array(jax.local_devices()),
+                address = self.transfer_server.address()
+                for _ in range(self.async_options.inference_workers):
+                    self.async_options.weight_sync_queue.put(address)
+
+            while not self.async_options.weight_sync_queue.empty():
+                continue
+
+            params_cpu = jax.device_get(
+                jax.jit(
+                    lambda x: jax.tree.map(
+                        lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), x
+                    ),
+                    out_shardings=jax.NamedSharding(self.async_options.train_mesh, jax.P("local_devices")),
                 )
-                sharded_params = jax.device_put(params_cpu, jax.NamedSharding(local_mesh, jax.P()))
+            )(self.params)
+
+            if self.worker_rank == 0:
+                sharded_params = jax.device_put(params_cpu, jax.NamedSharding(self.local_mesh, jax.P()))
                 for i in range(self.async_options.inference_workers):
                     uuid = self.weight_iteration * self.async_options.inference_workers + i
                     logger.info(f"placing weights on uuid{uuid}")
                     self.transfer_server.await_pull(uuid, {"params": sharded_params})
 
-                logger.info("waiting for pull to come back")
                 for _ in range(self.async_options.inference_workers):
-                    logger.info(self.async_options.weight_sync_queue.get())
-
-            logger.info("weight transfer done")
+                    logger.info(f"[weight_sync] {self.async_options.weight_sync_queue.get()}")
 
         self.weight_iteration += 1
-        logger.info(f"Weights sent to inference worker in {t.data['time']:.2f} seconds", log_for_all=True)
+        logger.info(f"[weight_sync] Weights sent to inference worker in {t.data['time']:.2f} seconds", log_for_all=True)
         return {"train/weight_sync_time": t.data["time"]}
 
     def fill_queue(self):
@@ -554,9 +538,10 @@ class AsyncTrainerWorker(Worker):
             with stax.Tracker(timer=True) as t:
                 generations, local_rollout_metrics = self.get_rollouts()
                 local_train_batch, local_train_batch_metrics = self.train_dataset.prepare_batch(generations, train=True)
-                self.params, self.opt_state, train_metrics = self.train_step(
-                    self.params, self.opt_state, local_train_batch
-                )
+                # self.params, self.opt_state, train_metrics = self.train_step(
+                #     self.params, self.opt_state, local_train_batch
+                # )
+                train_metrics = {}
                 weight_sync_time = self.train_sync_weights()
                 self.fill_queue()
 

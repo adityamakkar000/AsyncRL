@@ -101,45 +101,26 @@ class AsyncInferenceWorker(Worker):
 
     def monitor_weight_sync(self, async_state: AsyncState, async_options: AsyncOptions):
         while True:
-            with Tracker(timer=True) as t_total:
-                with Tracker(timer=True) as t_wait:
-                    address = async_options.weight_sync_queue.get()
-                    logger.info(
-                        f"Rank {jax.process_index()} received sync signal from train worker, syncing weights to latest parameters...",
-                        log_for_all=True,
-                    )
-                logger.info(f"[weight_sync] wait_for_address: {t_wait.data['time']:.3f}s", log_for_all=True)
-
-
-            logger.info(f"connecting to address {address}", log_for_all=True)
+            address = async_options.weight_sync_queue.get()
+            logger.info(
+                f"[weight_sync] Rank {jax.process_index()} received sync signal from train worker, syncing weights to latest parameters...",
+                log_for_all=True,
+            )
+            logger.info(f"[weight_sync] connecting to address {address}", log_for_all=True)
 
             with async_state.update_lock:
                 iteration = async_state.weight_iteration
-            
-            with Tracker(timer=True) as t_connect:
-                client = self.transfer_server.connect(address)
-            logger.info(f"[weight_sync] connect_to_server: {t_connect.data['time']:.3f}s", log_for_all=True)
 
-            with Tracker(timer=True) as t_pull:
-                uuid = iteration * self.async_options.inference_workers + self.worker_rank
-                logger.info(f"gathering on uiud{uuid}", log_for_all=True)
-                new_params = client.pull(uuid, self.shape_dtype)
-            logger.info(f"[weight_sync] pull_weights: {t_pull.data['time']:.3f}s", log_for_all=True)
+            client = self.transfer_server.connect(address)
 
-            with Tracker(timer=True) as t_ready:
-                new_params = jax.tree.map(lambda x: x.block_until_ready(), new_params)
-            logger.info(f"[weight_sync] block_until_ready: {t_ready.data['time']:.3f}s", log_for_all=True)
-
+            uuid = iteration * self.async_options.inference_workers + self.worker_rank
+            new_params = jax.tree.map(lambda x: x.block_until_ready(), client.pull(uuid, self.shape_dtype))
             async_options.weight_sync_queue.put(f"inference_worker_{self.worker_rank}_done")
 
-            with Tracker(timer=True) as t_lock:
-                with async_state.update_lock:
-                    async_state.MRUparams = new_params
-                    async_state.updated = True
-                    async_state.weight_iteration += 1
-            logger.info(f"[weight_sync] update_lock_swap: {t_lock.data['time']:.3f}s", log_for_all=True)
-
-        logger.info(f"[weight_sync] TOTAL inference side: {t_total.data['time']:.3f}s", log_for_all=True)
+            with async_state.update_lock:
+                async_state.MRUparams = new_params
+                async_state.updated = True
+                async_state.weight_iteration += 1
 
     def _maybe_update_params(self):
         with self.async_state.update_lock:
