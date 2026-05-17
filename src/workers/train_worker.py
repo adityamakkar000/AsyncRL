@@ -395,25 +395,34 @@ class AsyncTrainerWorker(Worker):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
 
         with stax.Tracker(timer=True) as t:
-            if self.worker_rank == 0:
-                address = self.transfer_server.address()
-                for _ in range(self.async_options.inference_workers):
-                    self.async_options.weight_sync_queue.put(address)
+            with stax.Tracker(timer=True) as t_broadcast:
+                if self.worker_rank == 0:
+                    address = self.transfer_server.address()
+                    for _ in range(self.async_options.inference_workers):
+                        self.async_options.weight_sync_queue.put(address)
+            logger.info(f"[weight_sync_trainer] broadcast_address: {t_broadcast.data['time']:.3f}s", log_for_all=True)
 
-            while not self.async_options.weight_sync_queue.empty():
-                continue
+            with stax.Tracker(timer=True) as t_dequeue_wait:
+                while not self.async_options.weight_sync_queue.empty():
+                    continue
+            logger.info(f"[weight_sync_trainer] wait_address_dequeued: {t_dequeue_wait.data['time']:.3f}s", log_for_all=True)
 
             logger.info("getting sharded params")
 
-            self.sync_train_workers("weight_sync")
-            params_cpu = jax.device_get(
-                jax.jit(
-                    lambda x: jax.tree.map(
-                        lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), x
-                    ),
-                    out_shardings=jax.NamedSharding(self.async_options.train_mesh, jax.P("local_devices")),
-                )
-            )(self.params)
+            with stax.Tracker(timer=True) as t_sync:
+                self.sync_train_workers("weight_sync")
+            logger.info(f"[weight_sync_trainer] sync_train_workers: {t_sync.data['time']:.3f}s", log_for_all=True)
+
+            with stax.Tracker(timer=True) as t_cast:
+                params_cpu = jax.device_get(
+                    jax.jit(
+                        lambda x: jax.tree.map(
+                            lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), x
+                        ),
+                        out_shardings=jax.NamedSharding(self.async_options.train_mesh, jax.P("local_devices")),
+                    )
+                )(self.params)
+            logger.info(f"[weight_sync_trainer] cast_and_device_get: {t_cast.data['time']:.3f}s", log_for_all=True)
 
             logger.info("awaiting pull")
             if self.worker_rank == 0:
