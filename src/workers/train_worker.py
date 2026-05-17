@@ -422,7 +422,7 @@ class AsyncTrainerWorker(Worker):
                 sharded_params = jax.device_put(params_cpu, jax.NamedSharding(self.local_mesh, jax.P()))
                 for i in range(self.async_options.inference_workers):
                     uuid = self.weight_iteration * self.async_options.inference_workers + i
-                    logger.info(f"placing weights on uuid{uuid}")
+                    logger.info(f"[weight_sync] placing weights on uuid: {uuid}")
                     self.transfer_server.await_pull(uuid, {"params": sharded_params})
 
                 for _ in range(self.async_options.inference_workers):
@@ -443,16 +443,13 @@ class AsyncTrainerWorker(Worker):
         weight_iterations = []
         num_filtered_rollouts = 0
         with stax.Tracker(timer=True) as t:
-            while len(rollouts) < self.train_n_prompts:
-                for _ in range(self.train_n_prompts_per_host):
-                    rollout = self.async_options.rollout_queue.get()
-                    if (
-                        lag_diff := (self.weight_iteration - rollout.weight_iteration)
-                    ) <= self.config.async_config.max_lag:
-                        rollouts.append(rollout)
-                        weight_iterations.append(lag_diff)
-                    else:
-                        num_filtered_rollouts += 1
+            while len(rollouts) < self.train_n_prompts_per_host:
+                rollout = self.async_options.rollout_queue.get()
+                if (lag_diff := (self.weight_iteration - rollout.weight_iteration)) <= self.config.async_config.max_lag:
+                    rollouts.append(rollout)
+                    weight_iterations.append(lag_diff)
+                else:
+                    num_filtered_rollouts += 1
 
         metrics = {
             "train/rollout_queue_wait_time": t.data["time"],
