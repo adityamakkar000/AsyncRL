@@ -1,0 +1,29 @@
+task: aime25
+dataset_path: Mamath-ai/aime25
+output_type: generate_until
+training_split: train
+fewshot_split: train
+test_split: train
+doc_to_text: "Solve the following math problem step by step. Put your answer inside \\boxed{}.
+  {{Problem}}
+  Remember to put your answer inside \\boxed{}"
+doc_to_target: "{{Answer}}"
+process_results: !function utils.process_aime25_results
+metric_list:
+  - metric: boxed_parse
+    aggregation: mean
+    higher_is_better: true
+generation_kwargs:
+  until:
+    - "Question:"
+    - "</s>"
+    - "<|im_end|>"
+    - "<|eot_id|>"
+  do_sample: true
+tag:
+  - chain_of_thought
+repeats: 1
+num_fewshot: 0
+metadata:
+  version: 3.0
+
