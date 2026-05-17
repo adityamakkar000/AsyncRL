@@ -1,5 +1,3 @@
-from numpy.ma import shape
-from fsspec.asyn import sync
 import threading
 import time
 from functools import partial
@@ -8,7 +6,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import stax
-from jax.experimental.multihost_utils import broadcast_one_to_all, sync_global_devices
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, PyTree
 from stax import Tracker
@@ -20,7 +17,13 @@ from src.data import InferenceRollout, Sample
 from src.model import KVCache, Model
 
 from .config import AsyncState, InferenceShardings, InferenceState, TrainerConfig
-from .utils import _maybe_force_eos, _maybe_force_eot, naive_sample, setup_transfer_server, get_global_ip, get_current_vm_internal_ip
+from .utils import (
+    _maybe_force_eos,
+    _maybe_force_eot,
+    get_current_vm_internal_ip,
+    naive_sample,
+    setup_transfer_server,
+)
 from .worker import Worker
 
 AXIS_NAME = "data"
@@ -61,7 +64,9 @@ class AsyncInferenceWorker(Worker):
         self.shardings: InferenceShardings = self.get_shardings(dummy_params)
         self.params = jax.device_put(dummy_params, self.shardings.replicate_sharding)
         jax.block_until_ready(self.params)
-        self.shape_dtype = jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype, self.shardings.replicate_sharding), self.params)
+        self.shape_dtype = jax.tree.map(
+            lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=self.shardings.replicate_sharding), self.params
+        )
 
         self.async_state = AsyncState(MRUparams=jax.tree.map(lambda x: x.clone(), self.params), updated=False)
 
@@ -91,20 +96,29 @@ class AsyncInferenceWorker(Worker):
 
         self.ip = get_current_vm_internal_ip()
         self.transfer_server = setup_transfer_server(self.ip, port=8000)
-        self.client = self.transfer_server.connect()
 
         self.block_until_params_update()
 
     def monitor_weight_sync(self, async_state: AsyncState, async_options: AsyncOptions):
         while True:
-            async_options.weight_sync_queue.get()
+            address = async_options.weight_sync_queue.get()
             logger.info(
                 f"Rank {jax.process_index()} received sync signal from train worker, syncing weights to latest parameters...",
                 log_for_all=True,
             )
-            
-            new_params = self.client.pull(self.weight_iteration * self.async_options.inference_workers + self.worker_rank, self.shape_dtype)
+
+            logger.info(f"connecting to address {address}", log_for_all=True)
+
+            with async_state.update_lock:
+                iteration = async_state.weight_iteration
+
+            client = self.transfer_server.connect(address)
+            uuid = iteration * self.async_options.inference_workers + self.worker_rank
+            logger.info(f"gathering on uiud{uuid}", log_for_all=True)
+            new_params = client.pull(uuid, self.shape_dtype)
             new_params = jax.tree.map(lambda x: x.block_until_ready(), new_params)
+
+            async_options.weight_sync_queue.put(f"inference_worker_{self.worker_rank}_done")
 
             with async_state.update_lock:
                 async_state.MRUparams = new_params

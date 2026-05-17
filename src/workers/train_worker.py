@@ -9,7 +9,6 @@ import optax
 import stax
 from dotenv import load_dotenv
 from einops import rearrange
-from jax.experimental.multihost_utils import broadcast_one_to_all, sync_global_devices
 from jaxtyping import Array, PyTree
 from omegaconf import OmegaConf
 from stax import staxLogger as logger
@@ -22,7 +21,7 @@ from src.model import Model
 
 from .config import TrainerConfig
 from .loss import get_single_step
-from .utils import Key, setup, write_to_gcs, setup_transfer_server, get_global_ip, get_current_vm_internal_ip
+from .utils import Key, get_current_vm_internal_ip, setup, setup_transfer_server, write_to_gcs
 from .worker import Worker
 
 load_dotenv()
@@ -71,7 +70,7 @@ class AsyncTrainerWorker(Worker):
             self.train_sync_weights()
             self.block_until_checkpoints_saved()
 
-            sync_over_mesh("Trainer initialization", self.async_options.train_mesh)
+            self.sync_train_workers("Trainer initialization")
 
         logger.info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds")
 
@@ -143,6 +142,7 @@ class AsyncTrainerWorker(Worker):
         self.key = Key(self.config.seed)
         self.global_step = 0
 
+        self.worker_rank = jax.process_index()
         self.n_hosts = jax.process_count()
         self.n_devices = jax.device_count()
         self.gs_path = f"{GS_BUCKET}/runs/{self.config.experiment_name}"
@@ -395,23 +395,45 @@ class AsyncTrainerWorker(Worker):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
 
         with stax.Tracker(timer=True) as t:
-            for _ in range(self.async_options.inference_workers):
-                self.async_options.weight_sync_queue.put("sync")
+            if self.worker_rank == 0:
+                address = self.transfer_server.address()
+                for _ in range(self.async_options.inference_workers):
+                    self.async_options.weight_sync_queue.put(address)
 
             while not self.async_options.weight_sync_queue.empty():
                 continue
-            
-            # replicate across hosts, shard across devices in a host
-            sharded_params = jax.jit(
-                lambda x: jax.tree.map(
-                    lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), x
-                ),
-                out_shardings=jax.NamedSharding(self.async_options.train_mesh, jax.P("local_devices")),
+
+            logger.info("getting sharded params")
+
+            self.sync_train_workers("weight_sync")
+            params_cpu = jax.device_get(
+                jax.jit(
+                    lambda x: jax.tree.map(
+                        lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), x
+                    ),
+                    out_shardings=jax.NamedSharding(self.async_options.train_mesh, jax.P("local_devices")),
+                )
             )(self.params)
 
-            if jax.process_count() == 0:
+            logger.info("awaiting pull")
+            if self.worker_rank == 0:
+                local_mesh = jax.make_mesh(
+                    (jax.local_device_count(),),
+                    ("local_devices",),
+                    axis_types=(jax.sharding.AxisType.Explicit,),
+                    devices=np.array(jax.local_devices()),
+                )
+                sharded_params = jax.device_put(params_cpu, jax.NamedSharding(local_mesh, jax.P()))
                 for i in range(self.async_options.inference_workers):
-                    self.transfer_server.await_pull(self.weight_iteration * self.async_options.inference_workers + i, sharded_params)
+                    uuid = self.weight_iteration * self.async_options.inference_workers + i
+                    logger.info(f"placing weights on uuid{uuid}")
+                    self.transfer_server.await_pull(uuid, {"params": sharded_params})
+
+                logger.info("waiting for pull to come back")
+                for _ in range(self.async_options.inference_workers):
+                    logger.info(self.async_options.weight_sync_queue.get())
+
+            logger.info("weight transfer done")
 
         self.weight_iteration += 1
         logger.info(f"Weights sent to inference worker in {t.data['time']:.2f} seconds", log_for_all=True)
@@ -420,7 +442,7 @@ class AsyncTrainerWorker(Worker):
     def fill_queue(self):
         assert self.train_dataset is not None, "Train dataset must be set up to fill queue."
         while not self.async_options.prompt_queue.full():
-            sync_over_mesh("fill_queue", self.async_options.train_mesh)
+            self.sync_train_workers("fill_queue")
             self.async_options.prompt_queue.put(self.train_dataset(1)[0])
 
     def get_rollouts(self) -> tuple[list[InferenceRollout], dict]:
@@ -567,6 +589,9 @@ class AsyncTrainerWorker(Worker):
             self.train()
         finally:
             self.finish()
+
+    def sync_train_workers(self, name: str):
+        sync_over_mesh(name, self.async_options.train_mesh)
 
     @partial(setup, component="cleanup")
     def finish(self):
