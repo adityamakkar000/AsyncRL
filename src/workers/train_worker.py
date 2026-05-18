@@ -535,9 +535,9 @@ class AsyncTrainerWorker(Worker):
             with stax.Tracker(timer=True) as t:
                 generations, local_rollout_metrics = self.get_rollouts()
                 local_train_batch, local_train_batch_metrics = self.train_dataset.prepare_batch(generations, train=True)
-                # self.params, self.opt_state, train_metrics = self.train_step(
-                #     self.params, self.opt_state, local_train_batch
-                # )
+                self.params, self.opt_state, train_metrics = self.train_step(
+                    self.params, self.opt_state, local_train_batch
+                )
                 train_metrics = {}
                 weight_sync_time = self.train_sync_weights()
                 self.fill_queue()
