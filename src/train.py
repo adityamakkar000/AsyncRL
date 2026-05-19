@@ -79,7 +79,7 @@ def main(cfg: DictConfig) -> None:
     )
 
     local_prompt_queue = queue.Queue(
-        maxsize=cfg.async_config.max_prompt_queue_size
+        maxsize=(cfg.async_config.max_prompt_queue_size + 1)
         * cfg.data_config.batch_size
         // cfg.loss_config.inference_config.group_size
     )
