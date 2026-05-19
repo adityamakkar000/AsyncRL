@@ -102,6 +102,10 @@ class AsyncInferenceWorker(Worker):
     def monitor_weight_sync(self, async_state: AsyncState, async_options: AsyncOptions):
         while True:
             address = async_options.weight_sync_queue.get()
+
+            logger.info(f"mesh is {self.async_options.inference_mesh}", log_for_all=True)
+            stax.sync_over_mesh("beforeWeightSync", mesh=self.async_options.inference_mesh)
+
             logger.info(
                 f"[weight_sync] Rank {jax.process_index()} received sync signal from train worker, syncing weights to latest parameters...",
                 log_for_all=True,
@@ -116,6 +120,8 @@ class AsyncInferenceWorker(Worker):
             uuid = iteration * self.async_options.inference_workers + self.worker_rank
             new_params = jax.tree.map(lambda x: x.block_until_ready(), client.pull(uuid, self.shape_dtype))
             async_options.weight_sync_queue.put(f"inference_worker_{self.worker_rank}_done")
+
+            stax.sync_over_mesh("afterWeightSync", self.async_options.inference_mesh)
 
             with async_state.update_lock:
                 async_state.MRUparams = new_params

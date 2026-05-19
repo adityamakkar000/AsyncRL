@@ -2,7 +2,7 @@ import src.scripts.premption_tooling as TPUJOB
 
 max_seq_len = [4096, 8192]
 batch_size = [512, 1024]
-grad_accum_steps = [8,16]
+grad_accum_steps = [8, 16]
 group_size = [8, 16]
 max_decode_batch_size = [32, 64]
 
@@ -33,7 +33,7 @@ BASE_CONFIG = "baseline"
 
 job = TPUJOB.LAUNCH_JOB(
     RUN=RUN,
-    EXPERIMENT_PREFIX="async_baseline",
+    EXPERIMENT_PREFIX="async_baseline_v2",
     FIXED_OVERRIDES=dict(),
     BASE_CONFIG=BASE_CONFIG,
     ZONE=TPUJOB.Zone.US_EAST5_A,
