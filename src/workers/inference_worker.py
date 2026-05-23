@@ -92,7 +92,7 @@ class AsyncInferenceWorker(Worker):
         self.global_rollouts: dict[int, InferenceRollout] = dict()
 
         self.weight_iteration = 0
-        self.worker_rank = jax.process_index() - self.async_options.train_workers
+        self.worker_rank = stax.get_rank() - self.async_options.train_workers
 
         self.ip = get_current_vm_internal_ip()
         self.transfer_server = setup_transfer_server(self.ip, port=8000)
@@ -103,11 +103,10 @@ class AsyncInferenceWorker(Worker):
         while True:
             address = async_options.weight_sync_queue.get()
 
-            logger.info(f"mesh is {self.async_options.inference_mesh}", log_for_all=True)
             stax.sync_over_mesh("beforeWeightSync", mesh=self.async_options.inference_mesh)
 
             logger.info(
-                f"[weight_sync] Rank {jax.process_index()} received sync signal from train worker, syncing weights to latest parameters...",
+                f"[weight_sync] Rank {stax.get_rank()} received sync signal from train worker, syncing weights to latest parameters...",
                 log_for_all=True,
             )
             logger.info(f"[weight_sync] connecting to address {address}", log_for_all=True)
@@ -127,6 +126,9 @@ class AsyncInferenceWorker(Worker):
                 async_state.MRUparams = new_params
                 async_state.updated = True
                 async_state.weight_iteration += 1
+
+            while not self.async_options.weight_sync_queue.empty():
+                continue
 
     def _maybe_update_params(self):
         with self.async_state.update_lock:

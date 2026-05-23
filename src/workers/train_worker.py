@@ -4,6 +4,7 @@ from functools import partial
 from typing import Any, Optional
 
 import jax
+import jax._src.distributed as dist
 import numpy as np
 import optax
 import stax
@@ -45,6 +46,7 @@ class AsyncTrainerWorker(Worker):
         self.validate_config()
 
         logger.info(f"Setting up {self.config.experiment_name}")
+        logger.info(f"runtime={stax.get_rank()}, distributed={dist.global_state.process_id}")
 
         self.ip = get_current_vm_internal_ip()
         self.transfer_server = setup_transfer_server(self.ip, port=8000)
@@ -142,7 +144,7 @@ class AsyncTrainerWorker(Worker):
         self.key = Key(self.config.seed)
         self.global_step = 0
 
-        self.worker_rank = jax.process_index()
+        self.worker_rank = stax.get_rank()
         self.n_hosts = jax.process_count()
         self.n_devices = jax.device_count()
         self.gs_path = f"{GS_BUCKET}/runs/{self.config.experiment_name}"
@@ -305,6 +307,7 @@ class AsyncTrainerWorker(Worker):
         """Setup checkpointing mechanism."""
 
         path = f"{self.gs_path}/{CHECKPOINTS}/"
+        logger.info(f"rank: {stax.get_rank()}", log_for_all=True)
         self.checkpointer = stax.Checkpointer(
             output_dir=path,
             max_to_keep=self.config.max_checkpoints_to_keep,
@@ -322,12 +325,16 @@ class AsyncTrainerWorker(Worker):
         metadata_metrics: Optional[dict[str, float]] = None,
     ):
         assert self.train_dataset is not None, "Train dataset must be set up to make save tree."
+        assert self.train_mesh is not None, "train mesh should be intialized for checkpointing"
 
         dataset_state = {"train": self.train_dataset.save_checkpoint()}
 
+        model_state = ((params if params else self.params), (opt_state if opt_state else self.opt_state))
+        model_state = jax.jit(lambda x: x, out_shardings=jax.NamedSharding(self.train_mesh, jax.P()))(model_state)
+
         state = {
-            "params": params if params else self.params,
-            "opt_state": opt_state if opt_state else self.opt_state,
+            "params": model_state[0],
+            "opt_state": model_state[1],
             "global_step": self.global_step,
             "dataset": dataset_state,
             "key": self.key.key,
@@ -409,14 +416,13 @@ class AsyncTrainerWorker(Worker):
             while not self.async_options.weight_sync_queue.empty():
                 continue
 
+            params_cast = jax.tree.map(
+                lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), self.params
+            )
+
             params_cpu = jax.device_get(
-                jax.jit(
-                    lambda x: jax.tree.map(
-                        lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), x
-                    ),
-                    out_shardings=jax.NamedSharding(self.async_options.train_mesh, jax.P("local_devices")),
-                )
-            )(self.params)
+                jax.device_put(params_cast, jax.sharding.NamedSharding(self.train_mesh, jax.P()))
+            )
 
             if self.worker_rank == 0:
                 sharded_params = jax.device_put(params_cpu, jax.NamedSharding(self.local_mesh, jax.P()))
@@ -428,15 +434,24 @@ class AsyncTrainerWorker(Worker):
                 for _ in range(self.async_options.inference_workers):
                     logger.info(f"[weight_sync] {self.async_options.weight_sync_queue.get()}")
 
+            self.sync_train_workers(f"weight_sync_{self.weight_iteration}")
+
         self.weight_iteration += 1
         logger.info(f"[weight_sync] Weights sent to inference worker in {t.data['time']:.2f} seconds", log_for_all=True)
         return {"train/weight_sync_time": t.data["time"]}
 
     def fill_queue(self):
         assert self.train_dataset is not None, "Train dataset must be set up to fill queue."
+        count = 0
         while not self.async_options.prompt_queue.full():
-            self.sync_train_workers("fill_queue")
-            self.async_options.prompt_queue.put(self.train_dataset(1)[0])
+            self.sync_train_workers(f"fill_queue_{count}")
+            sample = self.train_dataset(1)[0]
+            if self.worker_rank == 0:
+                self.async_options.prompt_queue.put(sample)
+            self.sync_train_workers(f"fill_queue_{count}")
+            count += 1
+        self.sync_train_workers("fill_queue_done")
+        return {"train/prompts_filled_in_queue": count}
 
     def get_rollouts(self) -> tuple[list[InferenceRollout], dict]:
         rollouts = []
@@ -540,7 +555,7 @@ class AsyncTrainerWorker(Worker):
                 )
                 train_metrics = {}
                 weight_sync_time = self.train_sync_weights()
-                self.fill_queue()
+                fill_queue = self.fill_queue()
 
             min_mem, max_mem = stax.get_memory()
             other_metrics = {
@@ -548,6 +563,7 @@ class AsyncTrainerWorker(Worker):
                 "devices/memory_max": max_mem,
                 "train/lr": self.opt_state[1].hyperparams["learning_rate"],
                 "train/weight_sync_time": weight_sync_time["train/weight_sync_time"],
+                "train/prompts_filled_in_queue": fill_queue["train/prompts_filled_in_queue"],
                 "train/step_time": t.data["time"],
             }
 
