@@ -26,15 +26,16 @@ RUN: TPUJOB.Cross | TPUJOB.Zip | TPUJOB.Vals = TPUJOB.Cross(
     ]
 )
 
-
 BASE_CONFIG = "baseline"
 # RUN = TPUJOB.Cross()
-
 
 job = TPUJOB.LAUNCH_JOB(
     RUN=RUN,
     EXPERIMENT_PREFIX="async_baseline_v2",
-    FIXED_OVERRIDES=dict(),
+    FIXED_OVERRIDES={
+        "async_config.train_workers": 2,
+        "async_config.max_prompt_queue_size": 4,
+    },
     BASE_CONFIG=BASE_CONFIG,
     ZONE=TPUJOB.Zone.US_EAST5_A,
     JOB_TYPE=TPUJOB.JOB_TYPES.TRAIN,
