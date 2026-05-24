@@ -459,7 +459,7 @@ class AsyncTrainerWorker(Worker):
         num_filtered_rollouts = 0
         with stax.Tracker(timer=True) as t:
             while len(rollouts) < self.train_n_prompts_per_host:
-                rollout = self.async_options.rollout_queue.get()
+                rollout = self.async_options.rollout_queue.get(timeout=360)
                 if (lag_diff := (self.weight_iteration - rollout.weight_iteration)) <= self.config.async_config.max_lag:
                     rollouts.append(rollout)
                     weight_iterations.append(lag_diff)

@@ -46,8 +46,8 @@ loss_config:
     system_prompt: false
 
 async_config:
-  train_workers: 1
-  max_prompt_queue_size: 2
+  train_workers: 2
+  max_prompt_queue_size: 4
   max_lag: 2
 
 metrics_to_log:
