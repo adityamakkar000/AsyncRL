@@ -58,7 +58,7 @@ class DataLoader:
 
             total_rewards.append(token_rewards)
 
-        return np.array(total_rewards, dtype=np.int32), num_unparsable
+        return np.array(total_rewards, dtype=np.float32), num_unparsable
 
     def prepare_batch(self, generations: list[InferenceRollout], train: bool) -> tuple[RLBatch, dict]:
         tokens = self.pad_tokens(generations, self.tokenizer.pad_token_id, "rollout_tokens")
@@ -71,8 +71,8 @@ class DataLoader:
 
         rewards, num_unparsable = self._get_rewards(generations)
 
-        group_mean = rewards.mean(axis=1, keepdims=True) * np.ones_like(rewards)
-        group_std = rewards.std(axis=1, keepdims=True) * np.ones_like(rewards) + 1e-8
+        group_mean = rewards.mean(axis=1, keepdims=True) * np.ones_like(rewards, dtype=np.float32)
+        group_std = rewards.std(axis=1, keepdims=True) * np.ones_like(rewards, dtype=np.float32) + 1e-8
 
         def compress(x):
             x = x.reshape(x.shape[0] * x.shape[1], -1)

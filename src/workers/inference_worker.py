@@ -12,7 +12,7 @@ from stax import Tracker
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
-from src.constants import INTERUPT_THINKING_PHARSE, SYSTEM_PROMPT, AsyncOptions
+from src.constants import INTERUPT_THINKING_PHARSE, SYSTEM_PROMPT, TIMEOUT, AsyncOptions
 from src.data import InferenceRollout, Sample
 from src.model import KVCache, Model
 
@@ -101,7 +101,7 @@ class AsyncInferenceWorker(Worker):
 
     def monitor_weight_sync(self, async_state: AsyncState, async_options: AsyncOptions):
         while True:
-            address = async_options.weight_sync_queue.get()
+            address = async_options.weight_sync_queue.get(timeout=TIMEOUT)
 
             stax.sync_over_mesh("beforeWeightSync", mesh=self.async_options.inference_mesh)
 
@@ -719,7 +719,7 @@ class AsyncInferenceWorker(Worker):
         with Tracker(timer=True) as t1:
             samples: list[Sample] = []
             while len(samples) < self.inference_config._max_decode_prompts:
-                samples.append(self.async_options.prompt_queue.get())
+                samples.append(self.async_options.prompt_queue.get(timeout=TIMEOUT))
 
         with Tracker(timer=True) as t2:
             for i, sample in enumerate(samples):

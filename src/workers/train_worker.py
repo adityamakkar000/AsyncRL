@@ -1,5 +1,7 @@
 import json
 import os
+import threading
+import time
 from functools import partial
 from typing import Any, Optional
 
@@ -16,8 +18,8 @@ from stax import staxLogger as logger
 from stax import sync_over_mesh
 from stax.utils import metrics_all_reduce
 
-from src.constants import CHECKPOINTS, GS_BUCKET, PROFILE, AsyncOptions
-from src.data import DataLoader, InferenceRollout
+from src.constants import CHECKPOINTS, GS_BUCKET, PROFILE, TIMEOUT, AsyncOptions
+from src.data import DataLoader, InferenceRollout, RLBatch
 from src.model import Model
 
 from .config import TrainerConfig
@@ -60,7 +62,7 @@ class AsyncTrainerWorker(Worker):
             self._setup_dataset()
             self._setup_train_state()
             self._setup_writer()
-            self.fill_queue()
+            self._start_queue()
 
             if not self.resumed:
                 logger.info("Saving intial checkpoint ...")
@@ -70,8 +72,6 @@ class AsyncTrainerWorker(Worker):
                 write_to_gcs(config_path, dict_config)
 
             self.train_sync_weights()
-            self.block_until_checkpoints_saved()
-
             self.sync_train_workers("Trainer initialization")
 
         logger.info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds")
@@ -307,18 +307,24 @@ class AsyncTrainerWorker(Worker):
         """Setup checkpointing mechanism."""
 
         path = f"{self.gs_path}/{CHECKPOINTS}/"
-        logger.info(f"rank: {stax.get_rank()}", log_for_all=True)
-        self.checkpointer = stax.Checkpointer(
+        logger.info(f"rank: {stax.get_rank()}")
+        # self.checkpointer = stax.Checkpointer(
+        #     output_dir=path,
+        #     max_to_keep=self.config.max_checkpoints_to_keep,
+        #     # only allow train workers to write checkpoints
+        #     active_processes=set(range(self.async_options.train_workers)),
+        #     train_mesh=self.async_options.train_mesh,
+        # )
+
+        self.checkpointer = stax.OldCheckpointer(
             output_dir=path,
             max_to_keep=self.config.max_checkpoints_to_keep,
             # only allow train workers to write checkpoints
-            active_processes=set(range(self.async_options.train_workers)),
             train_mesh=self.async_options.train_mesh,
         )
 
     def make_save_tree(
         self,
-        step: int,
         *,
         params: Optional[PyTree] = None,
         opt_state: Optional[PyTree] = None,
@@ -329,17 +335,14 @@ class AsyncTrainerWorker(Worker):
 
         dataset_state = {"train": self.train_dataset.save_checkpoint()}
 
-        model_state = ((params if params else self.params), (opt_state if opt_state else self.opt_state))
-        model_state = jax.jit(lambda x: x, out_shardings=jax.NamedSharding(self.train_mesh, jax.P()))(model_state)
-
         state = {
-            "params": model_state[0],
-            "opt_state": model_state[1],
+            "params": self.params if params is None else params,
+            "opt_state": self.opt_state if opt_state is None else opt_state,
             "global_step": self.global_step,
             "dataset": dataset_state,
             "key": self.key.key,
         }
-        state = jax.tree.map(lambda x: jax.device_get(x), state)
+
         metadata = {
             "writer_id": self.writer_id,
         }
@@ -355,15 +358,9 @@ class AsyncTrainerWorker(Worker):
 
     def save_checkpoint(self, step: int):
         assert self.checkpointer is not None, "Checkpointer not set up."
-        state, metadata = self.make_save_tree(step)
+        state, metadata = self.make_save_tree()
         logger.info(f"Saving checkpoint at step {step} ...")
-        self.checkpointer.save_checkpoint(step=step, save_tree=state, metadata=metadata)
-
-    def block_until_checkpoints_saved(self):
-        if not self.checkpointer:
-            logger.warning("Checkpointer not set up, cannot block until checkpoints are saved.")
-            return
-        self.checkpointer.wait_until_finished()
+        self.checkpointer.save(step=step, checkpoint_data=state, metadata=metadata)
 
     def restore_save_tree(self):
         assert self.checkpointer is not None, "Checkpointer not set up."
@@ -376,46 +373,20 @@ class AsyncTrainerWorker(Worker):
 
         self.global_step = self.checkpointer.latest_step
 
-        shardings = {
-            "params": self.params_sharding,
-            "opt_state": self.opt_state_sharding,
-        }
-        out = self.model.init_state(rng=jax.random.PRNGKey(0), tx=self.tx, sharding=shardings, abstract=True)
+        state, metadata = self.checkpointer.restore()
+        self.params = jax.tree.map(lambda x, s: jax.device_put(x, s), state["params"], self.params_sharding)
+        self.opt_state = jax.tree.map(lambda x, s: jax.device_put(x, s), state["opt_state"], self.opt_state_sharding)
 
-        dummy_state = jax.tree.map(lambda x, s: jax.device_put(np.zeros(x.shape, x.dtype), s), out, shardings)
-
-        # don't need metadata
-        save_tree, _ = self.make_save_tree(
-            step=-1,
-            params=dummy_state["params"],
-            opt_state=dummy_state["opt_state"],
-        )
-
-        restored_ckpt = self.checkpointer.restore(state=save_tree)
-
-        state, metadata = restored_ckpt["state"], restored_ckpt["metadata"]
-
-        self.params = state["params"]
-        self.opt_state = state["opt_state"]
         self.key.key = state["key"]
-
-        self.writer_id = metadata.get("writer_id", None)
-
         train_state = state["dataset"].get("train")
         self.train_dataset.restore_checkpoint(train_state)
+
+        self.writer_id = metadata.get("writer_id", None)
 
     def train_sync_weights(self):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
 
         with stax.Tracker(timer=True) as t:
-            if self.worker_rank == 0:
-                address = self.transfer_server.address()
-                for _ in range(self.async_options.inference_workers):
-                    self.async_options.weight_sync_queue.put(address)
-
-            while not self.async_options.weight_sync_queue.empty():
-                continue
-
             params_cast = jax.tree.map(
                 lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), self.params
             )
@@ -425,6 +396,13 @@ class AsyncTrainerWorker(Worker):
             )
 
             if self.worker_rank == 0:
+                address = self.transfer_server.address()
+                for _ in range(self.async_options.inference_workers):
+                    self.async_options.weight_sync_queue.put(address)
+
+                while not self.async_options.weight_sync_queue.empty():
+                    continue
+
                 sharded_params = jax.device_put(params_cpu, jax.NamedSharding(self.local_mesh, jax.P()))
                 for i in range(self.async_options.inference_workers):
                     uuid = self.weight_iteration * self.async_options.inference_workers + i
@@ -432,26 +410,28 @@ class AsyncTrainerWorker(Worker):
                     self.transfer_server.await_pull(uuid, {"params": sharded_params})
 
                 for _ in range(self.async_options.inference_workers):
-                    logger.info(f"[weight_sync] {self.async_options.weight_sync_queue.get()}")
+                    logger.info(f"[weight_sync] {self.async_options.weight_sync_queue.get(timeout=TIMEOUT)}")
 
             self.sync_train_workers(f"weight_sync_{self.weight_iteration}")
 
         self.weight_iteration += 1
-        logger.info(f"[weight_sync] Weights sent to inference worker in {t.data['time']:.2f} seconds", log_for_all=True)
+        logger.info(f"[weight_sync] Weights sent to inference worker in {t.data['time']:.2f} seconds")
         return {"train/weight_sync_time": t.data["time"]}
 
-    def fill_queue(self):
-        assert self.train_dataset is not None, "Train dataset must be set up to fill queue."
-        count = 0
-        while not self.async_options.prompt_queue.full():
-            self.sync_train_workers(f"fill_queue_{count}")
-            sample = self.train_dataset(1)[0]
-            if self.worker_rank == 0:
-                self.async_options.prompt_queue.put(sample)
-            self.sync_train_workers(f"fill_queue_{count}")
-            count += 1
-        self.sync_train_workers("fill_queue_done")
-        return {"train/prompts_filled_in_queue": count}
+    def _start_queue(self):
+        def fn():
+            assert self.train_dataset is not None, "Train dataset must be set up to fill queue."
+            while True:
+                if self.async_options.prompt_queue.empty():
+                    for s in self.train_dataset(self.train_n_prompts):
+                        self.async_options.prompt_queue.put(s)
+                time.sleep(0.1)
+
+        if self.worker_rank == 0:
+            self.fill_thread = threading.Thread(target=fn, daemon=True)
+            self.fill_thread.start()
+        else:
+            self.fill_thread = None
 
     def get_rollouts(self) -> tuple[list[InferenceRollout], dict]:
         rollouts = []
@@ -459,7 +439,7 @@ class AsyncTrainerWorker(Worker):
         num_filtered_rollouts = 0
         with stax.Tracker(timer=True) as t:
             while len(rollouts) < self.train_n_prompts_per_host:
-                rollout = self.async_options.rollout_queue.get(timeout=360)
+                rollout = self.async_options.rollout_queue.get(timeout=TIMEOUT)
                 if (lag_diff := (self.weight_iteration - rollout.weight_iteration)) <= self.config.async_config.max_lag:
                     rollouts.append(rollout)
                     weight_iterations.append(lag_diff)
@@ -479,7 +459,7 @@ class AsyncTrainerWorker(Worker):
     def get_inference_metrics(self):
         metrics_per_worker = {i: [] for i in range(self.async_options.inference_workers)}
         while not self.async_options.inference_metrics_queue.empty():
-            metrics = self.async_options.inference_metrics_queue.get()
+            metrics = self.async_options.inference_metrics_queue.get(timeout=TIMEOUT)
             metrics_per_worker[metrics["worker_id"]].append(metrics)
 
         averaged_metrics = {
@@ -503,28 +483,34 @@ class AsyncTrainerWorker(Worker):
         assert self.train_fn is not None, "Train function not set up."
         assert self.shard_data_fn is not None, "Sharding function not set up."
 
-        global_train_batch = jax.tree.map(
-            lambda x: rearrange(
-                x,
-                "(m g) ... -> g m ...",
-                m=self.config.data_config.batch_size // self.config.grad_accum_steps,
-                g=self.config.grad_accum_steps,
-            ),  # [grad_accum_steps, minibatch_size, seq_len]
-            self.shard_data_fn(local_batch),
-        )
-        if profile:
-            trace_path = f"{self.gs_path}/{PROFILE}/step_{self.global_step}"
-            out = stax.get_perf_func(
-                trace_path,
-                self.train_fn,  # type: ignore
-                params,
-                opt_state,
-                global_train_batch,
+        with stax.Tracker(timer=True) as t:
+            global_train_batch = jax.tree.map(
+                lambda x: rearrange(
+                    x,
+                    "(m g) ... -> g m ...",
+                    m=self.config.data_config.batch_size // self.config.grad_accum_steps,
+                    g=self.config.grad_accum_steps,
+                ),  # [grad_accum_steps, minibatch_size, seq_len]
+                self.shard_data_fn(local_batch),
             )
-        else:
-            out = self.train_fn(params, opt_state, global_train_batch)
 
-        return out["params"], out["opt_state"], out["metrics"]
+            if profile:
+                trace_path = f"{self.gs_path}/{PROFILE}/step_{self.global_step}"
+                out = stax.get_perf_func(
+                    trace_path,
+                    self.train_fn,  # type: ignore
+                    params,
+                    opt_state,
+                    global_train_batch,
+                )
+            else:
+                out = self.train_fn(params, opt_state, global_train_batch)
+
+            # we have to sync weights so might as well block to get true step time
+            jax.tree.map(lambda x: x.block_until_ready(), out)
+
+        metrics = out["metrics"] | {"train/learner_step_time": t.data["time"]}
+        return out["params"], out["opt_state"], metrics
 
     def train(self):
         assert self.params is not None and self.opt_state is not None, "Train state not initialized."
@@ -533,19 +519,18 @@ class AsyncTrainerWorker(Worker):
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
-        logger.info("Precompiling test batch", log_for_all=True)
+        logger.info("Precompiling test batch")
 
-        # local_test_batch = RLBatch.get_test_batch(
-        #     batch_size=self.config.data_config.train_config.batch_size // self.config.async_config.train_workers,
-        #     max_seq_len=self.config.loss_config.inference_config.max_seq_len,
-        # )
+        # Profile first step
+        # We overlap this with inference workers as they are async filling rollout queue
+        # thus we have some time we can use to compile before we start the training loop
+        local_test_batch = RLBatch.get_test_batch(
+            batch_size=self.config.data_config.batch_size // self.config.async_config.train_workers,
+            max_seq_len=self.config.loss_config.inference_config.max_seq_len,
+        )
+        self.train_step(self.params, self.opt_state, local_test_batch, profile=True)
 
-        # Profile first step to trigger compilation and get an estimate of step time
-        # We overlap this with inference workers as they are asynchronsouly filling rollout queue
-        # and so we have some time we can use to compile before we start the training loop
-        # self.train_step(self.params, self.opt_state, local_test_batch, profile=True)
-
-        logger.info(f"Starting training loop at step {self.global_step}", log_for_all=True)
+        logger.info(f"Starting training loop at step {self.global_step}")
         while self.global_step < self.total_steps:
             with stax.Tracker(timer=True) as t:
                 generations, local_rollout_metrics = self.get_rollouts()
@@ -553,9 +538,7 @@ class AsyncTrainerWorker(Worker):
                 self.params, self.opt_state, train_metrics = self.train_step(
                     self.params, self.opt_state, local_train_batch
                 )
-                train_metrics = {}
                 weight_sync_time = self.train_sync_weights()
-                fill_queue = self.fill_queue()
 
             min_mem, max_mem = stax.get_memory()
             other_metrics = {
@@ -563,7 +546,6 @@ class AsyncTrainerWorker(Worker):
                 "devices/memory_max": max_mem,
                 "train/lr": self.opt_state[1].hyperparams["learning_rate"],
                 "train/weight_sync_time": weight_sync_time["train/weight_sync_time"],
-                "train/prompts_filled_in_queue": fill_queue["train/prompts_filled_in_queue"],
                 "train/step_time": t.data["time"],
             }
 
@@ -600,12 +582,16 @@ class AsyncTrainerWorker(Worker):
     def sync_train_workers(self, name: str):
         sync_over_mesh(name, self.async_options.train_mesh)
 
+    def block_checkpointer(self):
+        assert self.checkpointer is not None, "Checkpointer not set up."
+        self.checkpointer.block_until_ready()
+
     @partial(setup, component="cleanup")
     def finish(self):
         """Finalize training and clean up resources."""
         if self.checkpointer:
             logger.info("Cleaning up checkpointer resources...")
-            self.checkpointer.wait_until_finished()
+            self.block_checkpointer()
 
     @property
     def total_steps(self):

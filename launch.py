@@ -1,10 +1,10 @@
 import src.scripts.premption_tooling as TPUJOB
 
-max_seq_len = [4096, 8192]
-batch_size = [512, 1024]
-grad_accum_steps = [8, 16]
-group_size = [8, 16]
-max_decode_batch_size = [32, 64]
+max_seq_len = [4096]
+batch_size = [512]
+grad_accum_steps = [8]
+group_size = [8]
+max_decode_batch_size = [32]
 
 # RUN: TPUJOB.Vals | TPUJOB.Zip | TPUJOB.Cross = TPUJOB.Zip(
 #     [
@@ -31,7 +31,7 @@ BASE_CONFIG = "baseline"
 
 job = TPUJOB.LAUNCH_JOB(
     RUN=RUN,
-    EXPERIMENT_PREFIX="async_baseline_v2",
+    EXPERIMENT_PREFIX="async_baseline_v3",
     FIXED_OVERRIDES={
         "async_config.train_workers": 2,
         "async_config.max_prompt_queue_size": 4,

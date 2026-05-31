@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
+import stax
 from flax import linen as nn
 from jax.sharding import Sharding, SingleDeviceSharding
 from jaxtyping import Array, PyTree
@@ -124,6 +125,26 @@ class Model(HFModelBase):
         assert hasattr(restored, "state"), "Restored object has no attribute 'state'"
 
         return step_number, restored.state["params"], restored.metadata  # type: ignore
+
+    def load_from_ckpt_old(
+        self,
+        path: str,
+        step_number: Optional[int] = None,
+    ) -> Tuple[int, PyTree, dict[str, float]]:
+        """Loads model parameters from a checkpoint. Returns the step number, parameters, and metadata."""
+        path = f"{path}/checkpoints/"
+
+        checkpointer = stax.OldCheckpointer(path)
+        if step_number == -1:
+            step_number = None
+
+        if step_number is None:
+            step_number = checkpointer.latest_step
+            if step_number is None:
+                raise ValueError("No checkpoints found.")
+
+        state, metadata = checkpointer.restore(step=step_number)
+        return step_number, state["params"], metadata
 
     def save_hf(self, path: str, params: PyTree) -> None:
         """Saves the model parameters in a local safetensors file. Inverse of load_from_hf."""
