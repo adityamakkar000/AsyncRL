@@ -113,13 +113,6 @@ def main(cfg: DictConfig) -> None:
     logger.info(OmegaConf.to_yaml(cfg), log_for_all=True)
 
     rank = stax.get_rank()
-    # if rank < train_workers:
-    #     stax.sync_over_mesh("beforeTrainStart", mesh=train_mesh)
-    #     test_dict = {"a": rank}
-    #     reduced_dict = stax.utils.metrics_all_reduce(test_dict, train_mesh)
-    #     logger.info(f"Rank {rank} reduced dict: {reduced_dict}", log_for_all=True)
-    #     breakpoint()
-
     worker = (AsyncTrainerWorker if rank < train_workers else AsyncInferenceWorker)(cfg, async_options)  # type: ignore
     worker.start()
 

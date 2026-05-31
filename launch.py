@@ -1,16 +1,10 @@
 import src.scripts.premption_tooling as TPUJOB
 
-max_seq_len = [4096]
-batch_size = [512]
-grad_accum_steps = [8]
-group_size = [8]
-max_decode_batch_size = [32]
-
-# RUN: TPUJOB.Vals | TPUJOB.Zip | TPUJOB.Cross = TPUJOB.Zip(
-#     [
-#         TPUJOB.Vals("loss_config.annealing_config.use_annealing", [0]),
-#     ]
-# )
+max_seq_len = [4096, 8192]
+batch_size = [512, 1024]
+grad_accum_steps = [8, 16]
+group_size = [16, 16]
+max_decode_batch_size = [64, 64]
 
 RUN: TPUJOB.Cross | TPUJOB.Zip | TPUJOB.Vals = TPUJOB.Cross(
     [
@@ -27,14 +21,14 @@ RUN: TPUJOB.Cross | TPUJOB.Zip | TPUJOB.Vals = TPUJOB.Cross(
 )
 
 BASE_CONFIG = "baseline"
-# RUN = TPUJOB.Cross()
 
 job = TPUJOB.LAUNCH_JOB(
     RUN=RUN,
-    EXPERIMENT_PREFIX="async_baseline_v3",
+    EXPERIMENT_PREFIX="async_baseline_v4",
     FIXED_OVERRIDES={
         "async_config.train_workers": 2,
         "async_config.max_prompt_queue_size": 4,
+        "wandb_config.project": "baseline_fr",
     },
     BASE_CONFIG=BASE_CONFIG,
     ZONE=TPUJOB.Zone.US_EAST5_A,
