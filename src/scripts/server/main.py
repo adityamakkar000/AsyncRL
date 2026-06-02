@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 import shutil
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -17,9 +17,6 @@ from pydantic import BaseModel
 from src.scripts.premption_tooling.main import Runtime, TPUJob, TPUType, Zone, run_session
 
 logger = logging.getLogger(__name__)
-
-# Node IDs used for jobs / log filenames; reject path traversal.
-_SAFE_NODE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
 
 class RunJobRequest(BaseModel):
@@ -48,57 +45,64 @@ class JobView(BaseModel):
 
 class Server:
     def __init__(self) -> None:
-        self.lock = threading.Lock()  # lock for job and delete queue
-        self.jobs: list[TPUJob] = []
+        self.lock = threading.Lock()
+        self.jobs: dict[str, TPUJob] = {}  # Keying by node_id prevents accidental duplicates
+        self.delete_queue: set[str] = set()
         self.shutdown = threading.Event()
         self.worker: threading.Thread | None = None
-        self.delete_queue: list[str] = []
+        self.executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tpu-worker")
 
     def start_worker(self) -> None:
         if self.worker is not None and self.worker.is_alive():
             return
         self.shutdown.clear()
-        self.worker = threading.Thread(target=self.run_loop, name="tpu-run-session", daemon=True)
+        self.worker = threading.Thread(target=self.run_loop, name="tpu-main-loop", daemon=True)
         self.worker.start()
 
     def shutdown_worker(self) -> None:
         self.shutdown.set()
         if self.worker is not None:
             self.worker.join(timeout=30.0)
+        self.executor.shutdown(wait=True)
 
     def run_loop(self) -> None:
         while not self.shutdown.is_set():
+            start_time = time.time()
+
             with self.lock:
-                jobs_snapshot = list(self.jobs)
-                to_delete = list(self.delete_queue)
-            for j in jobs_snapshot:
-                if j.is_job_finished_without_error:
-                    to_delete.append(j.node_id)
-            for j in to_delete:
+                for node_id, job in list(self.jobs.items()):
+                    if job.is_job_finished_without_error:
+                        self.delete_queue.add(node_id)
+
+                jobs_snapshot = list(self.jobs.values())
+                to_delete_snapshot = list(self.delete_queue)
+
+            for node_id in to_delete_snapshot:
                 try:
-                    if self.delete_job(j):
-                        logger.info("deleted job %s", j)
+                    if self._internal_delete_job(node_id):
+                        logger.info("Successfully deleted job assets for node: %s", node_id)
+                        with self.lock:
+                            self.delete_queue.discard(node_id)
                     else:
-                        logger.info("failed to delete job %s, must send DELETE request again", j)
-                    with self.lock:
-                        if j in self.delete_queue:
-                            self.delete_queue.remove(j)
+                        logger.warning("Job %s not found or busy; will retry deletion.", node_id)
                 except Exception:
-                    logger.exception("delete_tpu failed for %s", j)
+                    logger.exception("Involuntary background deletion failure for %s", node_id)
+
             try:
-                with self.lock:
-                    jobs_ref = list(self.jobs)
-                run_session(jobs_ref)
+                run_session(jobs_snapshot, self.executor)
             except Exception:
-                logger.exception("run_session crashed; retrying after delay")
-            finally:
-                time.sleep(1)
+                logger.exception("Critical control plane crash during run_session execution loop")
+
+            elapsed = time.time() - start_time
+            if elapsed < 1.0:
+                time.sleep(1.0 - elapsed)
 
     def add_job(self, body: RunJobRequest) -> None:
         with self.lock:
-            if body.node_id in [j.node_id for j in self.jobs]:
-                raise ValueError(f"node_id already queued: {body.node_id}")
-            job = TPUJob(
+            if body.node_id in self.jobs:
+                raise ValueError(f"node_id already registered or active: {body.node_id}")
+
+            self.jobs[body.node_id] = TPUJob(
                 node_id=body.node_id,
                 zone=body.zone,
                 tpu_type=body.tpu_type,
@@ -109,49 +113,53 @@ class Server:
                 launched_by=body.launched_by,
                 keep_logs=body.keep_logs,
             )
-            self.jobs.append(job)
 
     def list_jobs(self) -> list[JobView]:
         with self.lock:
-            snapshot = list(self.jobs)
-        out: list[JobView] = []
-        for j in snapshot:
-            out.append(
-                JobView(
-                    node_id=j.node_id,
-                    zone=j.zone.value,
-                    tpu_type=j.tpu_type.value,
-                    runtime=j.runtime.value,
-                    cmd=j.cmd,
-                    retries_left=j.retries,
-                    tpu_status=j.tpu_status,
-                    job_status=j.job_status,
-                    launched_by=j.launched_by,
-                )
-            )
-        return out
+            snapshot = list(self.jobs.values())
 
-    def delete_job(self, job_id: str) -> bool:
+        return [
+            JobView(
+                node_id=j.node_id,
+                zone=j.zone.value,
+                tpu_type=j.tpu_type.value,
+                runtime=j.runtime.value,
+                cmd=j.cmd,
+                retries_left=j.retries,
+                tpu_status=j.tpu_status,
+                job_status=j.job_status,
+                launched_by=j.launched_by,
+            )
+            for j in snapshot
+        ]
+
+    def _internal_delete_job(self, job_id: str) -> bool:
+        """Internal worker method to isolate systemic asset teardown safely."""
         with self.lock:
-            idx = next((i for i, j in enumerate(self.jobs) if j.node_id == job_id), None)
-            if idx is None:
+            job = self.jobs.get(job_id)
+            if job is None:
                 return False
-            job = self.jobs[idx]
-            del self.jobs[idx]
+
         try:
             job.delete_tpu()
         except Exception:
-            logger.exception("delete_tpu failed for %s, adding back job to the queue", job_id)
-            with self.lock:
-                self.jobs.append(job)
+            logger.exception("GCP Cloud resource deletion failed for %s; tracking retained.", job_id)
             return False
+
         try:
-            shutil.rmtree(f"{job.home_dir}/{job.cwd}")
+            shutil.rmtree(job.launch_dir, ignore_errors=True)
         except Exception:
-            logger.exception("rmtree failed for %s, skipping", job.cwd)
-        log_path = f"{job.home_dir}/logs/{job.node_id}.txt"
-        if os.path.exists(log_path) and not job.keep_logs:
-            os.remove(log_path)
+            logger.exception("Failed to drop local launch directory for: %s", job.launch_dir)
+
+        log_path = os.path.join(os.path.expanduser("~"), "logs", f"{job.node_id}.txt")
+        if not job.keep_logs and os.path.exists(log_path):
+            try:
+                os.remove(log_path)
+            except Exception:
+                logger.exception("Failed deleting unneeded log target: %s", log_path)
+
+        with self.lock:
+            self.jobs.pop(job_id, None)
         return True
 
 
@@ -169,12 +177,12 @@ async def lifespan(app: FastAPI):
         state.shutdown_worker()
 
 
-app = FastAPI(title="TPU Server (Mac Mini)", lifespan=lifespan)
+app = FastAPI(title="Distributed TPU Orchestration Engine", lifespan=lifespan)
 
 
 def get_state() -> Server:
     if state is None:
-        raise HTTPException(status_code=503, detail="Server not ready")
+        raise HTTPException(status_code=503, detail="Control plane state initializing")
     return state
 
 
@@ -183,7 +191,7 @@ def run_job(req: RunJobRequest) -> dict[str, Any]:
     try:
         get_state().add_job(req)
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
+        raise HTTPException(status_code=409, detail=str(e))
     return {"ok": True, "node_id": req.node_id}
 
 
@@ -194,44 +202,45 @@ def get_jobs() -> list[JobView]:
 
 @app.delete("/jobs/{job_id}")
 def delete_job(job_id: str) -> dict[str, Any]:
-    with get_state().lock:
-        if job_id in get_state().delete_queue:
-            return {"ok": False, "deleted": job_id}
-        get_state().delete_queue.append(job_id)
-
+    srv = get_state()
+    with srv.lock:
+        if job_id not in srv.jobs:
+            raise HTTPException(status_code=404, detail="Job identity missing")
+        srv.delete_queue.add(job_id)
     return {"ok": True, "deleted": job_id}
 
 
 def _log_path_for_node(node_id: str) -> str:
-    if not _SAFE_NODE_ID.match(node_id):
-        raise HTTPException(status_code=400, detail="invalid node_id")
     return os.path.join(os.path.expanduser("~"), "logs", f"{node_id}.txt")
-
-
-async def _wait_for_log_file(path: str, timeout_s: float = 120.0, poll_s: float = 0.25) -> None:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if os.path.isfile(path):
-            return
-        await asyncio.sleep(poll_s)
-    raise HTTPException(status_code=404, detail=f"log file not found: {path}")
 
 
 @app.get("/logs/{node_id}/stream")
 async def stream_job_log(node_id: str) -> StreamingResponse:
-    """Tail -f style stream of ~/logs/<node_id>.txt on the server host."""
-
     path = _log_path_for_node(node_id)
-    await _wait_for_log_file(path)
 
     async def lines() -> AsyncIterator[bytes]:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if not os.path.exists(path):
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"--- Tail Stream Initialized for {node_id} (Awaiting TPU Node Activation) ---\n")
+
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             while True:
                 line = await asyncio.to_thread(f.readline)
                 if line:
                     yield line.encode("utf-8")
                 else:
-                    await asyncio.sleep(0.2)
+                    srv = get_state()
+                    with srv.lock:
+                        job = srv.jobs.get(node_id)
+
+                    if job is None or job.is_job_finished:
+                        final_line = await asyncio.to_thread(f.readline)
+                        if final_line:
+                            yield final_line.encode("utf-8")
+                        break
+
+                    await asyncio.sleep(0.5)
 
     return StreamingResponse(lines(), media_type="text/plain; charset=utf-8")
 
@@ -239,4 +248,4 @@ async def stream_job_log(node_id: str) -> StreamingResponse:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("src.scripts.server.main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
