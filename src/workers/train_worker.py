@@ -528,7 +528,7 @@ class AsyncTrainerWorker(Worker):
             batch_size=self.config.data_config.batch_size // self.config.async_config.train_workers,
             max_seq_len=self.config.loss_config.inference_config.max_seq_len,
         )
-        self.train_step(self.params, self.opt_state, local_test_batch, profile=True)
+        self.train_step(self.params, self.opt_state, local_test_batch, profile=False)
 
         logger.info(f"Starting training loop at step {self.global_step}")
         while self.global_step < self.total_steps:

@@ -24,7 +24,7 @@ BASE_CONFIG = "baseline"
 
 job = TPUJOB.LAUNCH_JOB(
     RUN=RUN,
-    EXPERIMENT_PREFIX="async_baseline_v4",
+    EXPERIMENT_PREFIX="async_baseline_v5",
     FIXED_OVERRIDES={
         "async_config.train_workers": 2,
         "async_config.max_prompt_queue_size": 4,
