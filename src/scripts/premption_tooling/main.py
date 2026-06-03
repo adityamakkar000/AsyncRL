@@ -108,7 +108,7 @@ class TPUJob:
 
     @property
     def is_job_finished(self) -> bool:
-        return self.job_status in {"FINISHED", "ERROR"}
+        return self.job_status == "FINISHED"
 
     @property
     def is_job_finished_without_error(self) -> bool:
@@ -208,26 +208,11 @@ class TPUJob:
             with self._lock:
                 self.process = None
 
-        elif js == "ERROR":
-            console.print(
-                f"[red]Job sequence execution failed for node: {self.node_id}. Evicting host resources...[/red]"
-            )
-            if self.retries > 0:
-                self.retries -= 1
-                console.print(f"[yellow]Retrying node runtime setup loop. Remaining: {self.retries}[/yellow]")
-                self.delete_tpu()
-                with self._lock:
-                    self.process = None
-            else:
-                self.delete_tpu()
-
         elif js == "PENDING":
             self.launch_job()
 
         elif js == "FINISHED" and tpu_stat in TPUStatus.allocated_states():
-            console.print(
-                f"[green]Job completed sequence on {self.node_id}. Releasing cloud allocation allocations.[/green]"
-            )
+            console.print(f"[green]Job completed sequence on {self.node_id}. Releasing cloud allocations.[/green]")
             self.delete_tpu()
 
 
