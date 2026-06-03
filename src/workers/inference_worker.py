@@ -101,7 +101,7 @@ class AsyncInferenceWorker(Worker):
 
     def monitor_weight_sync(self, async_state: AsyncState, async_options: AsyncOptions):
         while True:
-            address = async_options.weight_sync_queue.get(timeout=TIMEOUT)
+            address = async_options.weight_sync_queue.get()
 
             stax.sync_over_mesh("beforeWeightSync", mesh=self.async_options.inference_mesh)
 

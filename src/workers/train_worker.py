@@ -47,8 +47,8 @@ class AsyncTrainerWorker(Worker):
         self.async_options = async_options
         self.validate_config()
 
-        logger.info(f"Setting up {self.config.experiment_name}")
-        logger.info(f"runtime={stax.get_rank()}, distributed={dist.global_state.process_id}")
+        logger.info(f"Setting up {self.config.experiment_name}", log_for_all=True)
+        logger.info(f"runtime={stax.get_rank()}, distributed={dist.global_state.process_id}", log_for_all=True)
 
         self.ip = get_current_vm_internal_ip()
         self.transfer_server = setup_transfer_server(self.ip, port=8000)
@@ -65,7 +65,7 @@ class AsyncTrainerWorker(Worker):
             self._start_queue()
 
             if not self.resumed:
-                logger.info("Saving intial checkpoint ...")
+                logger.info("Saving intial checkpoint ...", log_for_all=True)
                 self.save_checkpoint(step=0)
                 dict_config = json.dumps(OmegaConf.to_container(self.config))
                 config_path = f"{self.gs_path}/config.json"
@@ -74,7 +74,7 @@ class AsyncTrainerWorker(Worker):
             self.train_sync_weights()
             self.sync_train_workers("Trainer initialization")
 
-        logger.info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds")
+        logger.info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds", log_for_all=True)
 
     def validate_config(self):
         """Method to validate the TrainerConfig parameters."""
@@ -250,17 +250,21 @@ class AsyncTrainerWorker(Worker):
         assert self.checkpointer is not None, "checkpointer must be set up before initializing train state"
 
         if self.resumed:
-            logger.info("Spot training enabled and checkpoint found, skipping parameter initialization.")
+            logger.info(
+                "Spot training enabled and checkpoint found, skipping parameter initialization.", log_for_all=True
+            )
             self.restore_save_tree()
             return
 
-        logger.info("Initializing new run ...")
+        logger.info("Initializing new run ...", log_for_all=True)
         sharding = {"params": self.params_sharding, "opt_state": self.opt_state_sharding}
         out_state = self.model.init_state(rng=self.key(), tx=self.tx, sharding=sharding, abstract=False)
         self.params = out_state["params"]
         self.opt_state = out_state["opt_state"]
 
-        logger.info(f"Params intialized with total size: {self.model.count_params(self.params):_} parameters.")
+        logger.info(
+            f"Params intialized with total size: {self.model.count_params(self.params):_} parameters.", log_for_all=True
+        )
 
     @partial(setup, component="optimizer")
     def _setup_optimizer(self):
@@ -307,7 +311,7 @@ class AsyncTrainerWorker(Worker):
         """Setup checkpointing mechanism."""
 
         path = f"{self.gs_path}/{CHECKPOINTS}/"
-        logger.info(f"rank: {stax.get_rank()}")
+        logger.info(f"rank: {stax.get_rank()}", log_for_all=True)
         # self.checkpointer = stax.Checkpointer(
         #     output_dir=path,
         #     max_to_keep=self.config.max_checkpoints_to_keep,
@@ -359,7 +363,7 @@ class AsyncTrainerWorker(Worker):
     def save_checkpoint(self, step: int):
         assert self.checkpointer is not None, "Checkpointer not set up."
         state, metadata = self.make_save_tree()
-        logger.info(f"Saving checkpoint at step {step} ...")
+        logger.info(f"Saving checkpoint at step {step} ...", log_for_all=True)
         self.checkpointer.save(step=step, checkpoint_data=state, metadata=metadata)
 
     def restore_save_tree(self):
@@ -406,16 +410,18 @@ class AsyncTrainerWorker(Worker):
                 sharded_params = jax.device_put(params_cpu, jax.NamedSharding(self.local_mesh, jax.P()))
                 for i in range(self.async_options.inference_workers):
                     uuid = self.weight_iteration * self.async_options.inference_workers + i
-                    logger.info(f"[weight_sync] placing weights on uuid: {uuid}")
+                    logger.info(f"[weight_sync] placing weights on uuid: {uuid}", log_for_all=True)
                     self.transfer_server.await_pull(uuid, {"params": sharded_params})
 
                 for _ in range(self.async_options.inference_workers):
-                    logger.info(f"[weight_sync] {self.async_options.weight_sync_queue.get(timeout=TIMEOUT)}")
+                    logger.info(
+                        f"[weight_sync] {self.async_options.weight_sync_queue.get(timeout=TIMEOUT)}", log_for_all=True
+                    )
 
             self.sync_train_workers(f"weight_sync_{self.weight_iteration}")
 
         self.weight_iteration += 1
-        logger.info(f"[weight_sync] Weights sent to inference worker in {t.data['time']:.2f} seconds")
+        logger.info(f"[weight_sync] Weights sent to inference worker in {t.data['time']:.2f} seconds", log_for_all=True)
         return {"train/weight_sync_time": t.data["time"]}
 
     def _start_queue(self):
@@ -519,7 +525,7 @@ class AsyncTrainerWorker(Worker):
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
-        logger.info("Precompiling test batch")
+        logger.info("Precompiling test batch", log_for_all=True)
 
         # Profile first step
         # We overlap this with inference workers as they are async filling rollout queue
@@ -530,7 +536,7 @@ class AsyncTrainerWorker(Worker):
         )
         self.train_step(self.params, self.opt_state, local_test_batch, profile=False)
 
-        logger.info(f"Starting training loop at step {self.global_step}")
+        logger.info(f"Starting training loop at step {self.global_step}", log_for_all=True)
         while self.global_step < self.total_steps:
             with stax.Tracker(timer=True) as t:
                 generations, local_rollout_metrics = self.get_rollouts()
@@ -571,7 +577,7 @@ class AsyncTrainerWorker(Worker):
             if self.global_step % self.config.checkpoint_interval == 0 or self.global_step == self.total_steps:
                 self.save_checkpoint(step=self.global_step)
 
-        logger.info("Training complete.")
+        logger.info("Training complete.", log_for_all=True)
 
     def start(self):
         try:
@@ -590,7 +596,7 @@ class AsyncTrainerWorker(Worker):
     def finish(self):
         """Finalize training and clean up resources."""
         if self.checkpointer:
-            logger.info("Cleaning up checkpointer resources...")
+            logger.info("Cleaning up checkpointer resources...", log_for_all=True)
             self.block_checkpointer()
 
     @property
