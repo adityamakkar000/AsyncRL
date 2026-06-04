@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -145,11 +144,6 @@ class Server:
         except Exception:
             logger.exception("GCP Cloud resource deletion failed for %s; tracking retained.", job_id)
             return False
-
-        try:
-            shutil.rmtree(job.launch_dir, ignore_errors=True)
-        except Exception:
-            logger.exception("Failed to drop local launch directory for: %s", job.launch_dir)
 
         log_path = os.path.join(os.path.expanduser("~"), "logs", f"{job.node_id}.txt")
         if not job.keep_logs and os.path.exists(log_path):
