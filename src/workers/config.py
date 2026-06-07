@@ -102,6 +102,7 @@ class RLConfig:
     algorithm: str = "grpo"
     epsilon_high: float = 1.0
     epsilon_low: float = 0.1
+    filter_zero_variance: bool = False
 
 
 @dataclass
@@ -113,7 +114,6 @@ class LossConfig:
 @dataclass
 class AsyncConfig:
     train_workers: int = 1
-    max_prompt_queue_size: int = 4  # multiple of num of prompts to keep
     max_lag: int = 4
 
 
@@ -146,7 +146,7 @@ class TrainerConfig:
 
     wandb_config: Optional[WandBConfig] = None
     metrics_to_log: List[str] = field(default_factory=lambda: ["train/loss", "val/loss"])  # Metrics to log to terminal
-    log_generations_every_n_steps: int = 25  # The interval (in steps) at which to log generations
+    log_generations_every_n_steps: int = 25
 
     spot_training: bool = False  # Whether to enable spot training
     # if true, will load from latest checkpoint if checkpoint dir with same exp name

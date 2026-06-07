@@ -160,10 +160,14 @@ def _maybe_force_eos(
     eos_stop_mask = next_token == eos_token_id
     stop_mask = eos_stop_mask | length_stop_mask
 
+    # always set next token for the stop mask to be eos
+    # if len_stop_mask is true then we want to force prob 1 (log = 0) to be eos
+    # otherwise use the real gen prob
     next_token = jnp.where(stop_mask, eos_token_id, next_token)
     next_log_prob = jnp.where(length_stop_mask, 0, next_log_prob)
 
     return next_token, next_log_prob, stop_mask
+
 
 def setup_transfer_server(local_ip: str, port: int):
     backend_client = jax.devices()[0].client
@@ -174,8 +178,10 @@ def setup_transfer_server(local_ip: str, port: int):
     )
     return server
 
+
 def get_current_vm_internal_ip():
     return socket.gethostbyname(socket.gethostname())
+
 
 @lru_cache
 def get_global_ip():

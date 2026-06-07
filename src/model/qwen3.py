@@ -246,7 +246,7 @@ class Qwen3(nn.Module):
         embed_layer = nn.Embed(
             num_embeddings=self.vocab_size,
             features=self.model_dim,
-            dtype=self.activation_dtype,
+            dtype=jnp.float32,
             name="token_emb",
         )
 
@@ -296,11 +296,12 @@ class Qwen3(nn.Module):
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)
 
         if self.is_base:
+            # base models don't give tied weights so you have to use embedding layer
             logits = embed_layer.attend(x)
-            logits = logits.astype(jnp.float32)
         else:
             logits = nn.Dense(features=self.vocab_size, use_bias=False, dtype=jnp.float32)(x)
 
+        logits = logits.astype(jnp.float32)
         return logits, out_cache
 
     @classmethod

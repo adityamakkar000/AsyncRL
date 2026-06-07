@@ -79,9 +79,7 @@ def main(cfg: DictConfig) -> None:
     )
 
     local_prompt_queue = queue.Queue(
-        maxsize=(cfg.async_config.max_prompt_queue_size + 1)
-        * cfg.data_config.batch_size
-        // cfg.loss_config.inference_config.group_size
+        maxsize=(cfg.data_config.batch_size // cfg.loss_config.inference_config.group_size)
     )
     local_rollout_queue = queue.Queue()
     local_weight_sync_queue = queue.Queue(maxsize=inference_workers)

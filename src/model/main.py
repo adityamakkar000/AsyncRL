@@ -131,7 +131,6 @@ class Model(HFModelBase):
         path: str,
         step_number: Optional[int] = None,
     ) -> Tuple[int, PyTree, dict[str, float]]:
-        """Loads model parameters from a checkpoint. Returns the step number, parameters, and metadata."""
         path = f"{path}/checkpoints/"
 
         checkpointer = stax.OldCheckpointer(path)
@@ -147,7 +146,6 @@ class Model(HFModelBase):
         return step_number, state["params"], metadata
 
     def save_hf(self, path: str, params: PyTree) -> None:
-        """Saves the model parameters in a local safetensors file. Inverse of load_from_hf."""
         save_to_hf(path, params, self.config.hf_model_name)
 
     def __call__(
@@ -158,17 +156,6 @@ class Model(HFModelBase):
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
     ) -> tuple[Array, list[KVCache]]:
-        """
-        Forward pass of the model. This is a wrapper around the model's __call__ that allows for additional processing if needed.
-        Args:
-            params: Model parameters.
-            x: Input tokens of shape (B, T).
-            sequence_lens: Sequence lengths of shape (B,).
-            kv_cache: Optional list of KVCache for each layer.
-        Returns:
-            logits: Output logits of shape (B, T, vocab_size).
-            out_cache: Optional list of KVCache for each layer if kv_cache was provided.
-        """
         logits, cache = self.model.apply(params, x, sequence_lens, kv_cache)
 
         return logits, cache
@@ -182,7 +169,15 @@ class Model(HFModelBase):
         kv_cache: Optional[list[KVCache]] = None,
     ) -> tuple[Array, list[KVCache]]:
         """
-        Applies the model to the input data. This is a wrapper around __call__ that allows for additional processing if needed.
+        Forward pass of the model
+        Args:
+            params: Model parameters.
+            x: Input tokens of shape (B, T).
+            sequence_lens: Sequence lengths of shape (B,).
+            kv_cache: Optional list of KVCache for each layer.
+        Returns:
+            logits: Output logits of shape (B, T, vocab_size).
+            out_cache: Optional list of KVCache for each layer if kv_cache was provided.
         """
         return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache)
 

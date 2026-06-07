@@ -330,16 +330,20 @@ class AsyncInferenceWorker(Worker):
         eos_id = self.tokenizer.eos_token_id
 
         def clean_sequence(tokens: np.ndarray, logprobs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-            non_pad = tokens != pad_id
-            tokens = tokens[non_pad]
-            logprobs = logprobs[non_pad]
+            non_pad_index = np.argmax(tokens != pad_id)
+            tokens_not_padded = tokens[non_pad_index:]
+            logprobs_not_padded = logprobs[non_pad_index:]
 
-            eos_positions = np.where(tokens != eos_id)[0]
-            cutoff = eos_positions[-1] + 2  # keep one token after eos
-            tokens = tokens[:cutoff]
-            logprobs = logprobs[:cutoff]
+            eos_idx = np.where(tokens_not_padded != eos_id)[0][-1] + 1
+            if tokens_not_padded[eos_idx] != eos_id:
+                raise ValueError(
+                    "No eos token found in rollout.\nToken sequence: "
+                    + str(tokens_not_padded)
+                    + "\nDetokenized string: "
+                    + self.tokenizer.decode(tokens_not_padded, skip_special_tokens=False)  # type: ignore
+                )
 
-            return tokens, logprobs
+            return tokens_not_padded[: eos_idx + 1], logprobs_not_padded[: eos_idx + 1]
 
         for i in pids:
             new_rollouts = []
@@ -661,7 +665,7 @@ class AsyncInferenceWorker(Worker):
                 initial_ids = jax.device_put(initial_ids, self.shardings.split_sharding)
                 state = self.create_initial_state(prompts, initial_ids)
                 for i in ids:
-                    self.global_rollouts[local_to_global[i]].weight_iteration = self.weight_iteration
+                    self.global_rollouts[local_to_global[i]].weight_iteration.append(self.weight_iteration)
 
             while len(prompt_queue) > 0:
                 next_index = prompt_queue.pop()
@@ -677,7 +681,7 @@ class AsyncInferenceWorker(Worker):
                 queued_steps += n_steps
                 subbed_steps += 1
                 self._maybe_update_params()
-                self.global_rollouts[local_to_global[next_index]].weight_iteration = self.weight_iteration
+                self.global_rollouts[local_to_global[next_index]].weight_iteration.append(self.weight_iteration)
 
             finished_tokens_cpu = list(map(lambda x: jax.device_get(x), finished_tokens))
             finished_logprobs_cpu = list(map(lambda x: jax.device_get(x), finished_logprobs))
@@ -724,7 +728,7 @@ class AsyncInferenceWorker(Worker):
         with Tracker(timer=True) as t2:
             for i, sample in enumerate(samples):
                 self.global_rollouts[self.prompt_id_offset + i] = InferenceRollout(
-                    sample=sample, rollout_tokens=[], rollout_logprobs=[], rollout_strs=[], weight_iteration=-1
+                    sample=sample, rollout_tokens=[], rollout_logprobs=[], rollout_strs=[], weight_iteration=[]
                 )
 
             prompts = [sample.prompt for sample in samples]

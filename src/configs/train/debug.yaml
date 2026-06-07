@@ -47,7 +47,6 @@ loss_config:
 
 async_config:
   train_workers: 1
-  max_prompt_queue_size: 4
   max_lag: 2
 
 metrics_to_log:

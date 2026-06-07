@@ -20,8 +20,6 @@ TPU_SERVER_URL = os.getenv("TPU_SERVER_URL", None)
 
 @dataclass
 class Vals:
-    """Leaf node: a single parameter with a list of candidate values."""
-
     param: str
     values: list[Any]
 
@@ -31,8 +29,6 @@ class Vals:
 
 @dataclass
 class Cross:
-    """Cartesian product of child axes."""
-
     children: list[Vals | Cross | Zip] = field(default_factory=list)
 
     def expand(self) -> list[dict[str, Any]]:
@@ -50,8 +46,6 @@ class Cross:
 
 @dataclass
 class Zip:
-    """Lockstep zip of child axes (all children must expand to the same length)."""
-
     children: list[Vals | Cross | Zip] = field(default_factory=list)
 
     def expand(self) -> list[dict[str, Any]]:
@@ -157,9 +151,15 @@ def run_tpu_jobs(
             "keep_logs": keep_logs,  # to keep logs after run ends
         }
 
-        response = requests.post(f"{TPU_SERVER_URL}/run_job", json=post_args, timeout=30)
-        response.raise_for_status()
-        print(f"Job submitted: {response.json()}")
+        try:
+            response = requests.post(f"{TPU_SERVER_URL}/run_job", json=post_args, timeout=30)
+            response.raise_for_status()
+            print(f"Job submitted: {response.json()}, details: {response.text}")
+        except requests.exceptions.HTTPError as err:
+            if response.status_code == 409:
+                print("Conflict Details:", response.text)  # Look here for the exact cause
+            else:
+                print("HTTP Error:", err)
 
 
 def launch(job: LAUNCH_JOB) -> None:

@@ -114,6 +114,18 @@ class DataLoader:
             ]
         )
 
+    def check_rollout_zero_variance(self, InferenceRollout: InferenceRollout) -> bool:
+        reward_set = set()
+        for tokens in InferenceRollout.rollout_tokens:
+            reward = self.get_reward(self.tokenizer.decode(tokens), InferenceRollout.sample.answer)
+            if reward is None:
+                reward = 0.0
+            reward_set.add(reward)
+            if len(reward_set) > 1:
+                return False
+
+        return True
+
     def get_reward(self, output_str: str, answer: str) -> float | None:
         return Verifier.get_reward(output_str, answer)
 

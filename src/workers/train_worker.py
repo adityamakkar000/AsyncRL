@@ -440,17 +440,32 @@ class AsyncTrainerWorker(Worker):
             self.fill_thread = None
 
     def get_rollouts(self) -> tuple[list[InferenceRollout], dict]:
+        assert self.train_dataset is not None, "Train dataset must be set up to get rollouts."
+
         rollouts = []
         weight_iterations = []
         num_filtered_rollouts = 0
         with stax.Tracker(timer=True) as t:
             while len(rollouts) < self.train_n_prompts_per_host:
-                rollout = self.async_options.rollout_queue.get(timeout=TIMEOUT)
-                if (lag_diff := (self.weight_iteration - rollout.weight_iteration)) <= self.config.async_config.max_lag:
-                    rollouts.append(rollout)
-                    weight_iterations.append(lag_diff)
-                else:
+                rollout: InferenceRollout = self.async_options.rollout_queue.get(timeout=TIMEOUT)
+
+                if num_filtered_rollouts > 0 and num_filtered_rollouts % 10 == 0:
+                    logger.warning(
+                        f"Filtered {num_filtered_rollouts} rollouts due to lag or zero variance, consider increasing max_lag or disabling zero variance filtering if this is happening frequently.",
+                        log_for_all=True,
+                    )
+
+                if (lag_diff := (self.weight_iteration - rollout.lag)) > self.config.async_config.max_lag:
                     num_filtered_rollouts += 1
+                    continue
+
+                if self.config.loss_config.rl_config.filter_zero_variance:
+                    if self.train_dataset.check_rollout_zero_variance(rollout):
+                        num_filtered_rollouts += 1
+                        continue
+
+                rollouts.append(rollout)
+                weight_iterations.append(lag_diff)
 
         metrics = {
             "train/rollout_queue_wait_time": t.data["time"],

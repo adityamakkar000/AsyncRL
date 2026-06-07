@@ -22,6 +22,7 @@ class Zone(str, Enum):
 
 class TPUType(str, Enum):
     V5P_8 = "v5p-8"
+    V5P_16 = "v5p-16"
     V5P_32 = "v5p-32"
     V5P_64 = "v5p-64"
     V5P_128 = "v5p-128"
