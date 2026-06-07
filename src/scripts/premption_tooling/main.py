@@ -34,7 +34,7 @@ class TPUType(str, Enum):
 
     @staticmethod
     def all_v5() -> list["TPUType"]:
-        return [TPUType.V5P_8, TPUType.V5P_32, TPUType.V5P_64, TPUType.V5P_128]
+        return [TPUType.V5P_8, TPUType.V5P_16, TPUType.V5P_32, TPUType.V5P_64, TPUType.V5P_128]
 
     @staticmethod
     def all_v6() -> list["TPUType"]:
