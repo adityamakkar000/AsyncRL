@@ -33,7 +33,8 @@ def start_server():
 def get_queues():
     manager = QueueManager(address=(GLOBAL_IP, PORT), authkey=KEY)
 
-    for _ in range(6):
+    RETRIES = 6
+    for _ in range(RETRIES):
         try:
             manager.connect()
             return (
