@@ -334,8 +334,8 @@ class AsyncInferenceWorker(Worker):
             tokens_not_padded = tokens[non_pad_index:]
             logprobs_not_padded = logprobs[non_pad_index:]
 
-            eos_idx = np.where(tokens_not_padded != eos_id)[0][-1] + 1
-            if tokens_not_padded[eos_idx] != eos_id:
+            eos_idx = np.where((tokens_not_padded != eos_id) & (tokens_not_padded != pad_id))[0][-1] + 1
+            if eos_idx == tokens_not_padded.shape[0] or tokens_not_padded[eos_idx] != eos_id:
                 raise ValueError(
                     "No eos token found in rollout.\nToken sequence: "
                     + str(tokens_not_padded)
@@ -380,7 +380,7 @@ class AsyncInferenceWorker(Worker):
                     length=self.shardings.replicate_sharding,  # type: ignore
                 ),
             )
-            logits, out_cache = self.model.apply(
+            _logits, out_cache = self.model.apply(
                 params, x=input_tokens[:, :-1], sequence_lens=seq_lens - 1, kv_cache=kv_cache
             )
             out_tokens = (
@@ -470,7 +470,7 @@ class AsyncInferenceWorker(Worker):
             next_token=next_token,
             kv_cache=out_cache,
             key=key,
-            seq_lens=state.seq_lens + jnp.where(stop_mask, 0, 1)[:, 0],
+            seq_lens=state.seq_lens + 1,
             stop_mask=stop_mask,
             end_of_think=end_of_think,
             out_tokens=out_tokens,
@@ -494,61 +494,18 @@ class AsyncInferenceWorker(Worker):
             prompt_id=ds(prompts.prompt_id),
         )
 
-    def roll_cache_to_length(self, state: InferenceState, length: int) -> InferenceState:
-        diff = length - state.kv_cache[0].length
-
-        def roll_kv_cache(kv: KVCache) -> KVCache:
-            rolled_k = jnp.roll(kv.k, diff, axis=1)
-            rolled_v = jnp.roll(kv.v, diff, axis=1)
-            return KVCache(k=rolled_k, v=rolled_v, length=jnp.array(length))  # type: ignore
-
-        return state.replace(  # type: ignore
-            kv_cache=[roll_kv_cache(kv) for kv in state.kv_cache],
-            out_tokens=jnp.roll(state.out_tokens, diff, axis=1),
-            out_logprobs=jnp.roll(state.out_logprobs, diff, axis=1),
-        )
-
-    def sub(self, old_state, new_state, index):
-        return InferenceState(
-            next_token=old_state.next_token.at[index].set(new_state.next_token),
-            kv_cache=[
-                KVCache(
-                    k=old_state.kv_cache[i].k.at[index].set(new_state.kv_cache[i].k),
-                    v=old_state.kv_cache[i].v.at[index].set(new_state.kv_cache[i].v),
-                    length=old_state.kv_cache[i].length.copy(),
-                )
-                for i in range(len(old_state.kv_cache))
-            ],
-            key=old_state.key,
-            seq_lens=old_state.seq_lens.at[index].set(new_state.seq_lens),
-            stop_mask=old_state.stop_mask.at[index].set(new_state.stop_mask),
-            end_of_think=old_state.end_of_think.at[index].set(new_state.end_of_think),
-            out_tokens=old_state.out_tokens.at[index].set(new_state.out_tokens),
-            out_logprobs=old_state.out_logprobs.at[index].set(new_state.out_logprobs),
-            prompt_id=old_state.prompt_id.at[index].set(new_state.prompt_id),
-        )
-
-    def shift_batch(self, state: InferenceState):
-        max_seq = jnp.max(state.seq_lens)
-        shift_back = -(state.kv_cache[0].length - max_seq)
-        return state.replace(  # type: ignore
-            kv_cache=[
-                KVCache(
-                    k=jnp.roll(kv.k, shift_back, axis=1),
-                    v=jnp.roll(kv.v, shift_back, axis=1),
-                    length=max_seq.copy(),  # type: ignore
-                )
-                for kv in state.kv_cache
-            ],
-            out_tokens=jnp.roll(state.out_tokens, shift_back, axis=1),
-            out_logprobs=jnp.roll(state.out_logprobs, shift_back, axis=1),
-        )
-
     def sub_batch(self, state: InferenceState, new_batch: InferenceState) -> InferenceState:
         logger.info("compiling sub batch")
 
         index = jnp.argmax(state.stop_mask[:, 0], keepdims=True)
-        new_batch = self.roll_cache_to_length(new_batch, state.kv_cache[0].length)
+
+        state = state.shift_batch()
+        new_batch = new_batch.shift_batch()
+
+        kv_index = jnp.maximum(state.kv_cache[0].length, new_batch.kv_cache[0].length)
+
+        new_batch = new_batch.roll(kv_index)
+        state = state.roll(kv_index)
 
         @partial(
             jax.shard_map,
@@ -572,13 +529,13 @@ class AsyncInferenceWorker(Worker):
             sub_on_this_device = (index >= start_idx) & (index < end_idx)
 
             old_state = jax.lax.cond(
-                sub_on_this_device[0], self.sub, lambda o, _n, _i: o, old_state, new_state, local_idx
+                sub_on_this_device[0], lambda o, n, i: o.sub(n, i), lambda o, _n, _i: o, old_state, new_state, local_idx
             )
 
             return old_state
 
         state = _sub(state, new_batch, index)
-        state = self.shift_batch(state)
+        state = state.shift_batch()
 
         return state
 
@@ -608,7 +565,7 @@ class AsyncInferenceWorker(Worker):
             out_logprobs=stacked_state.out_logprobs[:, 0],
             prompt_id=stacked_state.prompt_id[:, 0],
         )
-        stacked_state_shifted = self.shift_batch(stacked_state)
+        stacked_state_shifted = stacked_state.shift_batch()
         return stacked_state_shifted
 
     def _decode_single_loop(
@@ -650,10 +607,11 @@ class AsyncInferenceWorker(Worker):
         local_to_global = {i: gid for i, gid in enumerate(global_ids)}
 
         prompt_queue: list[int] = [i for i in range(P) for _ in range(self.inference_config.group_size)]
-
-        finished_tokens = []
-        finished_logprobs = []
-        finished_pids = []
+        finished = {
+            "tokens": [],
+            "logprobs": [],
+            "prompt_ids": [],
+        }
 
         queued_steps = 0
         subbed_steps = 0
@@ -674,30 +632,23 @@ class AsyncInferenceWorker(Worker):
                     state, self.params, prompts, next_index
                 )
 
-                finished_tokens.append(tokens)
-                finished_logprobs.append(logprobs)
-                finished_pids.append(prompt_ids)
+                finished["tokens"].append(tokens)
+                finished["logprobs"].append(logprobs)
+                finished["prompt_ids"].append(prompt_ids)
 
                 queued_steps += n_steps
                 subbed_steps += 1
                 self._maybe_update_params()
                 self.global_rollouts[local_to_global[next_index]].weight_iteration.append(self.weight_iteration)
 
-            finished_tokens_cpu = list(map(lambda x: jax.device_get(x), finished_tokens))
-            finished_logprobs_cpu = list(map(lambda x: jax.device_get(x), finished_logprobs))
-            finished_pids_cpu = list(map(lambda x: jax.device_get(x), finished_pids))
-
+            finished = {k: jax.device_get(jnp.concatenate(v, axis=0)) for k, v in finished.items()}
             if isinstance(queued_steps, jnp.ndarray):
                 queued_steps = queued_steps.item()
 
-        finished_tokens_cpu = np.concat(finished_tokens_cpu, axis=0)
-        finished_logprobs_cpu = np.concat(finished_logprobs_cpu, axis=0)
-        finished_pids_cpu = np.concat(finished_pids_cpu, axis=0)
-
-        for i in range(finished_tokens_cpu.shape[0]):
-            pid = finished_pids_cpu[i].item()
-            self.global_rollouts[pid].rollout_tokens.append(finished_tokens_cpu[i])
-            self.global_rollouts[pid].rollout_logprobs.append(finished_logprobs_cpu[i])
+        for i in range(finished["tokens"].shape[0]):
+            pid = finished["prompt_ids"][i].item()
+            self.global_rollouts[pid].rollout_tokens.append(finished["tokens"][i])
+            self.global_rollouts[pid].rollout_logprobs.append(finished["logprobs"][i])
 
         tokens_per_second = queued_steps * self.inference_config._max_decode_batch_size / t.data["time"]
         sequences_per_second = queued_steps / t.data["time"]

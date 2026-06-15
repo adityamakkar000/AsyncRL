@@ -95,12 +95,11 @@ def naive_sample(
         logits, base_indices = jax.lax.top_k(logits, top_k)
     else:
         base_indices = jnp.tile(jnp.arange(V), (B, 1))
-    log_probs = jax.nn.log_softmax(logits, axis=-1)
 
     log_probs = jax.nn.log_softmax(logits, axis=-1)
     if top_p is not None:
         sort_idx = jnp.argsort(-log_probs, axis=-1)
-        sorted_probs = jnp.take_along_axis(log_probs, sort_idx, axis=-1)
+        sorted_probs = jnp.take_along_axis(jnp.exp(log_probs), sort_idx, axis=-1)
         sorted_logits = jnp.take_along_axis(logits, sort_idx, axis=-1)
 
         mask = jnp.cumsum(sorted_probs, axis=-1) <= top_p

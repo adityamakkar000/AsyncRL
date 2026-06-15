@@ -84,9 +84,9 @@ def get_single_step(config: LossConfig) -> StepFn:
     def single_step(model: Model, params: PyTree, batch: RLBatch, train: bool = True) -> tuple[Array, PyTree]:
         x_logits, kv_cache = model.apply(
             {"params": params},
-            x=batch.tokens,
-            sequence_lens=batch.seq_lens,
-            kv_cache=None,  # type: ignore
+            x=batch.tokens,  # type: ignore
+            sequence_lens=batch.seq_lens,  # type: ignore
+            kv_cache=None,
         )
 
         batch = batch.replace(  # type: ignore

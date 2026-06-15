@@ -3,6 +3,7 @@ from threading import Lock
 from typing import List, Optional, Protocol
 
 import jax
+import jax.numpy as jnp
 from flax import struct
 from jaxtyping import Array, PyTree
 from omegaconf import MISSING
@@ -41,6 +42,52 @@ class InferenceState:
     out_tokens: Array
     out_logprobs: Array
     prompt_id: Array
+
+    def sub(self, new_batch: "InferenceState", index: int) -> "InferenceState":
+        return self.replace(
+            next_token=self.next_token.at[index].set(new_batch.next_token),
+            kv_cache=[
+                KVCache(
+                    k=self.kv_cache[i].k.at[index].set(new_batch.kv_cache[i].k),
+                    v=self.kv_cache[i].v.at[index].set(new_batch.kv_cache[i].v),
+                    length=self.kv_cache[i].length.copy(),
+                )
+                for i in range(len(self.kv_cache))
+            ],
+            key=self.key,
+            seq_lens=self.seq_lens.at[index].set(new_batch.seq_lens),
+            stop_mask=self.stop_mask.at[index].set(new_batch.stop_mask),
+            end_of_think=self.end_of_think.at[index].set(new_batch.end_of_think),
+            out_tokens=self.out_tokens.at[index].set(new_batch.out_tokens),
+            out_logprobs=self.out_logprobs.at[index].set(new_batch.out_logprobs),
+            prompt_id=self.prompt_id.at[index].set(new_batch.prompt_id),
+        )
+
+    def shift_batch(self) -> "InferenceState":
+        return self.roll(jnp.max(self.seq_lens) - 1)
+
+    def roll(self, index: int | Array) -> "InferenceState":
+        """
+        Roll the state to index
+        Args:
+            index (int | Array): The index to roll to.
+        Returns:
+            InferenceState: The rolled state.
+        """
+
+        diff = index - self.kv_cache[0].length
+        return self.replace(  # type: ignore
+            out_tokens=jnp.roll(self.out_tokens, diff, axis=1),
+            out_logprobs=jnp.roll(self.out_logprobs, diff, axis=1),
+            kv_cache=[
+                KVCache(
+                    k=jnp.roll(kv.k, diff, axis=1),
+                    v=jnp.roll(kv.v, diff, axis=1),
+                    length=index.copy(),  # type: ignore
+                )
+                for kv in self.kv_cache
+            ],
+        )
 
 
 @dataclass
