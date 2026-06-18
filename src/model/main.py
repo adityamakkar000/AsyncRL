@@ -7,6 +7,7 @@ import numpy as np
 import orbax.checkpoint as ocp
 import stax
 from flax import linen as nn
+from hydra.utils import instantiate
 from jax.sharding import Sharding, SingleDeviceSharding
 from jaxtyping import Array, PyTree
 from omegaconf import DictConfig
@@ -14,12 +15,12 @@ from optax import GradientTransformation
 from stax import HFModelBase
 from stax import staxLogger as logger
 
-from .config import ModelConfig
-from .qwen3 import KVCache, Qwen3
-from .utils import convert_dtype, get_qwen_3_weights, save_to_hf
+from .config import BaseModel, ModelConfig
+from .llama import LLAMA_MODELS
+from .qwen3 import QWEN_MODELS, KVCache
+from .utils import convert_dtype
 
-sizes = [0.6, 1.7, 4, 8]
-model_names = [f"Qwen/Qwen3-{size}B" for size in sizes] + [f"Qwen/Qwen3-{size}B-Base" for size in sizes]
+model_names = QWEN_MODELS + LLAMA_MODELS
 shardingType = Optional[PyTree[Sharding]]
 
 
@@ -27,8 +28,12 @@ class Model(HFModelBase):
     def __init__(self, config: DictConfig | ModelConfig):
         self.config = config
         self.validate_config()
+
         is_base = self.config.hf_model_name.endswith("Base")
-        self.model = Qwen3.from_config(config.qwen_config, is_base=is_base)
+        self.model: BaseModel = instantiate(config.model_args, is_base=is_base)
+        assert isinstance(self.model, BaseModel), (
+            f"Expected model to be an instance of BaseModel, got {type(self.model)}"
+        )
 
     def validate_config(self):
         if self.config.hf_model_name not in model_names:
@@ -37,7 +42,7 @@ class Model(HFModelBase):
     def init_state(
         self, rng: Array, tx: Optional[GradientTransformation], *, sharding: shardingType = None, abstract: bool = False
     ) -> PyTree:
-        x_init = jnp.ones((1, self.config.qwen_config.sequence_len), dtype=jnp.int32)
+        x_init = jnp.ones((1, self.sequence_len), dtype=jnp.int32)
         seq_lens = jnp.array([1])
 
         def init_state(rng, x_init, sequence_lens):
@@ -68,14 +73,11 @@ class Model(HFModelBase):
 
         return out_state
 
-    def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
-        return get_qwen_3_weights(params, name=model_name)
-
     def init_kv_cache(self, batch_size: int, length: int, sharding: KVCache, dtype: str = "bfloat16") -> list[KVCache]:
-        if length > self.config.qwen_config.sequence_len + 1024:
-            raise ValueError(
-                f"Requested KV cache length {length} exceeds maximum of {self.config.qwen_config.sequence_len + 1024}"
-            )
+        if length > self.sequence_len + 1024:
+            raise ValueError(f"Requested KV cache length {length} exceeds maximum of {self.sequence_len + 1024}")
+
+        n_layers, *kv_shape = self.model.kv_shape
 
         @partial(jax.jit, out_shardings=sharding)
         def _init():
@@ -84,15 +86,14 @@ class Model(HFModelBase):
                     (
                         batch_size,
                         length,
-                        self.config.qwen_config.n_groups,
-                        self.config.qwen_config.head_dim,
+                        *kv_shape,
                     ),
                     dtype=convert_dtype(dtype),
                 )
 
             return KVCache(k=zeros(), v=zeros(), length=0)
 
-        return [_init() for _ in range(self.config.qwen_config.n_layers)]
+        return [_init() for _ in range(n_layers)]
 
     def load_from_ckpt(
         self, path: str, step_number: Optional[int] = None, use_best=False
@@ -145,8 +146,11 @@ class Model(HFModelBase):
         state, metadata = checkpointer.restore(step=step_number)
         return step_number, state["params"], metadata
 
+    def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
+        return self.model.load_from_hf(params, model_name)
+
     def save_hf(self, path: str, params: PyTree) -> None:
-        save_to_hf(path, params, self.config.hf_model_name)
+        self.model.save_to_hf(path, params, self.config.hf_model_name)
 
     def __call__(
         self,
@@ -183,9 +187,8 @@ class Model(HFModelBase):
 
     @property
     def sequence_len(self) -> int:
-        """Max sequence length supported by the model"""
-        return self.config.qwen_config.sequence_len
+        return self.model.seq_len
 
     @property
     def activation_dtype(self):
-        return convert_dtype(self.config.qwen_config.activation_dtype)
+        return convert_dtype(self.model.activation_dtype)

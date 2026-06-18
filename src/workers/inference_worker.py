@@ -224,7 +224,7 @@ class AsyncInferenceWorker(Worker):
 
         state_sharding = InferenceState(
             next_token=split_sharding,  # type: ignore
-            kv_cache=[kv_sharding for _ in range(self.model.config.qwen_config.n_layers)],
+            kv_cache=[kv_sharding for _ in range(self.model.model.kv_shape[0])],
             key=replicate_sharding,  # type: ignore
             seq_lens=split_sharding,  # type: ignore
             stop_mask=split_sharding,  # type: ignore

@@ -1,16 +1,30 @@
 defaults:
   - base 
-  - model_config: qwen_0.6b_base
+  # - model_config: qwen_0.6b_base
   - sharding_config: fsdp
   - loss_config: loss
   - datasets@data_config: gsm8k
   - override loss_config/inference_config: debug
   - _self_
 
+model_config:
+  model_args:
+    _target_: src.model.llama.Llama3
+    vocab_size: 128256
+    sequence_len: 16384
+    model_dim: 4096
+    d_ff: 14336
+    n_heads: 32
+    n_kv_heads: 8
+    n_layers: 32
+    rope_base: 500000
+    activation_dtype: "bfloat16"
+  hf_model_name: "meta-llama/Llama-3.1-8B"
+
 data_config:
   batch_size: 512
 
-grad_accum_steps: 1
+grad_accum_steps: 4
 seed: 0
 num_steps: 250
 

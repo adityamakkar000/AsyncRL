@@ -49,3 +49,9 @@ eval = [
 
 [tool.uv.sources]
 stax = { git = "https://github.com/adityamakkar000/stax.git"}
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

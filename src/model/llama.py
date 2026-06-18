@@ -7,14 +7,11 @@ from flax import linen as nn
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array
 
-from .config import BaseModel, KVCache, QwenConfig
+from .config import BaseModel, KVCache, LlamaConfig
 from .flash_attention import SegmentIds, flash_attention
 from .utils import convert_dtype, make_attention_mask, make_prompt_mask
 
-sizes = [0.6, 1.7, 4, 8]
-QWEN_MODELS = [f"Qwen/Qwen3-{size}B" for size in sizes] + [f"Qwen/Qwen3-{size}B-Base" for size in sizes]
-
-QWEN_MODEL = []
+LLAMA_MODELS = ["meta-llama/Llama-3.1-8B"]
 
 
 def flash_attention_naive(q, k, v, mask, sm_scale):
@@ -26,6 +23,26 @@ flash_attention_sharded = jax.shard_map(
 )
 
 
+def llama_rope_correction(freq):
+    # from: https://github.com/jax-ml/jax-llm-examples/blob/main/llama3/llama3_jax/model.py
+    factor = 8.0
+    low_freq_factor = 1.0
+    high_freq_factor = 4.0
+    old_context_len = 8192
+
+    low_freq_wavelen = old_context_len / low_freq_factor
+    high_freq_wavelen = old_context_len / high_freq_factor
+
+    wavelen = 2 * jnp.pi / freq
+    inv_freq_llama = jnp.where(wavelen > low_freq_wavelen, freq / factor, freq)
+    smooth_factor = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+    smoothed_inv_freq = (1 - smooth_factor) * inv_freq_llama / factor + smooth_factor * inv_freq_llama
+    is_medium_freq = ~(wavelen < high_freq_wavelen) * ~(wavelen > low_freq_wavelen)
+    inv_freq_llama = jnp.where(is_medium_freq, smoothed_inv_freq, inv_freq_llama)
+
+    return inv_freq_llama
+
+
 class RoPEMatrixCache(nn.Module):
     sequence_len: int
     model_dim: int
@@ -34,6 +51,7 @@ class RoPEMatrixCache(nn.Module):
     def setup(self):
         pos = jnp.arange(0, self.model_dim, 2, dtype=jnp.float32) / self.model_dim
         theta = 1.0 / (self.rope_base**pos)
+        theta = llama_rope_correction(theta)
         inp = jnp.einsum("t,k->tk", jnp.arange(self.sequence_len), theta, precision=jax.lax.Precision.HIGHEST)
 
         self.sin = jnp.sin(inp).astype(jnp.float32)
@@ -55,25 +73,24 @@ class RoPEMatrixCache(nn.Module):
 
 def apply_rope(x: jnp.ndarray, sin: jnp.ndarray, cos: jnp.ndarray) -> jnp.ndarray:
     *_, C = x.shape
-    x1, x2 = x[..., : C // 2], x[..., C // 2 :]
+    x1, x2 = x[..., ::2], x[..., 1::2]
     out = jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
 
     return out
 
 
 class FeedForward(nn.Module):
-    d_ff: int
     model_dim: int
+    d_ff: int
     activation_dtype: jnp.dtype = jnp.float32
 
     @nn.compact
     def __call__(self, x: Array):
-        x_fc1 = nn.Dense(features=self.d_ff, use_bias=False, dtype=self.activation_dtype)(x)
-        x_fc2 = nn.Dense(features=self.d_ff, use_bias=False, dtype=self.activation_dtype)(x)
-        x = nn.silu(x_fc1) * x_fc2
-        x_fc3 = nn.Dense(features=self.model_dim, use_bias=False, dtype=self.activation_dtype)(x)
+        gate_proj = nn.silu(nn.Dense(features=self.d_ff, use_bias=False, dtype=self.activation_dtype)(x))
+        up_proj = nn.Dense(features=self.d_ff, use_bias=False, dtype=self.activation_dtype)(x)
+        down_proj = nn.Dense(features=self.model_dim, use_bias=False, dtype=self.activation_dtype)(gate_proj * up_proj)
 
-        return x_fc3
+        return down_proj
 
 
 class RMSNorm(nn.Module):
@@ -81,7 +98,7 @@ class RMSNorm(nn.Module):
 
     @nn.compact
     def __call__(self, x: Array):
-        rms = jnp.sqrt(jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True) + 1e-6)
+        rms = jnp.sqrt(jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True) + 1e-5)
         gamma = self.param("gamma", nn.initializers.ones, (x.shape[-1],), self.activation_dtype)
         x = (x * gamma) / rms
         return x
@@ -90,16 +107,15 @@ class RMSNorm(nn.Module):
 class GroupedQueryAttention(nn.Module):
     model_dim: int
     n_heads: int
-    n_groups: int
-    head_dim: int
-    rope_base: int
+    n_kv_heads: int
     activation_dtype: jnp.dtype = jnp.float32
 
     def setup(self):
-        assert self.n_heads % self.n_groups == 0, "Number of heads must be divisible by number of kv groups"
+        assert self.n_heads % self.n_kv_heads == 0, "Number of heads must be divisible by number of kv heads"
         assert self.model_dim % self.n_heads == 0, "Model dim must be divisible by number of heads"
 
-        self.kv_group_size = self.n_heads // self.n_groups
+        self.n_groups = self.n_heads // self.n_kv_heads
+        self.head_dim = self.model_dim // self.n_heads
         self.d_out = self.n_heads * self.head_dim
 
     def gqa(self, q: Array, k: Array, v: Array, mask: Array, kv_cache: KVCache) -> tuple[Array, KVCache]:
@@ -136,8 +152,8 @@ class GroupedQueryAttention(nn.Module):
         k = einops.rearrange(k, "... t g d -> ... g t d", d=self.head_dim)
         v = einops.rearrange(v, "... t g d -> ... g t d", d=self.head_dim)
 
-        k = jnp.repeat(k, self.kv_group_size, axis=1)
-        v = jnp.repeat(v, self.kv_group_size, axis=1)
+        k = jnp.repeat(k, self.n_groups, axis=1)
+        v = jnp.repeat(v, self.n_groups, axis=1)
 
         sm_scale = self.head_dim**-0.5
         out = (
@@ -153,21 +169,17 @@ class GroupedQueryAttention(nn.Module):
     def __call__(
         self,
         x: Array,
-        sequence_lens: jax.Array,
         mask: Array,
         rope_matrix: tuple[Array, Array],
         kv_cache: Optional[KVCache] = None,
     ):
         q = nn.Dense(features=self.d_out, use_bias=False, dtype=self.activation_dtype)(x)
-        k = nn.Dense(features=self.n_groups * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
-        v = nn.Dense(features=self.n_groups * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
+        k = nn.Dense(features=self.n_kv_heads * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
+        v = nn.Dense(features=self.n_kv_heads * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
 
         q = einops.rearrange(q, "... t (h d) -> ... t h d", d=self.head_dim)
         k = einops.rearrange(k, "... t (g d) -> ... t g d", d=self.head_dim)
         v = einops.rearrange(v, "... t (g d) -> ... t g d", d=self.head_dim)
-
-        q = RMSNorm(self.activation_dtype)(q)
-        k = RMSNorm(self.activation_dtype)(k)
 
         q = apply_rope(q, rope_matrix[0], rope_matrix[1])
         k = apply_rope(k, rope_matrix[0], rope_matrix[1])
@@ -186,11 +198,10 @@ class GroupedQueryAttention(nn.Module):
 
 
 class Block(nn.Module):
-    d_ff: int
     model_dim: int
+    d_ff: int
     n_heads: int
-    n_groups: int
-    head_dim: int
+    n_kv_heads: int
     rope_base: int
     activation_dtype: jnp.dtype = jnp.float32
 
@@ -198,7 +209,6 @@ class Block(nn.Module):
     def __call__(
         self,
         x: Array,
-        sequence_lens: jax.Array,
         mask: Array,
         rope_matrix: tuple[Array, Array],
         layer_cache: Optional[KVCache] = None,
@@ -208,17 +218,15 @@ class Block(nn.Module):
         x, out_layer_cache = GroupedQueryAttention(
             model_dim=self.model_dim,
             n_heads=self.n_heads,
-            n_groups=self.n_groups,
-            head_dim=self.head_dim,
-            rope_base=self.rope_base,
+            n_kv_heads=self.n_kv_heads,
             activation_dtype=self.activation_dtype,
-        )(x, sequence_lens, mask, rope_matrix, layer_cache)
+        )(x, mask, rope_matrix, layer_cache)
 
         x = x + connection_1
 
         connection_2 = x
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)
-        x = FeedForward(d_ff=self.d_ff, model_dim=self.model_dim, activation_dtype=self.activation_dtype)(x)
+        x = FeedForward(model_dim=self.model_dim, d_ff=self.d_ff, activation_dtype=self.activation_dtype)(x)
         x = x + connection_2
 
         return x, out_layer_cache
@@ -227,14 +235,13 @@ class Block(nn.Module):
 RematBlock = nn.remat(Block)
 
 
-class Qwen3(BaseModel):
+class Llama3(BaseModel):
     vocab_size: int
-    d_ff: int
     sequence_len: int
     model_dim: int
+    d_ff: int
     n_heads: int
-    n_groups: int
-    head_dim: int
+    n_kv_heads: int
     n_layers: int
     rope_base: int
     activation_dtype: jnp.dtype = jnp.float32
@@ -287,30 +294,23 @@ class Qwen3(BaseModel):
         for i in range(self.n_layers):
             in_layer_cache = kv_cache[i] if kv_cache else None
             x, out_layer_cache = RematBlock(
-                d_ff=self.d_ff,
                 model_dim=self.model_dim,
+                d_ff=self.d_ff,
                 n_heads=self.n_heads,
-                n_groups=self.n_groups,
-                head_dim=self.head_dim,
+                n_kv_heads=self.n_kv_heads,
                 rope_base=self.rope_base,
                 activation_dtype=self.activation_dtype,
                 name=f"Block_{i}",
-            )(x, sequence_lens, attention_mask, (sin, cos), in_layer_cache)
+            )(x, attention_mask, (sin, cos), in_layer_cache)
             out_cache.append(out_layer_cache)
 
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)
-
-        if self.is_base:
-            # base models don't give tied weights so you have to use embedding layer
-            logits = embed_layer.attend(x)
-        else:
-            logits = nn.Dense(features=self.vocab_size, use_bias=False, dtype=jnp.float32)(x)
-
+        logits = nn.Dense(features=self.vocab_size, use_bias=False, dtype=jnp.float32)(x)
         logits = logits.astype(jnp.float32)
         return logits, out_cache
 
     @classmethod
-    def from_config(cls, config: QwenConfig, is_base: bool = False):
+    def from_config(cls, config: LlamaConfig, is_base: bool = False):
         activation_dtype = convert_dtype(config.activation_dtype)
         return cls(
             vocab_size=config.vocab_size,
@@ -318,8 +318,7 @@ class Qwen3(BaseModel):
             sequence_len=config.sequence_len,
             model_dim=config.model_dim,
             n_heads=config.n_heads,
-            n_groups=config.n_groups,
-            head_dim=config.head_dim,
+            n_kv_heads=config.n_kv_heads,
             n_layers=config.n_layers,
             rope_base=config.rope_base,
             activation_dtype=activation_dtype,
@@ -332,23 +331,21 @@ class Qwen3(BaseModel):
 
     @property
     def hf_mapping(self):
-        return {  # embedding
+        return {
+            # embedding
             r"model\.embed_tokens\.weight": "token_emb.embedding",
-            # block norms
-            r"model\.layers\.([0-9]+)\.input_layernorm\.weight": r"Block_\1/RMSNorm_0.gamma",
-            r"model\.layers\.([0-9]+)\.post_attention_layernorm\.weight": r"Block_\1/RMSNorm_1.gamma",
-            # gqa
+            #  attention
             r"model\.layers\.([0-9]+)\.self_attn\.q_proj\.weight": r"Block_\1/GroupedQueryAttention_0/Dense_0.kernel",
             r"model\.layers\.([0-9]+)\.self_attn\.k_proj\.weight": r"Block_\1/GroupedQueryAttention_0/Dense_1.kernel",
             r"model\.layers\.([0-9]+)\.self_attn\.v_proj\.weight": r"Block_\1/GroupedQueryAttention_0/Dense_2.kernel",
             r"model\.layers\.([0-9]+)\.self_attn\.o_proj\.weight": r"Block_\1/GroupedQueryAttention_0/Dense_3.kernel",
-            # gqa norms
-            r"model\.layers\.([0-9]+)\.self_attn\.q_norm\.weight": r"Block_\1/GroupedQueryAttention_0/RMSNorm_0.gamma",
-            r"model\.layers\.([0-9]+)\.self_attn\.k_norm\.weight": r"Block_\1/GroupedQueryAttention_0/RMSNorm_1.gamma",
             # mlp
             r"model\.layers\.([0-9]+)\.mlp\.gate_proj\.weight": r"Block_\1/FeedForward_0/Dense_0.kernel",
             r"model\.layers\.([0-9]+)\.mlp\.up_proj\.weight": r"Block_\1/FeedForward_0/Dense_1.kernel",
             r"model\.layers\.([0-9]+)\.mlp\.down_proj\.weight": r"Block_\1/FeedForward_0/Dense_2.kernel",
+            # block norms
+            r"model\.layers\.([0-9]+)\.input_layernorm\.weight": r"Block_\1/RMSNorm_0.gamma",
+            r"model\.layers\.([0-9]+)\.post_attention_layernorm\.weight": r"Block_\1/RMSNorm_1.gamma",
             # final rms
             r"model\.norm\.weight": "RMSNorm_0.gamma",
             r"lm_head\.weight": "Dense_0.kernel",
@@ -357,7 +354,6 @@ class Qwen3(BaseModel):
     @property
     def reverse_hf_mapping(self):
         return {
-            # embedding
             r"token_emb\.embedding": r"model.embed_tokens.weight",
             # block norms
             r"Block_([0-9]+)/RMSNorm_0\.gamma": r"model.layers.\1.input_layernorm.weight",
@@ -367,18 +363,19 @@ class Qwen3(BaseModel):
             r"Block_([0-9]+)/GroupedQueryAttention_0/Dense_1\.kernel": r"model.layers.\1.self_attn.k_proj.weight",
             r"Block_([0-9]+)/GroupedQueryAttention_0/Dense_2\.kernel": r"model.layers.\1.self_attn.v_proj.weight",
             r"Block_([0-9]+)/GroupedQueryAttention_0/Dense_3\.kernel": r"model.layers.\1.self_attn.o_proj.weight",
-            # gqa norms
-            r"Block_([0-9]+)/GroupedQueryAttention_0/RMSNorm_0\.gamma": r"model.layers.\1.self_attn.q_norm.weight",
-            r"Block_([0-9]+)/GroupedQueryAttention_0/RMSNorm_1\.gamma": r"model.layers.\1.self_attn.k_norm.weight",
             # mlp
             r"Block_([0-9]+)/FeedForward_0/Dense_0\.kernel": r"model.layers.\1.mlp.gate_proj.weight",
             r"Block_([0-9]+)/FeedForward_0/Dense_1\.kernel": r"model.layers.\1.mlp.up_proj.weight",
             r"Block_([0-9]+)/FeedForward_0/Dense_2\.kernel": r"model.layers.\1.mlp.down_proj.weight",
-            # final rms + lm head
+            # final rms
             r"RMSNorm_0\.gamma": r"model.norm.weight",
             r"Dense_0\.kernel": r"lm_head.weight",
         }
 
     @property
     def kv_shape(self):
-        return (self.n_layers, self.n_groups, self.head_dim)
+        return (self.n_layers, self.n_kv_heads, self.head_dim)
+
+    @property
+    def head_dim(self):
+        return self.model_dim // self.n_heads
