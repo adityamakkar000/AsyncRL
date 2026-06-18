@@ -76,6 +76,8 @@ class AsyncInferenceWorker(Worker):
         self.monitor_thread.start()
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model.config.hf_model_name)
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         self.precompile_dict = {
             "prefill": {},
             "decode": {},

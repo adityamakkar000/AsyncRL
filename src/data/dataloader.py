@@ -18,6 +18,8 @@ class DataLoader:
         self.dataset_config = dataset_config
         self.max_seq_length = max_seq_length
         self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         self.mesh = mesh
 
         self.samples = self._load_from_gcs()

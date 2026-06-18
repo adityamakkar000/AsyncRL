@@ -73,7 +73,7 @@ class RoPEMatrixCache(nn.Module):
 
 def apply_rope(x: jnp.ndarray, sin: jnp.ndarray, cos: jnp.ndarray) -> jnp.ndarray:
     *_, C = x.shape
-    x1, x2 = x[..., ::2], x[..., 1::2]
+    x1, x2 = x[..., : C // 2], x[..., C // 2 :]
     out = jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
 
     return out

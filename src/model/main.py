@@ -35,9 +35,7 @@ class Model(HFModelBase):
             f"Expected model to be an instance of BaseModel, got {type(self.model)}"
         )
 
-    def validate_config(self):
-        if self.config.hf_model_name not in model_names:
-            raise ValueError(f"Expected model size to be in {model_names}, got {self.config.hf_model_name}")
+    def validate_config(self): ...
 
     def init_state(
         self, rng: Array, tx: Optional[GradientTransformation], *, sharding: shardingType = None, abstract: bool = False

@@ -140,6 +140,12 @@ def download_hf_weights(name: str):
         )
 
 
+def delete_hf_weights(name: str):
+    """Delete model weights from local directory."""
+    if os.path.isdir(name):
+        shutil.rmtree(name)
+
+
 def get_jax_key(main_key: str, hf_mapping) -> str | None:
     """Convert Hugging Face parameter key to JAX parameter key using the mapping."""
     matching_keys = []
@@ -184,6 +190,7 @@ def get_torch_weights_to_jax(params: PyTree, name: str, hf_mapping) -> PyTree:
                 )
                 jax_param[param_ending] = new_param
 
+    delete_hf_weights(name)
     return params
 
 

@@ -19,7 +19,8 @@ model_config:
     n_layers: 32
     rope_base: 500000
     activation_dtype: "bfloat16"
-  hf_model_name: "meta-llama/Llama-3.1-8B"
+  hf_model_name: "meta-llama/Llama-3.1-8B-Instruct"
+
 
 data_config:
   batch_size: 512
