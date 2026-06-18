@@ -29,6 +29,7 @@ class QwenConfig:
     n_layers: int = MISSING
     rope_base: int = MISSING
     activation_dtype: str = "float32"
+    tie_weights: bool = False
 
 
 @dataclass
@@ -42,6 +43,7 @@ class LlamaConfig:
     n_layers: int = MISSING
     rope_base: int = MISSING
     activation_dtype: str = "float32"
+    tie_weights: bool = False
 
 
 @dataclass

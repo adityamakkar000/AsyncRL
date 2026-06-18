@@ -84,7 +84,7 @@ class AsyncInferenceWorker(Worker):
         }
 
         self.thinking_tokens = (
-            self.tokenizer(INTERUPT_THINKING_PHARSE, add_special_tokens=False, return_tensors="np")
+            self.tokenizer(INTERUPT_THINKING_PHARSE, add_special_tokens=False, return_tensors="np")  # type: ignore
             .input_ids[0]
             .tolist()
         )
@@ -212,7 +212,9 @@ class AsyncInferenceWorker(Worker):
         """Get the shardings for the model parameters, kv cache, and inference state based on the configuration."""
         local_devices = np.array(jax.local_devices())
         mesh = jax.make_mesh(
-            (self.inference_config.n_replicas,), (AXIS_NAME,), devices=local_devices[: self.inference_config.n_replicas]
+            (self.inference_config.n_replicas,),
+            (AXIS_NAME,),
+            devices=local_devices[: self.inference_config.n_replicas],  # type: ignore
         )
 
         replicate_sharding = jax.NamedSharding(mesh, P())
@@ -322,14 +324,14 @@ class AsyncInferenceWorker(Worker):
 
         seq_lens = np.array([len(x) for x in inputs], dtype=np.int32)
         padding_length = max(self.compute_max_padding_length(seq_lens), self.inference_config.initial_sequence_len)
-        inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]
+        inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]  # type: ignore
         tokens = np.array(inputs, dtype=np.int32)
 
         return tokens, seq_lens
 
     def cleanup_rollouts(self, pids: list[int]):
-        pad_id = self.tokenizer.pad_token_id
-        eos_id = self.tokenizer.eos_token_id
+        pad_id: int = self.tokenizer.pad_token_id  # type: ignore
+        eos_id: int = self.tokenizer.eos_token_id  # type: ignore
 
         def clean_sequence(tokens: np.ndarray, logprobs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             non_pad_index = np.argmax(tokens != pad_id)
@@ -360,7 +362,7 @@ class AsyncInferenceWorker(Worker):
     def detokenizer(self, pids: list[int]):
         for pid in pids:
             rollout_tokens = self.global_rollouts[pid].rollout_tokens
-            rollout_strs = self.tokenizer.batch_decode(rollout_tokens, skip_special_tokens=False)
+            rollout_strs = self.tokenizer.batch_decode(rollout_tokens, skip_special_tokens=False)  # type: ignore
             self.global_rollouts[pid].rollout_strs = rollout_strs
 
     def prefill(
@@ -386,7 +388,7 @@ class AsyncInferenceWorker(Worker):
                 params, x=input_tokens[:, :-1], sequence_lens=seq_lens - 1, kv_cache=kv_cache
             )
             out_tokens = (
-                jnp.ones((max_decode_prompts, self.max_attention_length), dtype=jnp.int32) * self.tokenizer.pad_token_id
+                jnp.ones((max_decode_prompts, self.max_attention_length), dtype=jnp.int32) * self.tokenizer.pad_token_id  # type: ignore
             )
             out_logprobs = jnp.zeros((max_decode_prompts, self.max_attention_length), dtype=jnp.float32)
             out_tokens = jax.lax.dynamic_update_slice_in_dim(out_tokens, input_tokens, 0, axis=1)
@@ -460,7 +462,7 @@ class AsyncInferenceWorker(Worker):
                 state.stop_mask,
                 state.seq_lens,
                 max_seq_len=self.inference_config.max_seq_len,
-                eos_token_id=self.tokenizer.eos_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,  # type: ignore
             )
 
         out_tokens = jax.lax.dynamic_update_index_in_dim(state.out_tokens, next_token, out_cache[0].length, axis=1)

@@ -16,26 +16,19 @@ from stax import HFModelBase
 from stax import staxLogger as logger
 
 from .config import BaseModel, ModelConfig
-from .llama import LLAMA_MODELS
-from .qwen3 import QWEN_MODELS, KVCache
+from .qwen3 import KVCache
 from .utils import convert_dtype
 
-model_names = QWEN_MODELS + LLAMA_MODELS
 shardingType = Optional[PyTree[Sharding]]
 
 
 class Model(HFModelBase):
     def __init__(self, config: DictConfig | ModelConfig):
         self.config = config
-        self.validate_config()
-
-        is_base = self.config.hf_model_name.endswith("Base")
-        self.model: BaseModel = instantiate(config.model_args, is_base=is_base)
+        self.model: BaseModel = instantiate(config.model_args)
         assert isinstance(self.model, BaseModel), (
             f"Expected model to be an instance of BaseModel, got {type(self.model)}"
         )
-
-    def validate_config(self): ...
 
     def init_state(
         self, rng: Array, tx: Optional[GradientTransformation], *, sharding: shardingType = None, abstract: bool = False

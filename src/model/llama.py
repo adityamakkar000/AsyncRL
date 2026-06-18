@@ -11,8 +11,6 @@ from .config import BaseModel, KVCache, LlamaConfig
 from .flash_attention import SegmentIds, flash_attention
 from .utils import convert_dtype, make_attention_mask, make_prompt_mask
 
-LLAMA_MODELS = ["meta-llama/Llama-3.1-8B"]
-
 
 def flash_attention_naive(q, k, v, mask, sm_scale):
     return flash_attention(q, k, v, sm_scale=sm_scale, segment_ids=SegmentIds(mask, mask), causal=True)
@@ -245,7 +243,7 @@ class Llama3(BaseModel):
     n_layers: int
     rope_base: int
     activation_dtype: jnp.dtype = jnp.float32
-    is_base: bool = False
+    tie_weights: bool = False
 
     @nn.compact
     def __call__(
@@ -310,7 +308,7 @@ class Llama3(BaseModel):
         return logits, out_cache
 
     @classmethod
-    def from_config(cls, config: LlamaConfig, is_base: bool = False):
+    def from_config(cls, config: LlamaConfig):
         activation_dtype = convert_dtype(config.activation_dtype)
         return cls(
             vocab_size=config.vocab_size,
@@ -322,7 +320,7 @@ class Llama3(BaseModel):
             n_layers=config.n_layers,
             rope_base=config.rope_base,
             activation_dtype=activation_dtype,
-            is_base=is_base,
+            tie_weights=config.tie_weights,
         )
 
     @property
@@ -331,7 +329,7 @@ class Llama3(BaseModel):
 
     @property
     def hf_mapping(self):
-        return {
+        mapping = {
             # embedding
             r"model\.embed_tokens\.weight": "token_emb.embedding",
             #  attention
@@ -350,10 +348,11 @@ class Llama3(BaseModel):
             r"model\.norm\.weight": "RMSNorm_0.gamma",
             r"lm_head\.weight": "Dense_0.kernel",
         }
+        return mapping
 
     @property
     def reverse_hf_mapping(self):
-        return {
+        mapping = {
             r"token_emb\.embedding": r"model.embed_tokens.weight",
             # block norms
             r"Block_([0-9]+)/RMSNorm_0\.gamma": r"model.layers.\1.input_layernorm.weight",
@@ -371,6 +370,7 @@ class Llama3(BaseModel):
             r"RMSNorm_0\.gamma": r"model.norm.weight",
             r"Dense_0\.kernel": r"lm_head.weight",
         }
+        return mapping
 
     @property
     def kv_shape(self):

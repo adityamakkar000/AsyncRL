@@ -151,6 +151,8 @@ def get_jax_key(main_key: str, hf_mapping) -> str | None:
     matching_keys = []
     for hf_key, jax_p in hf_mapping.items():
         if re.match(hf_key, main_key):
+            if jax_p is None:
+                return None
             matching_keys.append(re.sub(hf_key, jax_p, main_key))
 
     if len(matching_keys) == 1:
@@ -172,7 +174,7 @@ def get_torch_weights_to_jax(params: PyTree, name: str, hf_mapping) -> PyTree:
                 jax_param_key = get_jax_key(hf_param_key, hf_mapping)
 
                 if jax_param_key is None:
-                    raise TypeError("Could not find matching JAX key.")
+                    continue
 
                 param_ending = jax_param_key.split(".")[-1]
                 jax_path = jax_param_key.split(".")[0].split("/")

@@ -1,4 +1,5 @@
-qwen_config:
+model_args:
+  _target_: src.model.qwen3.Qwen3
   vocab_size: 151936
   d_ff: 3072
   sequence_len: 16384
@@ -9,4 +10,5 @@ qwen_config:
   head_dim: 128
   rope_base: 1000000
   activation_dtype: "bfloat16"
+  tie_weights: true
 hf_model_name: "Qwen/Qwen3-0.6B-Base"

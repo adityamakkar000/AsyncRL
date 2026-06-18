@@ -154,7 +154,7 @@ class AsyncTrainerWorker(Worker):
             (jax.local_device_count(),),
             ("local_devices",),
             axis_types=(jax.sharding.AxisType.Explicit,),
-            devices=np.array(jax.local_devices()),
+            devices=np.array(jax.local_devices()),  # type: ignore
         )
 
     @partial(setup, component="metric_logger")

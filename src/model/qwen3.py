@@ -11,11 +11,6 @@ from .config import BaseModel, KVCache, QwenConfig
 from .flash_attention import SegmentIds, flash_attention
 from .utils import convert_dtype, make_attention_mask, make_prompt_mask
 
-sizes = [0.6, 1.7, 4, 8]
-QWEN_MODELS = [f"Qwen/Qwen3-{size}B" for size in sizes] + [f"Qwen/Qwen3-{size}B-Base" for size in sizes]
-
-QWEN_MODEL = []
-
 
 def flash_attention_naive(q, k, v, mask, sm_scale):
     return flash_attention(q, k, v, sm_scale=sm_scale, segment_ids=SegmentIds(mask, mask), causal=True)
@@ -238,7 +233,7 @@ class Qwen3(BaseModel):
     n_layers: int
     rope_base: int
     activation_dtype: jnp.dtype = jnp.float32
-    is_base: bool = False
+    tie_weights: bool = False
 
     @nn.compact
     def __call__(
@@ -300,8 +295,7 @@ class Qwen3(BaseModel):
 
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)
 
-        if self.is_base:
-            # base models don't give tied weights so you have to use embedding layer
+        if self.tie_weights:
             logits = embed_layer.attend(x)
         else:
             logits = nn.Dense(features=self.vocab_size, use_bias=False, dtype=jnp.float32)(x)
@@ -310,7 +304,7 @@ class Qwen3(BaseModel):
         return logits, out_cache
 
     @classmethod
-    def from_config(cls, config: QwenConfig, is_base: bool = False):
+    def from_config(cls, config: QwenConfig):
         activation_dtype = convert_dtype(config.activation_dtype)
         return cls(
             vocab_size=config.vocab_size,
@@ -323,7 +317,7 @@ class Qwen3(BaseModel):
             n_layers=config.n_layers,
             rope_base=config.rope_base,
             activation_dtype=activation_dtype,
-            is_base=is_base,
+            tie_weights=config.tie_weights,
         )
 
     @property
@@ -332,7 +326,7 @@ class Qwen3(BaseModel):
 
     @property
     def hf_mapping(self):
-        return {  # embedding
+        mapping = {  # embedding
             r"model\.embed_tokens\.weight": "token_emb.embedding",
             # block norms
             r"model\.layers\.([0-9]+)\.input_layernorm\.weight": r"Block_\1/RMSNorm_0.gamma",
@@ -353,10 +347,11 @@ class Qwen3(BaseModel):
             r"model\.norm\.weight": "RMSNorm_0.gamma",
             r"lm_head\.weight": "Dense_0.kernel",
         }
+        return mapping
 
     @property
     def reverse_hf_mapping(self):
-        return {
+        mapping = {
             # embedding
             r"token_emb\.embedding": r"model.embed_tokens.weight",
             # block norms
@@ -378,6 +373,7 @@ class Qwen3(BaseModel):
             r"RMSNorm_0\.gamma": r"model.norm.weight",
             r"Dense_0\.kernel": r"lm_head.weight",
         }
+        return mapping
 
     @property
     def kv_shape(self):
