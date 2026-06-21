@@ -243,7 +243,6 @@ class Llama3(BaseModel):
     n_layers: int
     rope_base: int
     activation_dtype: jnp.dtype = jnp.float32
-    tie_weights: bool = False
 
     @nn.compact
     def __call__(
@@ -320,7 +319,6 @@ class Llama3(BaseModel):
             n_layers=config.n_layers,
             rope_base=config.rope_base,
             activation_dtype=activation_dtype,
-            tie_weights=config.tie_weights,
         )
 
     @property

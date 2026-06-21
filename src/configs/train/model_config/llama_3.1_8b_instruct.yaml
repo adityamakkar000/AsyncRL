@@ -9,5 +9,4 @@ model_args:
   n_layers: 32
   rope_base: 500000
   activation_dtype: "bfloat16"
-  tie_weights: false
 hf_model_name: "meta-llama/Llama-3.1-8B-Instruct"

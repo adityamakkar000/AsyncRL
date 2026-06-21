@@ -19,7 +19,7 @@ class vLLMEngine:
         self.vllm_process = None
         self.client = AsyncOpenAI(
             base_url=f"http://{IP}:{PORT}/v1",
-            api_key="",
+            api_key=os.getenv("OPENAI_API_KEY", "placeholder"),
             timeout=OPENAI_TIMEOUT,
         )
         self.check_config()
@@ -49,7 +49,7 @@ class vLLMEngine:
             "--gpu-memory-utilization",
             GPU_MEMORY_UTILIZATION,
             "--port",
-            PORT,
+            str(PORT),
             "--disable-log-requests",
             "--enable-prefix-caching",
             "--served-model-name",

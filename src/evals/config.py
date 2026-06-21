@@ -9,7 +9,6 @@ from src.vllm_engine.config import vLLMConfig
 @dataclass
 class modelConfig:
     model_name: str = MISSING
-    use_best_ckpt: bool = False
     step_number: Optional[int] = None
 
 

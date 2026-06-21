@@ -13,10 +13,11 @@ vllm_config:
 
 model_config:
   model_name: "test"
-  use_best_ckpt: false
   step_number: -1 # take last step 
 
 temperature: 0.7
 top_p: 0.95
 max_tokens: 8192
 epochs: 1
+max_concurrent_requests: 500
+

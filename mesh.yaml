@@ -11,11 +11,11 @@ ignore:
   - "profile/*"
 
 prerun:
- - sudo chown -R $USER:$USER /tmp/tpu_logs
+#  - sudo chown -R $USER:$USER /tmp/tpu_logs
   - uv venv --clear
   - source .venv/bin/activate
   - source .env
   - echo "machine github.com login x-access-token password ${STAX_TOKEN}" > ~/.netrc
   - chmod 600 ~/.netrc
-  - uv sync
+  - uv sync --extra eval
   - hf auth login --token ${HF_TOKEN}

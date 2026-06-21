@@ -25,14 +25,7 @@ class EvalRunner:
         self.vllm_config = config.vllm_config
         self.model_config = config.model_config
 
-        self.check_config()
         self.vllm_engine = vLLMEngine(self.vllm_config, max_workers=100, debug=config.debug)
-
-    def check_config(self):
-        if self.model_config.use_best_ckpt and self.model_config.step_number is not None:
-            raise ValueError("Cannot set both use_best_ckpt and step_number.")
-        if not self.model_config.use_best_ckpt and self.model_config.step_number is None:
-            raise ValueError("Must set either use_best_ckpt or step_number.")
 
     def setup_model(self):
         self.gs_path = f"{GS_BUCKET}/runs/{self.model_config.model_name}"
@@ -48,8 +41,8 @@ class EvalRunner:
         logger.info(f"Model config loaded: \n{OmegaConf.to_yaml(model_config)}")
         logger.info(f"Loading model from {self.gs_path}...")
         model = Model(model_config)
-        self.step_number, params, metadata = model.load_from_ckpt(
-            self.gs_path, step_number=self.model_config.step_number, use_best=self.model_config.use_best_ckpt
+        self.step_number, params, metadata = model.load_from_ckpt_old(
+            self.gs_path, step_number=self.model_config.step_number
         )
         logger.info(f"Checkpoint loaded successfully from step {self.step_number}")
         logger.info("Saving model to HF weights...")
@@ -112,7 +105,7 @@ class EvalRunner:
 
     def run_evaluation(self):
         self.setup_model()
-        # self.launch_vllm()
+        self.launch_vllm()
         try:
             self.run_evals()
         finally:
