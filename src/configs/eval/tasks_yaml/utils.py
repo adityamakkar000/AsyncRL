@@ -24,13 +24,13 @@ def process_gsm8k_results(doc: dict, results: List[str]) -> dict:
 
 def process_aime24_results(doc: dict, results: List[str]) -> dict:
     def extract_answer(doc: dict) -> str:
-        return doc.get("Answer", "")
+        return str(doc.get("Answer", ""))
 
     return boxed_score(doc, results, extract_answer)
 
 
 def process_aime25_results(doc: dict, results: List[str]) -> dict:
     def extract_answer(doc: dict) -> str:
-        return doc.get("answer", "")
+        return str(doc.get("answer", ""))
 
     return boxed_score(doc, results, extract_answer)

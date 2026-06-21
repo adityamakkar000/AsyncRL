@@ -1,4 +1,4 @@
-task: aime24
+task: aime24_boxed
 dataset_path: Maxwell-Jia/AIME_2024
 output_type: generate_until
 training_split: train
@@ -15,10 +15,8 @@ metric_list:
     higher_is_better: true
 generation_kwargs:
   until:
-    - "Question:"
-    - "</s>"
     - "<|im_end|>"
-    - "<|eot_id|>"
+    - "<|end_of_text|>"
   do_sample: true
 tag:
   - chain_of_thought
