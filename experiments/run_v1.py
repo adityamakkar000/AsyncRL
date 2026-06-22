@@ -32,7 +32,7 @@ BASE_CONFIG = "baseline"
 
 job = TPUJOB.LAUNCH_JOB(
     RUN=RUN,
-    EXPERIMENT_PREFIX="final_run",
+    EXPERIMENT_PREFIX="test_64",
     FIXED_OVERRIDES={
         "wandb_config.project": "baseline_v6",
         "learning_rate_init": 0.0,
@@ -41,10 +41,12 @@ job = TPUJOB.LAUNCH_JOB(
         "loss_config.inference_config._max_decode_prompts": 8,
         "loss_config.inference_config._max_decode_batch_size": 64,
         "loss_config.inference_config.group_size": 16,
-        "num_steps": 3000,
-        "log_generations_every_n_steps": 100,
-        "async_config.train_workers": 4,
+        "num_steps": 300,
+        "log_generations_every_n_steps": 50,
+        "async_config.train_workers": 2,
         "async_config.max_lag": 4,
+        "checkpoint_interval": 30,
+        "max_checkpoints_to_keep": 15,
     },
     BASE_CONFIG=BASE_CONFIG,
     ZONE=TPUJOB.Zone.US_EAST5_A,

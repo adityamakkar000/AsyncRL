@@ -66,17 +66,16 @@ def main(cfg: DictConfig) -> None:
     train_devices = devices[: train_workers * devices_per_host].reshape(train_workers, devices_per_host)
     inference_devices = devices[train_workers * devices_per_host :].reshape(inference_workers, devices_per_host)
 
-    train_mesh = jax.make_mesh(
-        train_devices.shape,
+    train_mesh = jax.sharding.Mesh(
+        train_devices,
         ("processes", "local_devices"),
         axis_types=(AxisType.Explicit, AxisType.Explicit),
-        devices=train_devices.reshape(-1),  # type: ignore
     )
-    inference_mesh = jax.make_mesh(
-        inference_devices.shape,
+
+    inference_mesh = jax.sharding.Mesh(
+        inference_devices,
         ("processes", "local_devices"),
         axis_types=(AxisType.Explicit, AxisType.Explicit),
-        devices=inference_devices.reshape(-1),  # type: ignore
     )
 
     local_prompt_queue = queue.Queue(
