@@ -1,0 +1,28 @@
+task: math500_boxed
+dataset_name: default
+dataset_path: HuggingFaceH4/MATH-500
+training_split: null
+test_split: test
+process_docs: !function utils.process_math500_docs
+output_type: generate_until
+doc_to_text: "Solve the following math problem step by step. Put your answer inside \\boxed{}.
+  {{problem}}
+  Remember to put your answer inside \\boxed{}"
+process_results: !function utils.process_math500_results
+doc_to_target: "{{answer}}"
+generation_kwargs:
+  until:
+    - "<|im_end|>"
+    - "<|end_of_text|>"
+  do_sample: true
+metric_list:
+  - metric: boxed_parse
+    aggregation: mean
+    higher_is_better: true
+tag:
+  - chain_of_thought
+repeats: 1
+num_fewshot: 0
+metadata:
+  version: 3.0
+

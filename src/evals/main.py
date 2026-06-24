@@ -55,11 +55,15 @@ class EvalRunner:
         self.vllm_engine.launch_vllm(HF_CHECKPOINT_PATH)
 
     def run_evals(self):
+        tags = [self.model_config.model_name, f"step_{self.step_number}"] + [t for t in self.config.tasks]
+        for i in range(len(tags)):
+            tags[i] = tags[i][:64]  # max length is 64 characters
+
         wandb_logger = WandbLogger(
             init_args={
                 "project": "eval_debug",
                 "name": f"eval-{self.model_config.model_name}-step-{self.step_number}",
-                "tags": [self.model_config.model_name, f"step_{self.step_number}"] + [t for t in self.config.tasks],
+                "tags": tags,
                 "entity": os.getenv("WANDB_ENTITY", ""),
             },
             config_args=OmegaConf.to_object(self.config),

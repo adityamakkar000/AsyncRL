@@ -9,6 +9,7 @@ Copied from: https://github.com/rllm-org/rllm/blob/main/rllm/rewards/math_utils/
 import re
 
 import sympy
+from loguru import logger
 from pylatexenc import latex2text
 from sympy.parsing import sympy_parser
 
@@ -486,11 +487,16 @@ def extract_answer(passage: str) -> str | None:
     return None
 
 
-def grade_answer_verl(solution_str, ground_truth) -> bool | None:
+def grade_answer_verl(solution_str: str, ground_truth: str | None) -> bool | None:
     if not ground_truth:
         return False
     if "\\boxed" in ground_truth:
         ground_truth = extract_answer(ground_truth)
+
+    if ground_truth is None:
+        logger.info("verifier can't extract answer")
+        return None
+
     given_answer = extract_answer(solution_str)
     if given_answer is None:
         return None
