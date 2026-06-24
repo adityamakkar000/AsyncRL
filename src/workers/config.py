@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import jax
 import jax.numpy as jnp
@@ -44,13 +44,13 @@ class InferenceState:
     prompt_id: Array
 
     def sub(self, new_batch: "InferenceState", index: int) -> "InferenceState":
-        return self.replace(
+        return self.replace(  # type: ignore
             next_token=self.next_token.at[index].set(new_batch.next_token),
             kv_cache=[
                 KVCache(
                     k=self.kv_cache[i].k.at[index].set(new_batch.kv_cache[i].k),
                     v=self.kv_cache[i].v.at[index].set(new_batch.kv_cache[i].v),
-                    length=self.kv_cache[i].length.copy(),
+                    length=self.kv_cache[i].length.copy(),  # type: ignore
                 )
                 for i in range(len(self.kv_cache))
             ],
@@ -127,17 +127,10 @@ class WandBConfig:
 
 
 @dataclass
-class RLConfig:
-    algorithm: str = "grpo"
-    epsilon_high: float = 1.0
-    epsilon_low: float = 0.1
-    filter_zero_variance: bool = False
-
-
-@dataclass
 class LossConfig:
-    rl_config: RLConfig = field(default_factory=RLConfig)
+    rl_config: Dict[str, Any] = MISSING
     inference_config: InferenceConfig = field(default_factory=InferenceConfig)
+    filter_zero_variance: bool = False
 
 
 @dataclass

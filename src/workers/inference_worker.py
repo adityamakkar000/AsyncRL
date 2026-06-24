@@ -76,8 +76,12 @@ class AsyncInferenceWorker(Worker):
         self.monitor_thread.start()
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model.config.hf_model_name)
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.pad_token = self.tokenizer.pad_token_id  # type: ignore
+        self.eos_token = self.tokenizer.eos_token_id  # type: ignore
+        if self.eos_token is None:
+            self.eos_token = self.pad_token
+
         self.precompile_dict = {
             "prefill": {},
             "decode": {},
@@ -312,8 +316,8 @@ class AsyncInferenceWorker(Worker):
         return self.compute_max_power_of_two(max(seq_lens).item(), self.inference_config.max_seq_len)
 
     def tokenize(self, texts: list[str]) -> tuple[np.ndarray, np.ndarray]:
-        inputs: list[list[int]] = [
-            self.tokenizer.apply_chat_template(
+        inputs: list[list[int]] = [  # type: ignore
+            self.tokenizer.apply_chat_template(  # type: ignore
                 get_chat_template(self.inference_config.system_prompt, text),
                 add_generation_prompt=True,
                 enable_thinking=self.inference_config.think_mode,
@@ -324,22 +328,19 @@ class AsyncInferenceWorker(Worker):
 
         seq_lens = np.array([len(x) for x in inputs], dtype=np.int32)
         padding_length = max(self.compute_max_padding_length(seq_lens), self.inference_config.initial_sequence_len)
-        inputs = [(padding_length - len(x)) * [self.tokenizer.pad_token_id] + x for x in inputs]  # type: ignore
+        inputs = [(padding_length - len(x)) * [self.pad_token] + x for x in inputs]
         tokens = np.array(inputs, dtype=np.int32)
 
         return tokens, seq_lens
 
     def cleanup_rollouts(self, pids: list[int]):
-        pad_id: int = self.tokenizer.pad_token_id  # type: ignore
-        eos_id: int = self.tokenizer.eos_token_id  # type: ignore
-
         def clean_sequence(tokens: np.ndarray, logprobs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-            non_pad_index = np.argmax(tokens != pad_id)
+            non_pad_index = np.argmax(tokens != self.pad_token)
             tokens_not_padded = tokens[non_pad_index:]
             logprobs_not_padded = logprobs[non_pad_index:]
 
-            eos_idx = np.where((tokens_not_padded != eos_id) & (tokens_not_padded != pad_id))[0][-1] + 1
-            if eos_idx == tokens_not_padded.shape[0] or tokens_not_padded[eos_idx] != eos_id:
+            eos_idx = np.where((tokens_not_padded != self.eos_token) & (tokens_not_padded != self.pad_token))[0][-1] + 1
+            if eos_idx == tokens_not_padded.shape[0] or tokens_not_padded[eos_idx] != self.eos_token:
                 raise ValueError(
                     "No eos token found in rollout.\nToken sequence: "
                     + str(tokens_not_padded)
@@ -387,9 +388,7 @@ class AsyncInferenceWorker(Worker):
             _logits, out_cache = self.model.apply(
                 params, x=input_tokens[:, :-1], sequence_lens=seq_lens - 1, kv_cache=kv_cache
             )
-            out_tokens = (
-                jnp.ones((max_decode_prompts, self.max_attention_length), dtype=jnp.int32) * self.tokenizer.pad_token_id  # type: ignore
-            )
+            out_tokens = jnp.ones((max_decode_prompts, self.max_attention_length), dtype=jnp.int32) * self.pad_token
             out_logprobs = jnp.zeros((max_decode_prompts, self.max_attention_length), dtype=jnp.float32)
             out_tokens = jax.lax.dynamic_update_slice_in_dim(out_tokens, input_tokens, 0, axis=1)
             out_logprobs = jax.lax.dynamic_update_slice_in_dim(
@@ -462,7 +461,7 @@ class AsyncInferenceWorker(Worker):
                 state.stop_mask,
                 state.seq_lens,
                 max_seq_len=self.inference_config.max_seq_len,
-                eos_token_id=self.tokenizer.eos_token_id,  # type: ignore
+                eos_token_id=self.eos_token,
             )
 
         out_tokens = jax.lax.dynamic_update_index_in_dim(state.out_tokens, next_token, out_cache[0].length, axis=1)

@@ -18,8 +18,10 @@ class DataLoader:
         self.dataset_config = dataset_config
         self.max_seq_length = max_seq_length
         self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
-        if self.tokenizer.pad_token_id is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.pad_token = self.tokenizer.pad_token  # type: ignore
+        self.eos_token = self.tokenizer.eos_token  # type: ignore
+        if self.eos_token is None:
+            self.eos_token = self.pad_token
         self.mesh = mesh
 
         self.samples = self._load_from_gcs()
@@ -63,7 +65,7 @@ class DataLoader:
         return np.array(total_rewards, dtype=np.float32), num_unparsable
 
     def prepare_batch(self, generations: list[InferenceRollout], train: bool) -> tuple[RLBatch, dict]:
-        tokens = self.pad_tokens(generations, self.tokenizer.pad_token_id, "rollout_tokens")
+        tokens = self.pad_tokens(generations, self.pad_token, "rollout_tokens")
         reference_model_logprobs = self.pad_tokens(generations, -np.inf, "rollout_logprobs")
 
         seq_lens = np.array(

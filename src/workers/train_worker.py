@@ -460,7 +460,7 @@ class AsyncTrainerWorker(Worker):
                     num_filtered_rollouts += 1
                     continue
 
-                if self.config.loss_config.rl_config.filter_zero_variance:
+                if self.config.loss_config.filter_zero_variance:
                     if self.train_dataset.check_rollout_zero_variance(rollout):
                         num_filtered_rollouts += 1
                         continue
