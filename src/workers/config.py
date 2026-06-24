@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import List, Optional, Protocol
+from typing import List, Optional
 
 import jax
 import jax.numpy as jnp
@@ -8,7 +8,7 @@ from flax import struct
 from jaxtyping import Array, PyTree
 from omegaconf import MISSING
 
-from src.data import DatasetConfig, RLBatch
+from src.data import DatasetConfig
 from src.model import KVCache, ModelConfig
 
 
@@ -108,24 +108,6 @@ class AsyncState:
     updated: bool
     update_lock: Lock = field(default_factory=Lock)
     weight_iteration: int = 0
-
-
-class LossFunction(Protocol):
-    """
-    A protocol for loss functions used in RLVR.
-    """
-
-    def __call__(self, x_logprobs: Array, token_mask: Array, batch: RLBatch) -> Array:
-        """
-        Compute the loss from the pre-computed PPO-clipped objective.
-        Args:
-            x_logprobs (Array): Log probabilities of the current policy. Shape: [B, T].
-            token_mask (Array): Mask for valid tokens. Shape: [B, T].
-            batch (RLBatch): The batch of data.
-        Returns:
-            loss (Array): The computed scalar loss.
-        """
-        ...
 
 
 @dataclass

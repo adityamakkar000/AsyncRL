@@ -12,6 +12,7 @@ import optax
 import stax
 from dotenv import load_dotenv
 from einops import rearrange
+from hydra.utils import instantiate
 from jaxtyping import Array, PyTree
 from omegaconf import OmegaConf
 from stax import staxLogger as logger
@@ -23,7 +24,6 @@ from src.data import DataLoader, InferenceRollout, RLBatch
 from src.model import Model
 
 from .config import TrainerConfig
-from .loss import get_single_step
 from .utils import Key, get_current_vm_internal_ip, setup, setup_transfer_server, write_to_gcs
 from .worker import Worker
 
@@ -190,16 +190,16 @@ class AsyncTrainerWorker(Worker):
         abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx, abstract=True)
         params_shape, opt_state_shape = abstract_state["params"], abstract_state["opt_state"]
 
-        step_fn = get_single_step(self.config.loss_config)
+        loss_fn = instantiate(config=self.config.loss_config.rl_config, loss_config=self.config.loss_config)
 
         # val fn not needed since we just care about val reward, not loss
         self.train_fn, _val_fn, shardings = stax.fn.get_steps_fn(
-            step_fn,
+            loss_fn,  # type: ignore
             self.model,
             self.tx,
             has_aux=True,
             grad_steps=self.config.grad_accum_steps,
-            reduce_fn=lambda d, b: d + b.token_mask.sum(),
+            reduce_fn=loss_fn.compute_normalization,
             val_steps=0,  # val steps is not used
             sharding=stax.ShardingConfig(
                 params_shape=params_shape,

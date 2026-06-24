@@ -1,3 +1,2 @@
-algorithm: cispo
-epsilon_high: 4
-epsilon_low: 0.18
+_target_: src.workers.loss.CISPOLoss
+epsilon: 4

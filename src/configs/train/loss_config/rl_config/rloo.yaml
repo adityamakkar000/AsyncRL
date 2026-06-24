@@ -1,3 +1,1 @@
-algorithm: rloo
-epsilon_high: 1.0
-epsilon_low: 0.1
+_target_: rloo
