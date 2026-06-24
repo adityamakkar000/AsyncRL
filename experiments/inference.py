@@ -16,8 +16,8 @@ RUN: TPUJOB.Cross | TPUJOB.Zip | TPUJOB.Vals = TPUJOB.Cross(
         TPUJOB.Vals("loss_config.inference_config.group_size", group_size),
         TPUJOB.Zip(
             [
-                TPUJOB.Vals("loss_config.inference_config._max_decode_batch_size", max_decode_batch_size),
-                TPUJOB.Vals("loss_config.inference_config._max_decode_prompts", max_prompt_decode),
+                TPUJOB.Vals("loss_config.inference_config.max_decode_batch_size", max_decode_batch_size),
+                TPUJOB.Vals("loss_config.inference_config.max_decode_prompts", max_prompt_decode),
             ]
         ),
     ]

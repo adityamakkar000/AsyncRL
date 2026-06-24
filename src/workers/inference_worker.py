@@ -179,18 +179,18 @@ class AsyncInferenceWorker(Worker):
             self.inference_config.max_prefill_sequence_len & (self.inference_config.max_prefill_sequence_len - 1) == 0
         ), f"max_prefill_sequence_len must be a power of 2, got {self.inference_config.max_prefill_sequence_len}"
 
-        assert self.inference_config._max_decode_prompts % (self.inference_config.n_replicas) == 0, (
-            f"_max_decode_prompts {self.inference_config._max_decode_prompts} must be divisible by n_replicas {self.inference_config.n_replicas}"
+        assert self.inference_config.max_decode_prompts % (self.inference_config.n_replicas) == 0, (
+            f"max_decode_prompts {self.inference_config.max_decode_prompts} must be divisible by n_replicas {self.inference_config.n_replicas}"
         )
 
-        assert (self.inference_config._max_decode_prompts * self.inference_config.group_size) % (
-            self.inference_config._max_decode_batch_size
+        assert (self.inference_config.max_decode_prompts * self.inference_config.group_size) % (
+            self.inference_config.max_decode_batch_size
         ) == 0, (
-            f"group_size * _max_decode_prompts {self.inference_config.group_size * self.inference_config._max_decode_prompts} must be divisible by _max_decode_batch_size {self.inference_config._max_decode_batch_size}"
+            f"group_size * max_decode_prompts {self.inference_config.group_size * self.inference_config.max_decode_prompts} must be divisible by max_decode_batch_size {self.inference_config.max_decode_batch_size}"
         )
 
-        assert self.inference_config._max_decode_batch_size % self.inference_config.n_replicas == 0, (
-            f"_max_decode_batch_size {self.inference_config._max_decode_batch_size} must be divisible by n_replicas {self.inference_config.n_replicas}"
+        assert self.inference_config.max_decode_batch_size % self.inference_config.n_replicas == 0, (
+            f"max_decode_batch_size {self.inference_config.max_decode_batch_size} must be divisible by n_replicas {self.inference_config.n_replicas}"
         )
 
         if self.inference_config.reasoning_budget is not None:
@@ -371,7 +371,7 @@ class AsyncInferenceWorker(Worker):
     ) -> InferenceState:
         logger.info(f"Compiling prefill for sequence length {input_tokens.shape[1]}", log_for_all=True)
 
-        max_decode_prompts = self.inference_config._max_decode_prompts
+        max_decode_prompts = self.inference_config.max_decode_prompts
         kv_cache_dtype = self.inference_config.kv_cache_dtype
 
         with jax.named_scope("prefill"):
@@ -621,7 +621,7 @@ class AsyncInferenceWorker(Worker):
 
         with Tracker(timer=True) as t:
             if state is None:
-                ids = [prompt_queue.pop() for _ in range(self.inference_config._max_decode_batch_size)]
+                ids = [prompt_queue.pop() for _ in range(self.inference_config.max_decode_batch_size)]
                 initial_ids: Array = jnp.array(ids, dtype=jnp.int32)
                 initial_ids = jax.device_put(initial_ids, self.shardings.split_sharding)
                 state = self.create_initial_state(prompts, initial_ids)
@@ -653,7 +653,7 @@ class AsyncInferenceWorker(Worker):
             self.global_rollouts[pid].rollout_tokens.append(finished["tokens"][i])
             self.global_rollouts[pid].rollout_logprobs.append(finished["logprobs"][i])
 
-        tokens_per_second = queued_steps * self.inference_config._max_decode_batch_size / t.data["time"]
+        tokens_per_second = queued_steps * self.inference_config.max_decode_batch_size / t.data["time"]
         sequences_per_second = queued_steps / t.data["time"]
         decode_metrics = {
             "decode_steps": queued_steps,
@@ -676,7 +676,7 @@ class AsyncInferenceWorker(Worker):
     def get_samples(self):
         with Tracker(timer=True) as t1:
             samples: list[Sample] = []
-            while len(samples) < self.inference_config._max_decode_prompts:
+            while len(samples) < self.inference_config.max_decode_prompts:
                 samples.append(self.async_options.prompt_queue.get(timeout=TIMEOUT))
 
         with Tracker(timer=True) as t2:
@@ -722,7 +722,7 @@ class AsyncInferenceWorker(Worker):
                 prev_state, batch_metrics = self.batch_rollout(input_tokens, seq_lens, gen_key, prev_state)
                 gather_metrics = self.gather_rollouts()
 
-                self.prompt_id_offset += self.inference_config._max_decode_prompts
+                self.prompt_id_offset += self.inference_config.max_decode_prompts
 
             metrics = (
                 batch_metrics

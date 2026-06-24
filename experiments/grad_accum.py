@@ -13,7 +13,7 @@ RUN: TPUJOB.Cross | TPUJOB.Zip | TPUJOB.Vals = TPUJOB.Cross(
         TPUJOB.Vals("data_config.batch_size", batch_size),
         TPUJOB.Vals("grad_accum_steps", grad_accum_steps),
         TPUJOB.Vals("loss_config.inference_config.group_size", group_size),
-        TPUJOB.Vals("loss_config.inference_config._max_decode_batch_size", max_decode_batch_size),
+        TPUJOB.Vals("loss_config.inference_config.max_decode_batch_size", max_decode_batch_size),
     ]
 )
 
