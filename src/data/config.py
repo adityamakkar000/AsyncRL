@@ -48,6 +48,7 @@ class RLBatch:
     rewards: jax.Array | np.ndarray  # [B] reward of each sequence
     group_mean: jax.Array | np.ndarray  # [B] mean reward for sequence's group
     group_std: jax.Array | np.ndarray  # [B] std of reward for sequence's group
+    token_mask: jax.Array | np.ndarray  # [B, T] mask for applying rl
 
     @classmethod
     def get_test_batch(cls, batch_size: int, max_seq_len: int) -> "RLBatch":
@@ -58,6 +59,7 @@ class RLBatch:
             rewards=np.zeros((batch_size,), dtype=np.float32),
             group_mean=np.zeros((batch_size,), dtype=np.float32),
             group_std=np.ones((batch_size,), dtype=np.float32),
+            token_mask=np.zeros((batch_size, max_seq_len), dtype=np.bool),
         )
 
 

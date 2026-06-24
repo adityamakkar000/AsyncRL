@@ -81,7 +81,16 @@ class DataLoader:
             return x.squeeze(-1) if x.shape[-1] == 1 else x
 
         rl_batch = jax.tree.map(
-            compress, RLBatch(tokens, reference_model_logprobs, seq_lens, rewards, group_mean, group_std)
+            compress,
+            RLBatch(
+                tokens,
+                np.where(np.isfinite(reference_model_logprobs), reference_model_logprobs, 0.0),
+                seq_lens,
+                rewards,
+                group_mean,
+                group_std,
+                token_mask=(reference_model_logprobs != -np.inf),
+            ),
         )
 
         num_unparsable = num_unparsable / self.dataset_config.batch_size

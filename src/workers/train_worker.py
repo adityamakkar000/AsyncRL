@@ -199,6 +199,7 @@ class AsyncTrainerWorker(Worker):
             self.tx,
             has_aux=True,
             grad_steps=self.config.grad_accum_steps,
+            reduce_fn=lambda d, b: d + b.token_mask.sum(),
             val_steps=0,  # val steps is not used
             sharding=stax.ShardingConfig(
                 params_shape=params_shape,

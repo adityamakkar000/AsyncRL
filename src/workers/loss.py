@@ -36,10 +36,7 @@ def cispo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: Los
     min_ratio = jax.lax.stop_gradient(jnp.minimum(ratio, config.rl_config.epsilon_high))
 
     token_loss = advantages[:, None] * min_ratio * x_logprobs * token_mask
-    total_tokens = jnp.maximum(jnp.sum(token_mask), 1)
-    token_loss = jnp.sum(token_loss) / total_tokens
-
-    return token_loss
+    return token_loss.sum()
 
 
 @register_algorithim("rloo")
@@ -54,11 +51,7 @@ def rloo_loss(x_logprobs: Array, token_mask: Array, batch: RLBatch, config: Loss
     advantages = batch.rewards - loo_mean
 
     token_loss = x_logprobs * token_mask * advantages[:, None]
-
-    total_tokens = jnp.sum(token_mask)
-    seq_mean = jnp.sum(token_loss) / jnp.maximum(total_tokens, 1)
-
-    return seq_mean
+    return token_loss.sum()
 
 
 def get_loss_fn(config: LossConfig) -> LossFunction:
