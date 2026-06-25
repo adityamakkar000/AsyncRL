@@ -12,6 +12,8 @@ from .config import LossConfig
 
 
 class LossFunction(abc.ABC):
+    name: str = "baseLoss"
+
     def __init__(self, loss_config: LossConfig):
         self.config = loss_config
 
@@ -72,6 +74,8 @@ class LossFunction(abc.ABC):
 
 
 class CISPOLoss(LossFunction):
+    name: str = "CISPO"
+
     def __init__(self, loss_config: LossConfig, epsilon: float = 4):
         super().__init__(loss_config)
         self.epsilon = epsilon
@@ -91,6 +95,8 @@ class CISPOLoss(LossFunction):
 
 
 class RLOOLoss(LossFunction):
+    name: str = "RLOO"
+
     def __init__(self, loss_config: LossConfig):
         super().__init__(loss_config)
 
