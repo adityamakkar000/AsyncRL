@@ -62,9 +62,10 @@ class LossFunction(abc.ABC):
         )
         ratio = jnp.exp(x_logprobs - safe_reference_logprobs)
 
+        # metrics will be reduced by compute_normalization function
         aux_metrics = {
             "loss": loss,
-            "is_ratio": jnp.sum(ratio * batch.token_mask) / jnp.maximum(jnp.sum(batch.token_mask), 1),
+            "is_ratio": jnp.sum(ratio * batch.token_mask),
         }
 
         return loss, aux_metrics
