@@ -44,6 +44,9 @@ loss_config:
     reasoning_budget: null 
     think_mode: true
     system_prompt: false
+  rl_config:
+    _target_: src.workers.loss.CISPOLoss
+    epsilon: 4
 
 async_config:
   train_workers: 1

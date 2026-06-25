@@ -5,13 +5,17 @@ model_name = [
     "final_run_max_seq_le4096_learning_r1e-06_learning_r1e-06_batch_size768_grad_accum8_filter_zerFalse",
 ]
 steps = [
-    # 0, 30, 60, 90 ,120
-    150,
-    180,
-    210,
-    240,
-    270,
-    300,
+    0,
+    30,
+    60,
+    90,
+    120,
+    # 150,
+    # 180,
+    # 210,
+    # 240,
+    # 270,
+    # 300,
 ]
 
 RUN = TPUJOB.Cross(

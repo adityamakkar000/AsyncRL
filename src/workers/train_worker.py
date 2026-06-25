@@ -190,11 +190,11 @@ class AsyncTrainerWorker(Worker):
         abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx, abstract=True)
         params_shape, opt_state_shape = abstract_state["params"], abstract_state["opt_state"]
 
-        loss_fn = instantiate(config=self.config.loss_config.rl_config, loss_config=self.config.loss_config)
+        loss_fn = instantiate(self.config.loss_config.rl_config, _recursive_=False, loss_config=self.config.loss_config)
 
         # val fn not needed since we just care about val reward, not loss
         self.train_fn, _val_fn, shardings = stax.fn.get_steps_fn(
-            loss_fn,  # type: ignore
+            loss_fn,
             self.model,
             self.tx,
             has_aux=True,
