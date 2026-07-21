@@ -176,3 +176,5 @@ class TrainerConfig:
 
     checkpoint_interval: int = 1000
     max_checkpoints_to_keep: int = 5
+
+    debug: bool = False

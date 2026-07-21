@@ -1,6 +1,6 @@
 import socket
 import time
-from functools import lru_cache, wraps
+from functools import lru_cache, partial, wraps
 from typing import Any, Callable, Optional
 
 import gcsfs
@@ -185,3 +185,26 @@ def get_current_vm_internal_ip():
 @lru_cache
 def get_global_ip():
     return GceTpuCluster.get_coordinator_address(60).split(":")[0]
+
+
+@partial(jax.jit, static_argnames=("mesh",))
+def rdma_transfer(x, mesh):
+    @partial(
+        jax.shard_map,
+        mesh=mesh,
+        out_specs=jax.P(),
+        in_specs=jax.P("processes"),
+    )
+    def _transfer(x):
+        idx = jax.lax.axis_index("processes")
+        x = jax.lax.cond(
+            idx == 0,
+            lambda x: x,  # Source process returns the input array
+            lambda x: jnp.zeros_like(x),  # Other processes return zeros
+            x,
+        )
+
+        x = jax.lax.psum(x, axis_name="processes")
+        return x
+
+    return jax.tree.map(_transfer, x)

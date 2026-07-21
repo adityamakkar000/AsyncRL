@@ -77,6 +77,11 @@ def main(cfg: DictConfig) -> None:
         ("processes", "local_devices"),
         axis_types=(AxisType.Explicit, AxisType.Explicit),
     )
+    global_mesh = jax.make_mesh(
+        (jax.process_count(), jax.local_device_count()),
+        ("processes", "local_devices"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
 
     local_prompt_queue = queue.Queue(
         maxsize=(cfg.data_config.batch_size // cfg.loss_config.inference_config.group_size)
@@ -106,6 +111,7 @@ def main(cfg: DictConfig) -> None:
         inference_metrics_queue=global_inference_metrics_queue,
         train_mesh=train_mesh,
         inference_mesh=inference_mesh,
+        global_mesh=global_mesh,
     )
 
     logger.info(OmegaConf.to_yaml(cfg), log_for_all=True)

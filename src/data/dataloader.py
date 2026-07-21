@@ -20,8 +20,8 @@ class DataLoader:
         self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
         self.pad_token = self.tokenizer.pad_token_id  # type: ignore
         self.eos_token = self.tokenizer.eos_token_id  # type: ignore
-        if self.eos_token is None:
-            self.eos_token = self.pad_token
+        if self.pad_token is None:
+            self.pad_token = self.eos_token
         self.mesh = mesh
 
         self.samples = self._load_from_gcs()

@@ -54,3 +54,4 @@ class AsyncOptions:
     inference_metrics_queue: queue.Queue[dict]
     train_mesh: jax.sharding.Mesh
     inference_mesh: jax.sharding.Mesh
+    global_mesh: jax.sharding.Mesh

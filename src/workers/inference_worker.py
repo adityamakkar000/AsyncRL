@@ -22,7 +22,6 @@ from .utils import (
     _maybe_force_eot,
     get_current_vm_internal_ip,
     naive_sample,
-    setup_transfer_server,
 )
 from .worker import Worker
 
@@ -79,8 +78,8 @@ class AsyncInferenceWorker(Worker):
 
         self.pad_token = self.tokenizer.pad_token_id  # type: ignore
         self.eos_token = self.tokenizer.eos_token_id  # type: ignore
-        if self.eos_token is None:
-            self.eos_token = self.pad_token
+        if self.pad_token is None:
+            self.pad_token = self.eos_token
 
         self.precompile_dict = {
             "prefill": {},
@@ -101,13 +100,12 @@ class AsyncInferenceWorker(Worker):
         self.worker_rank = stax.get_rank() - self.async_options.train_workers
 
         self.ip = get_current_vm_internal_ip()
-        self.transfer_server = setup_transfer_server(self.ip, port=8000)
 
         self.block_until_params_update()
 
     def monitor_weight_sync(self, async_state: AsyncState, async_options: AsyncOptions):
         while True:
-            address = async_options.weight_sync_queue.get()
+            _ = async_options.weight_sync_queue.get()
 
             stax.sync_over_mesh("beforeWeightSync", mesh=self.async_options.inference_mesh)
 
@@ -115,18 +113,22 @@ class AsyncInferenceWorker(Worker):
                 f"[weight_sync] Rank {stax.get_rank()} received sync signal from train worker, syncing weights to latest parameters...",
                 log_for_all=True,
             )
-            logger.info(f"[weight_sync] connecting to address {address}", log_for_all=True)
+            logger.info("[weight_sync] received sync signal", log_for_all=True)
 
-            with async_state.update_lock:
-                iteration = async_state.weight_iteration
+            def allocate_buffer(x):
+                return jax.make_array_from_single_device_arrays(
+                    x.shape,
+                    sharding=jax.NamedSharding(self.async_options.train_mesh, P()),
+                    arrays=[],
+                    dtype=self.inference_config.params_dtype,
+                )
 
-            client = self.transfer_server.connect(address)
+            params_buffer = jax.tree.map(allocate_buffer, async_state.MRUparams)
+            new_params = jax.device_put(params_buffer, jax.NamedSharding(self.async_options.inference_mesh, P()))
 
-            uuid = iteration * self.async_options.inference_workers + self.worker_rank
-            new_params = jax.tree.map(lambda x: x.block_until_ready(), client.pull(uuid, self.shape_dtype))
+            stax.sync_over_mesh("afterWeightSync1", self.async_options.inference_mesh)
             async_options.weight_sync_queue.put(f"inference_worker_{self.worker_rank}_done")
-
-            stax.sync_over_mesh("afterWeightSync", self.async_options.inference_mesh)
+            stax.sync_over_mesh("afterWeightSync2", self.async_options.inference_mesh)
 
             with async_state.update_lock:
                 async_state.MRUparams = new_params
@@ -593,7 +595,6 @@ class AsyncInferenceWorker(Worker):
         with jax.named_scope("sub_next_batch"):
             next_batch = self.create_batch(prompts, next_index)
             state = self.sub_batch(state, next_batch)
-
         return state, tokens, logprobs, prompt_ids, (after_length - before_length)
 
     def continuous_batch(

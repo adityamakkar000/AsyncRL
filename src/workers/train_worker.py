@@ -24,7 +24,7 @@ from src.data import DataLoader, InferenceRollout, RLBatch
 from src.model import Model
 
 from .config import TrainerConfig
-from .utils import Key, get_current_vm_internal_ip, setup, setup_transfer_server, write_to_gcs
+from .utils import Key, get_current_vm_internal_ip, setup, write_to_gcs
 from .worker import Worker
 
 load_dotenv()
@@ -51,7 +51,6 @@ class AsyncTrainerWorker(Worker):
         logger.info(f"runtime={stax.get_rank()}, distributed={dist.global_state.process_id}", log_for_all=True)
 
         self.ip = get_current_vm_internal_ip()
-        self.transfer_server = setup_transfer_server(self.ip, port=8000)
 
         with stax.Tracker(timer=True) as tracker:
             self._init_state()
@@ -362,10 +361,13 @@ class AsyncTrainerWorker(Worker):
         return state, metadata
 
     def save_checkpoint(self, step: int):
-        assert self.checkpointer is not None, "Checkpointer not set up."
-        state, metadata = self.make_save_tree()
-        logger.info(f"Saving checkpoint at step {step} ...", log_for_all=True)
-        self.checkpointer.save(step=step, checkpoint_data=state, metadata=metadata)
+        if not self.config.debug:
+            assert self.checkpointer is not None, "Checkpointer not set up."
+            state, metadata = self.make_save_tree()
+            logger.info(f"Saving checkpoint at step {step} ...", log_for_all=True)
+            self.checkpointer.save(step=step, checkpoint_data=state, metadata=metadata)
+        else:
+            logger.info(f"Debug mode enabled, skipping checkpoint save at step {step}.", log_for_all=True)
 
     def restore_save_tree(self):
         assert self.checkpointer is not None, "Checkpointer not set up."
@@ -390,36 +392,33 @@ class AsyncTrainerWorker(Worker):
 
     def train_sync_weights(self):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
+        logger.info("test 1")
 
         with stax.Tracker(timer=True) as t:
             params_cast = jax.tree.map(
                 lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), self.params
             )
-
-            params_cpu = jax.device_get(
-                jax.device_put(params_cast, jax.sharding.NamedSharding(self.train_mesh, jax.P()))
-            )
+            sharded_params = jax.device_put(params_cast, jax.sharding.NamedSharding(self.train_mesh, jax.P()))
 
             if self.worker_rank == 0:
-                address = self.transfer_server.address()
                 for _ in range(self.async_options.inference_workers):
-                    self.async_options.weight_sync_queue.put(address)
+                    self.async_options.weight_sync_queue.put("sync")
 
-                while not self.async_options.weight_sync_queue.empty():
-                    continue
+            self.sync_train_workers(f"weight_sync_{self.weight_iteration}")
+            while not self.async_options.weight_sync_queue.empty():
+                continue
 
-                sharded_params = jax.device_put(params_cpu, jax.NamedSharding(self.local_mesh, jax.P()))
-                for i in range(self.async_options.inference_workers):
-                    uuid = self.weight_iteration * self.async_options.inference_workers + i
-                    logger.info(f"[weight_sync] placing weights on uuid: {uuid}", log_for_all=True)
-                    self.transfer_server.await_pull(uuid, {"params": sharded_params})
+            _ = jax.device_put(sharded_params, jax.NamedSharding(self.async_options.inference_mesh, jax.P()))
 
+            if self.worker_rank == 0:
                 for _ in range(self.async_options.inference_workers):
                     logger.info(
                         f"[weight_sync] {self.async_options.weight_sync_queue.get(timeout=TIMEOUT)}", log_for_all=True
                     )
-
             self.sync_train_workers(f"weight_sync_{self.weight_iteration}")
+
+            del sharded_params
+            del params_cast
 
         self.weight_iteration += 1
         logger.info(f"[weight_sync] Weights sent to inference worker in {t.data['time']:.2f} seconds", log_for_all=True)
@@ -484,14 +483,15 @@ class AsyncTrainerWorker(Worker):
             metrics = self.async_options.inference_metrics_queue.get(timeout=TIMEOUT)
             metrics_per_worker[metrics["worker_id"]].append(metrics)
 
-        averaged_metrics = {
-            f"inference/worker_{worker_id}/{k}": sum(d[k] for d in metrics_list) / len(metrics_list)
-            if len(metrics_list) > 0
-            else 0.0
-            for worker_id, metrics_list in metrics_per_worker.items()
-            for k in metrics_list[0].keys()
-            if k != "worker_id"
-        }
+        averaged_metrics = dict()
+        for worker_id, metrics_list in metrics_per_worker.items():
+            if len(metrics_list) == 0:
+                logger.warning(f"No metrics received from inference worker {worker_id}.", log_for_all=True)
+            for k in metrics_list[0].keys():
+                if k != "worker_id":
+                    averaged_metrics[f"inference/worker_{worker_id}/{k}"] = sum(d[k] for d in metrics_list) / len(
+                        metrics_list
+                    )
 
         metrics = averaged_metrics | {
             "inference/total_tps": sum(

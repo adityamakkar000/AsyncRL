@@ -58,3 +58,5 @@ metrics_to_log:
   - "train/mean_reward"
   - "val/mean_reward"
   - "train/num_unparsable"
+
+debug: true
