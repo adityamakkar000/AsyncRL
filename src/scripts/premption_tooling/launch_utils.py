@@ -83,6 +83,7 @@ class LAUNCH_JOB:
     TPU_TYPE: TPUType
     RUNTIME: Runtime
     RETRIES: int = 3
+    DEBUG: bool = False
 
 
 def make_combos(RUN: Cross | Zip | Vals) -> list[dict[str, Any]]:
@@ -108,6 +109,7 @@ def run_tpu_jobs(
     RUNTIME: Runtime,
     RETRIES: int,
     keep_logs: bool = True,
+    debug: bool = False,
 ):
     # this get's current project assuming you used launch.py from the project root
     copy_dir = os.getcwd()
@@ -151,15 +153,18 @@ def run_tpu_jobs(
             "keep_logs": keep_logs,  # to keep logs after run ends
         }
 
-        try:
-            response = requests.post(f"{TPU_SERVER_URL}/run_job", json=post_args, timeout=30)
-            response.raise_for_status()
-            print(f"Job submitted: {response.json()}, details: {response.text}")
-        except requests.exceptions.HTTPError as err:
-            if response.status_code == 409:
-                print("Conflict Details:", response.text)  # Look here for the exact cause
-            else:
-                print("HTTP Error:", err)
+        if not debug:
+            try:
+                response = requests.post(f"{TPU_SERVER_URL}/run_job", json=post_args, timeout=30)
+                response.raise_for_status()
+                print(f"Job submitted: {response.json()}, details: {response.text}")
+            except requests.exceptions.HTTPError as err:
+                if response.status_code == 409:
+                    print("Conflict Details:", response.text)  # Look here for the exact cause
+                else:
+                    print("HTTP Error:", err)
+        else:
+            print(f"Debug mode enabled. Would have run job with args: {post_args}")
 
 
 def launch(job: LAUNCH_JOB) -> None:
@@ -176,4 +181,5 @@ def launch(job: LAUNCH_JOB) -> None:
         job.RUNTIME,
         job.RETRIES,
         keep_logs=True,
+        debug=job.DEBUG,
     )

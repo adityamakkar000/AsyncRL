@@ -32,7 +32,7 @@ BASE_CONFIG = "baseline"
 
 job = TPUJOB.LAUNCH_JOB(
     RUN=RUN,
-    EXPERIMENT_PREFIX="test_64",
+    EXPERIMENT_PREFIX="llama_4k",
     FIXED_OVERRIDES={
         "wandb_config.project": "baseline_v6",
         "learning_rate_init": 0.0,
@@ -55,6 +55,7 @@ job = TPUJOB.LAUNCH_JOB(
     TPU_TYPE=TPUJOB.TPUType.V5P_32,
     RUNTIME=TPUJOB.Runtime.V2_ALPHA_TPUV5,
     RETRIES=5,
+    DEBUG=False,
 )
 
 if __name__ == "__main__":
