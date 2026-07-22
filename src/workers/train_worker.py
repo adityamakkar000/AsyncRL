@@ -232,7 +232,11 @@ class AsyncTrainerWorker(Worker):
         max_seq_length = self.config.loss_config.inference_config.max_seq_len
         hf_model = self.config.model_config.hf_model_name
         self.train_dataset = DataLoader(
-            self.config.data_config, max_seq_length, hf_model, self.async_options.train_mesh
+            self.config.data_config,
+            max_seq_length,
+            self.config.loss_config.inference_config.system_prompt,
+            hf_model,
+            self.async_options.train_mesh,
         )
 
     @partial(setup, component="model")
