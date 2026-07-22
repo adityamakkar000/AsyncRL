@@ -6,6 +6,8 @@ import gcsfs
 import numpy as np
 from datasets import Dataset
 
+from src.constants import SYSTEM_PROMPT
+
 from .config import RLBatch, Sample
 
 
@@ -92,3 +94,17 @@ def convert_rejection_samples_to_dataset(
 
     filtered_rejection_rows = filter_rejection_sampled_data(gcs_path, lower_bound, upper_bound)
     return [Sample.from_dict(row) for row in filtered_rejection_rows]
+
+
+def apply_prompt_template(text: str) -> str:
+    return f"""Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
+{text}
+Remember to put your answer inside \\boxed{{}}."""
+
+
+def get_chat_template(system_prompt: bool, text: str) -> list[dict[str, str]]:
+    chat = []
+    if system_prompt:
+        chat.append({"role": "system", "content": SYSTEM_PROMPT})
+    chat.append({"role": "user", "content": apply_prompt_template(text)})
+    return chat

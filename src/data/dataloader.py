@@ -2,26 +2,33 @@ from typing import Any
 
 import jax
 import numpy as np
+from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
 from src.constants import DATA, GS_BUCKET
 
 from .config import DatasetConfig, InferenceRollout, RLBatch, Sample
-from .utils import compute_aux_metrics, load_jsonl_from_gcs
+from .utils import compute_aux_metrics, get_chat_template, load_jsonl_from_gcs
 from .verifier import Verifier
 
 
 class DataLoader:
     def __init__(
-        self, dataset_config: DatasetConfig, max_seq_length: int, hf_model: str, mesh: jax.sharding.Mesh
+        self,
+        dataset_config: DatasetConfig,
+        max_seq_length: int,
+        use_system_prompt: bool,
+        hf_model: str,
+        mesh: jax.sharding.Mesh,
     ) -> None:
         self.dataset_config = dataset_config
         self.max_seq_length = max_seq_length
+        self.use_system_prompt = use_system_prompt
         self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
         self.pad_token = self.tokenizer.pad_token_id  # type: ignore
         self.eos_token = self.tokenizer.eos_token_id  # type: ignore
-        if self.pad_token is None:
-            self.pad_token = self.eos_token
+        if self.eos_token is None:
+            self.eos_token = self.pad_token
         self.mesh = mesh
 
         self.samples = self._load_from_gcs()
@@ -38,8 +45,30 @@ class DataLoader:
         if not rows:
             raise ValueError(f"No rows found at {gs_path}")
         samples = [Sample.from_dict(r) for r in rows]
+        samples = self.filter_samples(samples)
+
         self._current_idx = 0
         return samples
+
+    def filter_samples(self, samples: list[Sample]) -> list[Sample]:
+        def filter_fn(x: Sample) -> bool:
+            if self.dataset_config.prompt_length is not None:
+                prompt_tokens = self.tokenizer.apply_chat_template(  # type: ignore
+                    get_chat_template(self.use_system_prompt, x.prompt),
+                    add_generation_prompt=True,
+                    enable_thinking=True,
+                    tokenize=True,
+                )
+                if len(prompt_tokens) > self.dataset_config.prompt_length:
+                    return False
+
+            return True
+
+        filtered_dataset = [s for s in samples if filter_fn(s)]
+        logger.info(
+            f"[dataset] Filtered {len(samples) - len(filtered_dataset)} samples out of {len(samples)} based on prompt_length and solution_length constraints."
+        )
+        return filtered_dataset
 
     def __call__(self, num_prompts: int) -> list[Sample]:
         samples = [

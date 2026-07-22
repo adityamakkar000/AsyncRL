@@ -38,6 +38,7 @@ class DatasetConfig:
     name: str
     batch_size: int
     gcs_path: str | None = None
+    prompt_length: int | None = None
 
 
 @struct.dataclass

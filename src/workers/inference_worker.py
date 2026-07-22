@@ -12,8 +12,8 @@ from stax import Tracker
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
-from src.constants import INTERUPT_THINKING_PHARSE, SYSTEM_PROMPT, TIMEOUT, AsyncOptions
-from src.data import InferenceRollout, Sample
+from src.constants import INTERUPT_THINKING_PHARSE, TIMEOUT, AsyncOptions
+from src.data import InferenceRollout, Sample, get_chat_template
 from src.model import KVCache, Model
 
 from .config import AsyncState, InferenceShardings, InferenceState, TrainerConfig
@@ -26,20 +26,6 @@ from .utils import (
 from .worker import Worker
 
 AXIS_NAME = "data"
-
-
-def apply_prompt_template(text: str) -> str:
-    return f"""Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
-{text}
-Remember to put your answer inside \\boxed{{}}."""
-
-
-def get_chat_template(system_prompt: bool, text: str) -> list[dict[str, str]]:
-    chat = []
-    if system_prompt:
-        chat.append({"role": "system", "content": SYSTEM_PROMPT})
-    chat.append({"role": "user", "content": apply_prompt_template(text)})
-    return chat
 
 
 class AsyncInferenceWorker(Worker):
