@@ -53,6 +53,7 @@ def get_queues():
 @hydra.main(version_base=None, config_path="./configs/train")
 def main(cfg: DictConfig) -> None:
     stax.init_distributed_jax()
+    breakpoint()
 
     train_workers = cfg.async_config.train_workers
     assert (n_hosts := jax.process_count()) > train_workers > 0, (
