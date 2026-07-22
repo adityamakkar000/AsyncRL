@@ -24,7 +24,7 @@ RUN: TPUJOB.Cross | TPUJOB.Zip | TPUJOB.Vals = TPUJOB.Cross(
                 TPUJOB.Vals("grad_accum_steps", grad_accum_steps),
             ]
         ),
-        TPUJOB.Vals("loss_config.rl_config.filter_zero_variance", variance_filtering),
+        TPUJOB.Vals("loss_config.filter_zero_variance", variance_filtering),
     ]
 )
 
@@ -52,7 +52,7 @@ job = TPUJOB.LAUNCH_JOB(
     BASE_CONFIG=BASE_CONFIG,
     ZONE=TPUJOB.Zone.US_EAST5_A,
     JOB_TYPE=TPUJOB.JOB_TYPES.TRAIN,
-    TPU_TYPE=TPUJOB.TPUType.V5P_64,
+    TPU_TYPE=TPUJOB.TPUType.V5P_32,
     RUNTIME=TPUJOB.Runtime.V2_ALPHA_TPUV5,
     RETRIES=5,
 )
