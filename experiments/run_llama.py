@@ -5,7 +5,7 @@ max_seq_len = [4096]
 lr = [1e-6]
 
 batch_size = [768]
-grad_accum_steps = [8]
+grad_accum_steps = [16]
 
 variance_filtering = [True, False]
 
