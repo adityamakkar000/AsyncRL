@@ -1,7 +1,6 @@
 defaults:
   - base 
   - model_config: qwen_0.6b_base
-  - sharding_config: fsdp
   - loss_config: loss
   - datasets@data_config: gsm8k
   - override loss_config/inference_config: debug

@@ -1,8 +1,0 @@
-
-defaults: 
-  - base 
-  - _self_
-
-sharding_type: "dp"
-opt_state_offload: false
-data_shard_dim: 0

@@ -112,11 +112,16 @@ class AsyncState:
 
 @dataclass
 class ShardingConfig:
-    sharding_type: str = "single"  # "single", "dp", "fsdp"
     opt_state_offload: bool = False
     data_shard_dim: int = 0
+    cp_shard_dim: int = 0
+
     min_bytes_for_fsdp: int = int(1e6)  # 1e6/(1024*1024) = 1MB
     weight_shard_dim: int = 0
+
+    dp_group_size: int = 1
+    cp_group_size: int = 1
+    fsdp_group_size: int = -1
 
 
 @dataclass

@@ -1,7 +1,6 @@
 defaults:
   - base
   - model_config: qwen_1.7b_base
-  - sharding_config: fsdp
   - loss_config: loss
   - datasets@data_config: troll-17k-train-filtered
   - _self_
@@ -43,6 +42,16 @@ loss_config:
     reasoning_budget: null 
     think_mode: true
     system_prompt: true
+
+sharding_config: 
+  opt_state_offload: false
+  data_shard_dim: 0
+  min_bytes_for_fsdp: 1048576
+  weight_shard_dim: 0
+  cp_shard_dim: 1
+  dp_group_size: 1
+  cp_group_size: 1
+  fsdp_group_size: -1
 
 async_config:
   train_workers: 2
