@@ -49,12 +49,12 @@ loss_config:
 
 sharding_config: 
   opt_state_offload: false
-  data_shard_dim: 0
   min_bytes_for_fsdp: 1048576
   weight_shard_dim: 0
+  data_shard_dim: 0
   cp_shard_dim: 1
   dp_group_size: 1
-  cp_group_size: 1
+  cp_group_size: 2
   fsdp_group_size: -1
 
 

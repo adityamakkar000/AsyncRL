@@ -392,7 +392,6 @@ class AsyncTrainerWorker(Worker):
 
     def train_sync_weights(self):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
-        logger.info("test 1")
 
         with stax.Tracker(timer=True) as t:
             params_cast = jax.tree.map(
@@ -507,7 +506,6 @@ class AsyncTrainerWorker(Worker):
 
         with stax.Tracker(timer=True) as t:
             global_batch = self.shard_data_fn(local_batch)
-            breakpoint()
             global_train_batch = jax.tree.map(
                 lambda x: rearrange(
                     x,
