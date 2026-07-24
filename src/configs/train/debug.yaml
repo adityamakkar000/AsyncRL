@@ -54,7 +54,7 @@ sharding_config:
   data_shard_dim: 0
   cp_shard_dim: 1
   dp_group_size: 1
-  cp_group_size: 2
+  cp_group_size: 1 
   fsdp_group_size: -1
 
 
