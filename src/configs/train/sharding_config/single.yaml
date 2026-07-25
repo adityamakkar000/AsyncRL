@@ -1,5 +1,0 @@
-defaults: 
-  - base 
-  - _self_
-
-sharding_type: "single"

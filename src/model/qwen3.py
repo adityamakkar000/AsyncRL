@@ -17,7 +17,16 @@ def flash_attention_naive(q, k, v, mask, sm_scale):
 
 
 flash_attention_sharded = jax.shard_map(
-    flash_attention_naive, in_specs=(P("dp"), P("dp"), P("dp"), P("dp"), None), out_specs=(P("dp")), check_vma=False
+    flash_attention_naive,
+    in_specs=(
+        P(("dp", "fsdp"), "cp", None, None),
+        P(("dp", "fsdp"), "cp", None, None),
+        P(("dp", "fsdp"), "cp", None, None),
+        P(("dp", "fsdp"), None),
+        None,
+    ),
+    out_specs=(P(("dp", "fsdp"), "cp", None, None)),
+    check_vma=False,
 )
 
 
@@ -123,13 +132,19 @@ class GroupedQueryAttention(nn.Module):
 
         out = jnp.einsum("btTgr, bTgd -> btgrd", wei, v)
 
-        out = einops.rearrange(out, "b t g r d -> b t (g r d)")
+        out = einops.rearrange(out, "b t g r d -> b (g r) t d")
         return out, kv_cache
 
     def flash_gqa(self, q: Array, k: Array, v: Array, mask: Array) -> Array:
         q = einops.rearrange(q, "... t h d -> ... h t d", d=self.head_dim)
         k = einops.rearrange(k, "... t g d -> ... g t d", d=self.head_dim)
         v = einops.rearrange(v, "... t g d -> ... g t d", d=self.head_dim)
+
+        if not self.is_mutable_collection("params"):
+            p_spec = jax.sharding.PartitionSpec(("dp", "fsdp"), "cp", None, None)
+            q = jax.lax.with_sharding_constraint(q, p_spec)
+            k = jax.lax.with_sharding_constraint(k, p_spec)
+            v = jax.lax.with_sharding_constraint(v, p_spec)
 
         k = jnp.repeat(k, self.kv_group_size, axis=1)
         v = jnp.repeat(v, self.kv_group_size, axis=1)
@@ -141,7 +156,10 @@ class GroupedQueryAttention(nn.Module):
             else flash_attention_naive(q, k, v, mask, sm_scale)
         )
 
-        out = einops.rearrange(out, "b h t d -> b t (h d)")
+        if not self.is_mutable_collection("params"):
+            p_spec = jax.sharding.PartitionSpec(("dp", "fsdp"), None, "cp", None)
+            out = jax.lax.with_sharding_constraint(out, p_spec)
+
         return out
 
     @nn.compact
@@ -174,6 +192,7 @@ class GroupedQueryAttention(nn.Module):
         else:
             out = self.flash_gqa(q, k, v, mask)
 
+        out = einops.rearrange(out, "b h t d -> b t (h d)")
         out = out.astype(self.activation_dtype)
         out = nn.Dense(features=self.model_dim, use_bias=False, dtype=self.activation_dtype)(out)
 

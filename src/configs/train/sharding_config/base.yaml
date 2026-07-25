@@ -1,4 +1,0 @@
-opt_state_offload: false
-data_shard_dim: 0
-min_bytes_for_fsdp: 1000000
-weight_shard_dim: 0

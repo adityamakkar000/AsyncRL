@@ -91,8 +91,6 @@ class AsyncTrainerWorker(Worker):
             raise ValueError("grad_clip must be positive if set")
         if (cfg.warmup_steps + cfg.decay_steps) > 1.0:
             raise ValueError("warmup_steps and decay_steps must sum to at most 1.0")
-        if cfg.sharding_config.sharding_type not in ["single", "dp", "fsdp"]:
-            raise ValueError("sharding_type must be one of 'single', 'dp', or 'fsdp'")
         if cfg.data_config.batch_size % cfg.loss_config.inference_config.group_size != 0:
             raise ValueError(
                 f"Batch size must be divisible by group size for proper batching in inference, got {cfg.data_config.batch_size} batch size and {cfg.loss_config.inference_config.group_size} group size."
@@ -104,17 +102,12 @@ class AsyncTrainerWorker(Worker):
             f"Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {train_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
         )
 
-        n_devices = jax.device_count() if cfg.sharding_config.sharding_type in ["fsdp", "dp"] else 1
-
-        if cfg.sharding_config.sharding_type == "single":
-            assert jax.process_count() == 1, (
-                "Single sharding type does not support distributed training across multiple hosts."
-            )
-
+        n_devices = jax.device_count()  # total mesh size is n_devices and they all shard batch
+        # dp_group = cfg.sharding_config.dp_group_size * cfg.sharding_config.fsdp_group_size
+        # assert dp_group > jax.process_count(), f"dp group sharding batch should be greater than the number of hosts, got {dp_group} dp group size and {jax.process_count()} hosts."
         assert train_batch_size % (n_devices * cfg.grad_accum_steps) == 0, (
             f"Train batch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation, got {train_batch_size} train batch size, {n_devices} devices, and {cfg.grad_accum_steps} grad_accum_steps."
         )
-
         assert (train_batch_size // cfg.loss_config.inference_config.group_size) % jax.process_count() == 0, (
             f"Number of groups per step must be divisible by number of hosts for proper distribution of groups, got {train_batch_size} train batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
         )
@@ -203,11 +196,14 @@ class AsyncTrainerWorker(Worker):
             sharding=stax.ShardingConfig(
                 params_shape=params_shape,
                 opt_state_shape=opt_state_shape,
-                sharding_type=stax.ShardingType(self.config.sharding_config.sharding_type),
                 opt_state_offload=self.config.sharding_config.opt_state_offload,
                 min_bytes_for_fsdp=self.config.sharding_config.min_bytes_for_fsdp,
                 data_shard_dim=self.config.sharding_config.data_shard_dim,
+                cp_shard_dim=self.config.sharding_config.cp_shard_dim,
                 weight_shard_dim=self.config.sharding_config.weight_shard_dim,
+                dp_group_size=self.config.sharding_config.dp_group_size,
+                cp_group_size=self.config.sharding_config.cp_group_size,
+                fsdp_group_size=self.config.sharding_config.fsdp_group_size,
             ),
             # only use devices on the train worker's mesh
             devices=self.async_options.train_mesh.devices.reshape(-1),
@@ -396,7 +392,6 @@ class AsyncTrainerWorker(Worker):
 
     def train_sync_weights(self):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
-        logger.info("test 1")
 
         with stax.Tracker(timer=True) as t:
             params_cast = jax.tree.map(
@@ -510,6 +505,7 @@ class AsyncTrainerWorker(Worker):
         assert self.shard_data_fn is not None, "Sharding function not set up."
 
         with stax.Tracker(timer=True) as t:
+            global_batch = self.shard_data_fn(local_batch)
             global_train_batch = jax.tree.map(
                 lambda x: rearrange(
                     x,
@@ -517,7 +513,7 @@ class AsyncTrainerWorker(Worker):
                     m=self.config.data_config.batch_size // self.config.grad_accum_steps,
                     g=self.config.grad_accum_steps,
                 ),  # [grad_accum_steps, minibatch_size, seq_len]
-                self.shard_data_fn(local_batch),
+                global_batch,
             )
 
             if profile:
