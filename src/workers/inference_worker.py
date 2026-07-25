@@ -129,7 +129,11 @@ class AsyncInferenceWorker(Worker):
             if self.async_state.updated:
                 self.async_state.updated = False
                 self.params = jax.tree.map(
-                    lambda x, s: jax.device_put(x, s),
+                    lambda x, s: jax.make_array_from_single_device_arrays(
+                        x.shape,
+                        sharding=s,
+                        arrays=[x.addressable_shards[i].data for i in range(jax.local_device_count())],
+                    ),
                     self.async_state.MRUparams,
                     self.shardings.params_sharding,
                 )
