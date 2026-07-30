@@ -1,3 +1,4 @@
+from multiprocessing import Value
 import json
 import os
 import threading
@@ -95,6 +96,12 @@ class AsyncTrainerWorker(Worker):
             raise ValueError(
                 f"Batch size must be divisible by group size for proper batching in inference, got {cfg.data_config.batch_size} batch size and {cfg.loss_config.inference_config.group_size} group size."
             )
+        if cfg.loss_config.use_fused_loss:
+            vocab_size = cfg.model_config.model_args.get("vocab_size", None)
+            if vocab_size is not None and vocab_size % cfg.loss_config.fused_chunk_size != 0: 
+                raise ValueError(
+                    f"Fused chunk size {cfg.loss_config.fused_chunk_size} must evenly divide vocab_size {vocab_size}."
+                )
 
         n_hosts = jax.process_count()
         train_batch_size = cfg.data_config.batch_size

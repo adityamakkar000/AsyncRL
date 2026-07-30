@@ -17,7 +17,7 @@ from stax import staxLogger as logger
 
 from .config import BaseModel, ModelConfig
 from .qwen3 import KVCache
-from .utils import convert_dtype
+from .utils import convert_dtype, fused_linear_selection, get_embedding_weights
 
 shardingType = Optional[PyTree[Sharding]]
 
@@ -150,18 +150,21 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
+        fused_output: bool = False,
     ) -> tuple[Array, list[KVCache]]:
-        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache)
+        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, fused_output)
 
         return logits, cache
-
-    def apply(
+    
+    def fused_selection_call(
         self,
         params: PyTree,
-        *,
+        *, 
         x: Array,
         sequence_lens: Array,
-        kv_cache: Optional[list[KVCache]] = None,
+        targets: Array,
+        kv_cache: Optional[list[KVCache]] = None, 
+        chunk_size: int = 1024
     ) -> tuple[Array, list[KVCache]]:
         """
         Forward pass of the model
@@ -171,10 +174,42 @@ class Model(HFModelBase):
             sequence_lens: Sequence lengths of shape (B,).
             kv_cache: Optional list of KVCache for each layer.
         Returns:
-            logits: Output logits of shape (B, T, vocab_size).
+            logits: Output logits of shape (B, T, D) and then selected and returns (B, T)
             out_cache: Optional list of KVCache for each layer if kv_cache was provided.
         """
-        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache)
+        B, T = x.shape
+        hidden_output, cache = self.model.apply(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, fused_output=True) # B, T, D
+        D = hidden_output.shape[-1]
+        weights = get_embedding_weights(params["params"]) # D, V 
+
+        flat_hidden = hidden_output[:, :-1, :].reshape(B * (T-1), D)
+        flat_targets = targets.reshape(B * (T-1))
+        logprobs = fused_linear_selection(flat_hidden, weights, flat_targets, chunk_size).reshape(B, -1) # B, T-1
+
+        return logprobs, cache
+
+
+    def apply(
+        self,
+        params: PyTree,
+        *,
+        x: Array,
+        sequence_lens: Array,
+        kv_cache: Optional[list[KVCache]] = None,
+        fused_output: bool = False,
+    ) -> tuple[Array, list[KVCache]]:
+        """
+        Forward pass of the model
+        Args:
+            params: Model parameters.
+            x: Input tokens of shape (B, T).
+            sequence_lens: Sequence lengths of shape (B,).
+            kv_cache: Optional list of KVCache for each layer.
+        Returns:
+            logits: Output logits of shape (B, T, vocab_size)
+            out_cache: Optional list of KVCache for each layer if kv_cache was provided.
+        """
+        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, fused_output=fused_output)
 
     @property
     def sequence_len(self) -> int:
