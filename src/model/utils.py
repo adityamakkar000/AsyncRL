@@ -260,3 +260,54 @@ def save_to_hf(dir_path: str, params: PyTree, hf_model_name: str, reverse_hf_map
 
     new_tensors = convert_pytree(params, reverse_hf_mapping)
     save_file(new_tensors, f"{dir_path}/model.safetensors")
+
+
+def get_embedding_weights(params: PyTree) -> Array:
+    return jnp.transpose(params["token_emb"]["embedding"])
+
+
+def make_chunks(V: int, chunk_size: int):
+    assert V % chunk_size == 0, "V must be divisible by chunk_size"
+    num_chunks = V // chunk_size
+    chunk_starts = jnp.arange(num_chunks) * chunk_size
+    return num_chunks, chunk_starts
+
+
+def fused_linear_selection(h, W, targets, chunk_size=1024) -> Array:
+    B, D = h.shape  # where B = B * T
+    _, V = W.shape
+    chunk_size = min(chunk_size, V)
+    num_chunks, chunk_starts = make_chunks(V, chunk_size)
+
+    weighted_chunks = W.reshape(D, num_chunks, chunk_size).transpose(1, 0, 2)  # num_chunks x D x chunk_size
+
+    max_logits = jnp.full((B,), -jnp.inf, dtype=jnp.float32)
+    sum_exp = jnp.zeros((B,), dtype=jnp.float32)
+    target_logits = jnp.zeros((B,), dtype=jnp.float32)
+    init_state = (max_logits, sum_exp, target_logits, h)
+
+    def body_fn(carry, chunk):
+        max_logits, sum_exp, target_logits, h = carry
+        weighted_chunk, chunk_start = chunk
+        logits_chunked = h @ weighted_chunk  # B x chunk_size
+
+        chunk_max = jnp.max(logits_chunked, axis=-1)  # B
+        new_max_logits = jnp.maximum(max_logits, chunk_max)
+
+        sum_exp *= jnp.exp(max_logits - new_max_logits)
+        sum_exp += jnp.sum(jnp.exp(logits_chunked - new_max_logits[:, None]), axis=1)
+
+        chunk_indices = chunk_start + jnp.arange(chunk_size)
+        is_target = targets[:, None] == chunk_indices[None, :]
+        target_logits = target_logits + jnp.sum(jnp.where(is_target, logits_chunked, 0.0), axis=1)
+
+        return (new_max_logits, sum_exp, target_logits, h), None
+
+    (max_logits, sum_exp, target_logits, _), _ = jax.lax.scan(
+        jax.checkpoint(body_fn), init_state, (weighted_chunks, chunk_starts)
+    )
+
+    log_sum_exp = max_logits + jnp.log(sum_exp)
+    output = target_logits - log_sum_exp  # (B,)
+
+    return output  # (B, )

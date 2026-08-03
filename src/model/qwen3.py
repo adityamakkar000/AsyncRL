@@ -260,6 +260,7 @@ class Qwen3(BaseModel):
         x: Array,
         sequence_lens: jax.Array,
         kv_cache: Optional[list[KVCache]] = None,
+        fused_output: bool = False,
     ) -> tuple[Array, list[KVCache]]:
         B, T = x.shape
         embed_layer = nn.Embed(
@@ -314,10 +315,13 @@ class Qwen3(BaseModel):
 
         x = RMSNorm(activation_dtype=self.activation_dtype)(x)
 
-        if self.tie_weights:
-            logits = embed_layer.attend(x)
+        if not fused_output:
+            if self.tie_weights:
+                logits = embed_layer.attend(x)
+            else:
+                logits = nn.Dense(features=self.vocab_size, use_bias=False, dtype=jnp.float32)(x)
         else:
-            logits = nn.Dense(features=self.vocab_size, use_bias=False, dtype=jnp.float32)(x)
+            logits = x
 
         logits = logits.astype(jnp.float32)
         return logits, out_cache

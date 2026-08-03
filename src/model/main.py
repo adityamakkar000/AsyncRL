@@ -15,9 +15,11 @@ from optax import GradientTransformation
 from stax import HFModelBase
 from stax import staxLogger as logger
 
+from src.data import RLBatch
+
 from .config import BaseModel, ModelConfig
 from .qwen3 import KVCache
-from .utils import convert_dtype
+from .utils import convert_dtype, fused_linear_selection, get_embedding_weights
 
 shardingType = Optional[PyTree[Sharding]]
 
@@ -150,18 +152,46 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: Optional[list[KVCache]] = None,
+        fused_output: bool = False,
     ) -> tuple[Array, list[KVCache]]:
-        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache)
+        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, fused_output)
 
-        return logits, cache
+        return logits, cache  # type: ignore
 
-    def apply(
+    def get_logprobs(self, params: PyTree, batch: RLBatch) -> Array:
+        targets = batch.tokens[:, 1:]
+        if self.config.fused_chunk_size is not None:
+            x_logprobs, kv_cache = self.fused_selection_call(
+                {"params": params},
+                x=batch.tokens,  # type: ignore
+                sequence_lens=batch.seq_lens,  # type: ignore
+                targets=targets,  # type: ignore
+                kv_cache=None,
+                chunk_size=self.config.fused_chunk_size,
+            )
+
+        else:
+            x_logits, kv_cache = self.apply(
+                {"params": params},
+                x=batch.tokens,  # type: ignore
+                sequence_lens=batch.seq_lens,  # type: ignore
+                kv_cache=None,
+            )
+
+            x_logprobs = jax.nn.log_softmax(x_logits[:, :-1, :], axis=-1)
+            x_logprobs: Array = jnp.take_along_axis(x_logprobs, targets[..., None], axis=-1)[..., 0]
+
+        return x_logprobs
+
+    def fused_selection_call(
         self,
         params: PyTree,
         *,
         x: Array,
         sequence_lens: Array,
+        targets: Array,
         kv_cache: Optional[list[KVCache]] = None,
+        chunk_size: int = 1024,
     ) -> tuple[Array, list[KVCache]]:
         """
         Forward pass of the model
@@ -171,10 +201,43 @@ class Model(HFModelBase):
             sequence_lens: Sequence lengths of shape (B,).
             kv_cache: Optional list of KVCache for each layer.
         Returns:
-            logits: Output logits of shape (B, T, vocab_size).
+            logits: Output logits of shape (B, T, D) and then selected and returns (B, T)
             out_cache: Optional list of KVCache for each layer if kv_cache was provided.
         """
-        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache)
+        B, T = x.shape
+        hidden_output, cache = self.model.apply(
+            params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, fused_output=True
+        )  # B, T, D
+        D = hidden_output.shape[-1]
+        weights = get_embedding_weights(params["params"])  # D, V
+
+        flat_hidden = hidden_output[:, :-1, :].reshape(B * (T - 1), D)
+        flat_targets = targets.reshape(B * (T - 1))
+        logprobs = fused_linear_selection(flat_hidden, weights, flat_targets, chunk_size).reshape(B, -1)  # B, T-1
+
+        return logprobs, cache  # type: ignore
+
+    def apply(
+        self,
+        params: PyTree,
+        *,
+        x: Array,
+        sequence_lens: Array,
+        kv_cache: Optional[list[KVCache]] = None,
+        fused_output: bool = False,
+    ) -> tuple[Array, list[KVCache]]:
+        """
+        Forward pass of the model
+        Args:
+            params: Model parameters.
+            x: Input tokens of shape (B, T).
+            sequence_lens: Sequence lengths of shape (B,).
+            kv_cache: Optional list of KVCache for each layer.
+        Returns:
+            logits: Output logits of shape (B, T, vocab_size)
+            out_cache: Optional list of KVCache for each layer if kv_cache was provided.
+        """
+        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, fused_output=fused_output)
 
     @property
     def sequence_len(self) -> int:
