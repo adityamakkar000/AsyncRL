@@ -40,31 +40,10 @@ class LossFunction(abc.ABC):
         raise NotImplementedError()
 
     def __call__(self, model: Model, params: PyTree, batch: RLBatch, train: bool = True) -> tuple[Array, PyTree]:
-        targets = batch.tokens[:, 1:]
+        x_logprobs = model.get_logprobs(params, batch)
 
-        if self.config.use_fused_loss: 
-            x_logprobs, kv_cache = model.fused_selection_call(
-                {"params": params}, 
-                x=batch.tokens, 
-                sequence_lens=batch.seq_lens, 
-                targets=targets, 
-                kv_cache=None, 
-                chunk_size=self.config.fused_chunk_size
-            )
-        
-        else:
-            x_logits, kv_cache = model.apply(
-                {"params": params},
-                x=batch.tokens,  # type: ignore
-                sequence_lens=batch.seq_lens,  # type: ignore
-                kv_cache=None,
-            )
-
-            x_logprobs = jax.nn.log_softmax(x_logits[:, :-1, :], axis=-1)
-            x_logprobs: Array = jnp.take_along_axis(x_logprobs, targets[..., None], axis=-1)[..., 0]
-        
         batch = batch.replace(  # type: ignore
-            tokens=targets,
+            tokens=batch.tokens[:, 1:],
             reference_model_logprobs=batch.reference_model_logprobs[:, 1:],
             token_mask=batch.token_mask[:, 1:],
         )

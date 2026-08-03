@@ -136,8 +136,6 @@ class LossConfig:
     rl_config: Dict[str, Any] = MISSING
     inference_config: InferenceConfig = field(default_factory=InferenceConfig)
     filter_zero_variance: bool = False
-    use_fused_loss: bool = False
-    fused_chunk_size: int = 1024
 
 
 @dataclass

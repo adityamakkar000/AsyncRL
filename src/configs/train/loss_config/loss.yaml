@@ -2,6 +2,3 @@ defaults:
   - rl_config: cispo
   - inference_config: main
   - _self_
-
-# use_fused_loss: true
-# fused_chunk_size: 1187

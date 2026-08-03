@@ -261,17 +261,20 @@ def save_to_hf(dir_path: str, params: PyTree, hf_model_name: str, reverse_hf_map
     new_tensors = convert_pytree(params, reverse_hf_mapping)
     save_file(new_tensors, f"{dir_path}/model.safetensors")
 
+
 def get_embedding_weights(params: PyTree) -> Array:
-    return jnp.transpose(params["token_emb"]['embedding'])
+    return jnp.transpose(params["token_emb"]["embedding"])
+
 
 def make_chunks(V: int, chunk_size: int):
-    assert V % chunk_size == 0, ("V must be divisible by chunk_size")
+    assert V % chunk_size == 0, "V must be divisible by chunk_size"
     num_chunks = V // chunk_size
     chunk_starts = jnp.arange(num_chunks) * chunk_size
     return num_chunks, chunk_starts
 
-def fused_linear_selection(h, W, targets, chunk_size=1024):
-    B, D = h.shape # where B = B * T 
+
+def fused_linear_selection(h, W, targets, chunk_size=1024) -> Array:
+    B, D = h.shape  # where B = B * T
     _, V = W.shape
     chunk_size = min(chunk_size, V)
     num_chunks, chunk_starts = make_chunks(V, chunk_size)
@@ -300,9 +303,11 @@ def fused_linear_selection(h, W, targets, chunk_size=1024):
 
         return (new_max_logits, sum_exp, target_logits, h), None
 
-    (max_logits, sum_exp, target_logits, _), _ = jax.lax.scan(jax.checkpoint(body_fn), init_state, (weighted_chunks, chunk_starts))
+    (max_logits, sum_exp, target_logits, _), _ = jax.lax.scan(
+        jax.checkpoint(body_fn), init_state, (weighted_chunks, chunk_starts)
+    )
 
     log_sum_exp = max_logits + jnp.log(sum_exp)
-    output = target_logits - log_sum_exp  # (B,) 
+    output = target_logits - log_sum_exp  # (B,)
 
-    return output # (B, ) 
+    return output  # (B, )
