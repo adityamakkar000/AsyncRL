@@ -46,6 +46,9 @@ loss_config:
     _target_: src.workers.loss.CISPOLoss
     epsilon: 4
 
+model_config:
+  fused_chunk_size: !!null
+
 sharding_config: 
   opt_state_offload: false
   min_bytes_for_fsdp: 1048576
