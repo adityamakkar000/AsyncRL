@@ -21,6 +21,7 @@ class KVCache:
 class ModelConfig:
     hf_model_name: str
     model_args: Dict[str, Any] = MISSING
+    fused_chunk_size: Optional[int] = 1024
 
 
 class BaseModel(abc.ABC, nn.Module):

@@ -17,8 +17,7 @@ from stax import staxLogger as logger
 
 from src.data import RLBatch
 
-from .config import BaseModel, ModelConfig
-from .qwen3 import KVCache
+from .config import BaseModel, KVCache, ModelConfig
 from .utils import convert_dtype, fused_linear_selection, get_embedding_weights
 
 shardingType = Optional[PyTree[Sharding]]
