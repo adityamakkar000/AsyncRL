@@ -18,39 +18,9 @@ class KVCache:
 
 
 @dataclass
-class QwenConfig:
-    vocab_size: int = MISSING
-    d_ff: int = MISSING
-    sequence_len: int = MISSING
-    model_dim: int = MISSING
-    n_heads: int = MISSING
-    n_groups: int = MISSING
-    head_dim: int = MISSING
-    n_layers: int = MISSING
-    rope_base: int = MISSING
-    activation_dtype: str = "float32"
-    tie_weights: bool = False
-
-
-@dataclass
-class LlamaConfig:
-    vocab_size: int = MISSING
-    d_ff: int = MISSING
-    sequence_len: int = MISSING
-    model_dim: int = MISSING
-    n_heads: int = MISSING
-    n_kv_heads: int = MISSING
-    n_layers: int = MISSING
-    rope_base: int = MISSING
-    activation_dtype: str = "float32"
-    tie_weights: bool = False
-
-
-@dataclass
 class ModelConfig:
     hf_model_name: str
     model_args: Dict[str, Any] = MISSING
-    fused_chunk_size: int | None = 1024
 
 
 class BaseModel(abc.ABC, nn.Module):

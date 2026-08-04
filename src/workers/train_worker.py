@@ -2,7 +2,9 @@ import json
 import os
 import threading
 import time
+from collections import defaultdict
 from functools import partial
+from statistics import fmean
 from typing import Any, Optional
 
 import jax
@@ -24,7 +26,8 @@ from src.data import DataLoader, InferenceRollout, RLBatch
 from src.model import Model
 
 from .config import TrainerConfig
-from .utils import Key, get_current_vm_internal_ip, setup, write_to_gcs
+from .rdma_transfer import RDMATransferServer
+from .utils import Key, reduce_inference_metric, setup, write_to_gcs
 from .worker import Worker
 
 load_dotenv()
@@ -49,8 +52,6 @@ class AsyncTrainerWorker(Worker):
 
         logger.info(f"Setting up {self.config.experiment_name}", log_for_all=True)
         logger.info(f"runtime={stax.get_rank()}, distributed={dist.global_state.process_id}", log_for_all=True)
-
-        self.ip = get_current_vm_internal_ip()
 
         with stax.Tracker(timer=True) as tracker:
             self._init_state()
@@ -154,6 +155,8 @@ class AsyncTrainerWorker(Worker):
             axis_types=(jax.sharding.AxisType.Explicit,),
             devices=np.array(jax.local_devices()),  # type: ignore
         )
+
+        self.rdma_server = RDMATransferServer(train_workers=self.config.async_config.train_workers)
 
     @partial(setup, component="metric_logger")
     def _setup_writer(self):
@@ -318,13 +321,6 @@ class AsyncTrainerWorker(Worker):
 
         path = f"{self.gs_path}/{CHECKPOINTS}/"
         logger.info(f"rank: {stax.get_rank()}", log_for_all=True)
-        # self.checkpointer = stax.Checkpointer(
-        #     output_dir=path,
-        #     max_to_keep=self.config.max_checkpoints_to_keep,
-        #     # only allow train workers to write checkpoints
-        #     active_processes=set(range(self.async_options.train_workers)),
-        #     train_mesh=self.async_options.train_mesh,
-        # )
 
         self.checkpointer = stax.OldCheckpointer(
             output_dir=path,
@@ -403,26 +399,13 @@ class AsyncTrainerWorker(Worker):
             params_cast = jax.tree.map(
                 lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), self.params
             )
-            sharded_params = jax.device_put(params_cast, jax.sharding.NamedSharding(self.train_mesh, jax.P()))
 
             if self.worker_rank == 0:
                 for _ in range(self.async_options.inference_workers):
                     self.async_options.weight_sync_queue.put("sync")
 
-            self.sync_train_workers(f"weight_sync_{self.weight_iteration}")
-            while not self.async_options.weight_sync_queue.empty():
-                continue
+            _ = self.rdma_server.transfer({"params": params_cast})
 
-            _ = jax.device_put(sharded_params, jax.NamedSharding(self.async_options.inference_mesh, jax.P()))
-
-            if self.worker_rank == 0:
-                for _ in range(self.async_options.inference_workers):
-                    logger.info(
-                        f"[weight_sync] {self.async_options.weight_sync_queue.get(timeout=TIMEOUT)}", log_for_all=True
-                    )
-            self.sync_train_workers(f"weight_sync_{self.weight_iteration}")
-
-            del sharded_params
             del params_cast
 
         self.weight_iteration += 1
@@ -482,27 +465,31 @@ class AsyncTrainerWorker(Worker):
 
         return rollouts, metrics
 
-    def get_inference_metrics(self):
-        metrics_per_worker = {i: [] for i in range(self.async_options.inference_workers)}
+    def get_inference_metrics(self) -> dict[str, float]:
+        by_worker: dict[int, list[dict]] = defaultdict(list)
         while not self.async_options.inference_metrics_queue.empty():
-            metrics = self.async_options.inference_metrics_queue.get(timeout=TIMEOUT)
-            metrics_per_worker[metrics["worker_id"]].append(metrics)
+            record = self.async_options.inference_metrics_queue.get(timeout=TIMEOUT)
+            by_worker[record["worker_id"]].append(record)
 
-        averaged_metrics = dict()
-        for worker_id, metrics_list in metrics_per_worker.items():
-            if len(metrics_list) == 0:
-                logger.warning(f"No metrics received from inference worker {worker_id}.", log_for_all=True)
-            for k in metrics_list[0].keys():
-                if k != "worker_id":
-                    averaged_metrics[f"inference/worker_{worker_id}/{k}"] = sum(d[k] for d in metrics_list) / len(
-                        metrics_list
-                    )
+        metrics: dict[str, float] = {}
+        per_key: dict[str, list[float]] = defaultdict(list)
 
-        metrics = averaged_metrics | {
-            "inference/total_tps": sum(
-                averaged_metrics[f"inference/worker_{worker_id}/decode_tps"] for worker_id in metrics_per_worker.keys()
-            ),
-        }
+        for worker_id, records in by_worker.items():
+            for k in {k for r in records for k in r} - {"worker_id"}:
+                mean = fmean([r[k] for r in records if k in r])
+                metrics[f"inference/worker_{worker_id}/{k}"] = mean
+                per_key[k].append(mean)
+
+        for k, values in per_key.items():
+            metrics[f"inference/{k}"] = reduce_inference_metric(k, values)
+
+        metrics["inference/workers_reporting"] = len(by_worker)
+
+        if len(by_worker) < self.async_options.inference_workers:
+            logger.warning(
+                f"Only {len(by_worker)}/{self.async_options.inference_workers} inference workers reported metrics.",
+                log_for_all=True,
+            )
 
         return metrics
 

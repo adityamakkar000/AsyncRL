@@ -8,7 +8,7 @@ from transformers import AutoTokenizer
 from src.constants import DATA, GS_BUCKET
 
 from .config import DatasetConfig, InferenceRollout, RLBatch, Sample
-from .utils import compute_aux_metrics, get_chat_template, load_jsonl_from_gcs
+from .utils import compute_aux_metrics, get_chat_template, load_jsonl_from_gcs, resolve_pad_eos
 from .verifier import Verifier
 
 
@@ -25,10 +25,7 @@ class DataLoader:
         self.max_seq_length = max_seq_length
         self.use_system_prompt = use_system_prompt
         self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
-        self.pad_token = self.tokenizer.pad_token_id  # type: ignore
-        self.eos_token = self.tokenizer.eos_token_id  # type: ignore
-        if self.eos_token is None:
-            self.eos_token = self.pad_token
+        self.pad_token, self.eos_token = resolve_pad_eos(self.tokenizer)
         self.mesh = mesh
 
         self.samples = self._load_from_gcs()
@@ -53,7 +50,7 @@ class DataLoader:
     def filter_samples(self, samples: list[Sample]) -> list[Sample]:
         def filter_fn(x: Sample) -> bool:
             if self.dataset_config.prompt_length is not None:
-                prompt_tokens = self.tokenizer.apply_chat_template(  # type: ignore
+                prompt_tokens = self.tokenizer.apply_chat_template(
                     get_chat_template(self.use_system_prompt, x.prompt),
                     add_generation_prompt=True,
                     enable_thinking=True,
@@ -124,7 +121,7 @@ class DataLoader:
             ),
         )
 
-        num_unparsable = num_unparsable / self.dataset_config.batch_size
+        num_unparsable = num_unparsable / rewards.size
 
         prefix = "train" if train else "val"
         metrics = {"num_unparsable": num_unparsable} | compute_aux_metrics(rl_batch)
@@ -172,13 +169,11 @@ class DataLoader:
         return Verifier.get_reward(output_str, answer)
 
     def save_checkpoint(self) -> dict[str, Any]:
-        """Return current index for checkpointing."""
         return {
             "current_idx": self._current_idx,
         }
 
     def restore_checkpoint(self, state: dict[str, Any]) -> None:
-        """Restore index from checkpoint."""
         if "current_idx" not in state:
             raise ValueError("Missing 'current_idx' in checkpoint state")
         self._current_idx = state["current_idx"]

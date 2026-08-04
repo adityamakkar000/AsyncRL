@@ -13,14 +13,14 @@ from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
 from src.constants import INTERUPT_THINKING_PHARSE, TIMEOUT, AsyncOptions
-from src.data import InferenceRollout, Sample, get_chat_template
+from src.data import InferenceRollout, Sample, get_chat_template, resolve_pad_eos
 from src.model import KVCache, Model
 
 from .config import AsyncState, InferenceShardings, InferenceState, TrainerConfig
+from .rdma_transfer import RDMATransferServer
 from .utils import (
     _maybe_force_eos,
     _maybe_force_eot,
-    get_current_vm_internal_ip,
     naive_sample,
 )
 from .worker import Worker
@@ -62,10 +62,7 @@ class AsyncInferenceWorker(Worker):
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.model.config.hf_model_name)
 
-        self.pad_token = self.tokenizer.pad_token_id  # type: ignore
-        self.eos_token = self.tokenizer.eos_token_id  # type: ignore
-        if self.pad_token is None:
-            self.pad_token = self.eos_token
+        self.pad_token, self.eos_token = resolve_pad_eos(self.tokenizer)
 
         self.precompile_dict = {
             "prefill": {},
@@ -73,7 +70,7 @@ class AsyncInferenceWorker(Worker):
         }
 
         self.thinking_tokens = (
-            self.tokenizer(INTERUPT_THINKING_PHARSE, add_special_tokens=False, return_tensors="np")  # type: ignore
+            self.tokenizer(INTERUPT_THINKING_PHARSE, add_special_tokens=False, return_tensors="np")
             .input_ids[0]
             .tolist()
         )
@@ -84,8 +81,7 @@ class AsyncInferenceWorker(Worker):
 
         self.weight_iteration = 0
         self.worker_rank = stax.get_rank() - self.async_options.train_workers
-
-        self.ip = get_current_vm_internal_ip()
+        self.transfer_server = RDMATransferServer(train_workers=self.async_options.train_workers)
 
         self.block_until_params_update()
 
@@ -93,36 +89,17 @@ class AsyncInferenceWorker(Worker):
         while True:
             _ = async_options.weight_sync_queue.get()
 
-            stax.sync_over_mesh("beforeWeightSync", mesh=self.async_options.inference_mesh)
-
             logger.info(
                 f"[weight_sync] Rank {stax.get_rank()} received sync signal from train worker, syncing weights to latest parameters...",
                 log_for_all=True,
             )
-            logger.info("[weight_sync] received sync signal", log_for_all=True)
 
-            def allocate_buffer(x):
-                return jax.make_array_from_single_device_arrays(
-                    x.shape,
-                    sharding=jax.NamedSharding(self.async_options.train_mesh, P()),
-                    arrays=[],
-                    dtype=self.inference_config.params_dtype,
-                )
-
-            params_buffer = jax.tree.map(allocate_buffer, async_state.MRUparams)
-            new_params = jax.device_put(params_buffer, jax.NamedSharding(self.async_options.inference_mesh, P()))
-
-            stax.sync_over_mesh("afterWeightSync1", self.async_options.inference_mesh)
-            async_options.weight_sync_queue.put(f"inference_worker_{self.worker_rank}_done")
-            stax.sync_over_mesh("afterWeightSync2", self.async_options.inference_mesh)
+            new_params = self.transfer_server.transfer(async_state.MRUparams)
 
             with async_state.update_lock:
                 async_state.MRUparams = new_params
                 async_state.updated = True
                 async_state.weight_iteration += 1
-
-            while not self.async_options.weight_sync_queue.empty():
-                continue
 
     def _maybe_update_params(self):
         with self.async_state.update_lock:
@@ -151,9 +128,6 @@ class AsyncInferenceWorker(Worker):
 
     def validate_config(self):
         """Validate the inference configuration to ensure it meets the requirements for the inference engine."""
-        assert self.inference_config.n_replicas <= jax.local_device_count(), (
-            f"Number of replicas {self.inference_config.n_replicas} must be less than or equal to number of devices {jax.device_count()}"
-        )
         assert self.inference_config.max_seq_len <= self.model.sequence_len, (
             f"expected inference max seq len {self.inference_config.max_seq_len} to be less than model sequence length {self.model.sequence_len}"
         )
@@ -171,8 +145,8 @@ class AsyncInferenceWorker(Worker):
             self.inference_config.max_prefill_sequence_len & (self.inference_config.max_prefill_sequence_len - 1) == 0
         ), f"max_prefill_sequence_len must be a power of 2, got {self.inference_config.max_prefill_sequence_len}"
 
-        assert self.inference_config.max_decode_prompts % (self.inference_config.n_replicas) == 0, (
-            f"max_decode_prompts {self.inference_config.max_decode_prompts} must be divisible by n_replicas {self.inference_config.n_replicas}"
+        assert self.inference_config.max_decode_prompts % jax.local_device_count() == 0, (
+            f"max_decode_prompts {self.inference_config.max_decode_prompts} must be divisible by local devices {jax.local_device_count()}"
         )
 
         assert (self.inference_config.max_decode_prompts * self.inference_config.group_size) % (
@@ -181,8 +155,8 @@ class AsyncInferenceWorker(Worker):
             f"group_size * max_decode_prompts {self.inference_config.group_size * self.inference_config.max_decode_prompts} must be divisible by max_decode_batch_size {self.inference_config.max_decode_batch_size}"
         )
 
-        assert self.inference_config.max_decode_batch_size % self.inference_config.n_replicas == 0, (
-            f"max_decode_batch_size {self.inference_config.max_decode_batch_size} must be divisible by n_replicas {self.inference_config.n_replicas}"
+        assert self.inference_config.max_decode_batch_size % jax.local_device_count() == 0, (
+            f"max_decode_batch_size {self.inference_config.max_decode_batch_size} must be divisible by local devices {jax.local_device_count()}"
         )
 
         if self.inference_config.reasoning_budget is not None:
@@ -208,9 +182,9 @@ class AsyncInferenceWorker(Worker):
         """Get the shardings for the model parameters, kv cache, and inference state based on the configuration."""
         local_devices = np.array(jax.local_devices())
         mesh = jax.make_mesh(
-            (self.inference_config.n_replicas,),
+            (jax.local_device_count(),),
             (AXIS_NAME,),
-            devices=local_devices[: self.inference_config.n_replicas],  # type: ignore
+            devices=local_devices,  # type: ignore
         )
 
         replicate_sharding = jax.NamedSharding(mesh, P())
@@ -308,8 +282,8 @@ class AsyncInferenceWorker(Worker):
         return self.compute_max_power_of_two(max(seq_lens).item(), self.inference_config.max_seq_len)
 
     def tokenize(self, texts: list[str]) -> tuple[np.ndarray, np.ndarray]:
-        inputs: list[list[int]] = [  # type: ignore
-            self.tokenizer.apply_chat_template(  # type: ignore
+        inputs: list[list[int]] = [
+            self.tokenizer.apply_chat_template(
                 get_chat_template(self.inference_config.system_prompt, text),
                 add_generation_prompt=True,
                 enable_thinking=self.inference_config.think_mode,
@@ -337,7 +311,7 @@ class AsyncInferenceWorker(Worker):
                     "No eos token found in rollout.\nToken sequence: "
                     + str(tokens_not_padded)
                     + "\nDetokenized string: "
-                    + self.tokenizer.decode(tokens_not_padded, skip_special_tokens=False)  # type: ignore
+                    + self.tokenizer.decode(tokens_not_padded, skip_special_tokens=False)
                 )
 
             return tokens_not_padded[: eos_idx + 1], logprobs_not_padded[: eos_idx + 1]
@@ -355,7 +329,7 @@ class AsyncInferenceWorker(Worker):
     def detokenizer(self, pids: list[int]):
         for pid in pids:
             rollout_tokens = self.global_rollouts[pid].rollout_tokens
-            rollout_strs = self.tokenizer.batch_decode(rollout_tokens, skip_special_tokens=False)  # type: ignore
+            rollout_strs = self.tokenizer.batch_decode(rollout_tokens, skip_special_tokens=False)
             self.global_rollouts[pid].rollout_strs = rollout_strs
 
     def prefill(
