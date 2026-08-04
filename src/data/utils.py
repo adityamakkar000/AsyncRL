@@ -102,6 +102,12 @@ def apply_prompt_template(text: str) -> str:
 Remember to put your answer inside \\boxed{{}}."""
 
 
+def resolve_pad_eos(tokenizer) -> tuple[int, int]:
+    pad, eos = tokenizer.pad_token_id, tokenizer.eos_token_id
+    assert eos is not None, f"tokenizer has no eos_token_id: {tokenizer}"
+    return (eos if pad is None else pad), eos
+
+
 def get_chat_template(system_prompt: bool, text: str) -> list[dict[str, str]]:
     chat = []
     if system_prompt:

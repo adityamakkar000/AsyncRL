@@ -21,7 +21,6 @@ class InferenceConfig:
     max_decode_prompts: int = MISSING  # number of prompts to take during each continous run of the engine
     max_decode_batch_size: int = MISSING  # at decode time how many samples to take for each device
     group_size: int = MISSING
-    n_replicas: int = 1
     initial_sequence_len: int = 64
     kv_cache_dtype: str = "bfloat16"
     params_dtype: str = "bfloat16"

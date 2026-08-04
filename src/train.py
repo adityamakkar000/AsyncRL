@@ -58,6 +58,9 @@ def main(cfg: DictConfig) -> None:
     assert (n_hosts := jax.process_count()) > train_workers > 0, (
         "Number of train workers must be between 1 and total number of processes - 1"
     )
+    assert n_hosts % train_workers == 0, (
+        f"Number of train workers must divide total processes, got {n_hosts} and {train_workers}"
+    )
     inference_workers = n_hosts - train_workers
 
     devices = np.array(jax.devices())

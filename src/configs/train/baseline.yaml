@@ -36,7 +36,6 @@ loss_config:
     max_seq_len: 4096
     max_decode_prompts: 8
     max_decode_batch_size: 64
-    n_replicas: 4
     group_size: 16
     temperature: 1.0
     reasoning_budget: null 

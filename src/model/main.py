@@ -15,8 +15,7 @@ from optax import GradientTransformation
 from stax import HFModelBase
 from stax import staxLogger as logger
 
-from .config import BaseModel, ModelConfig
-from .qwen3 import KVCache
+from .config import BaseModel, KVCache, ModelConfig
 from .utils import convert_dtype
 
 shardingType = Optional[PyTree[Sharding]]

@@ -5,14 +5,6 @@ from loguru import logger
 
 
 def ping_server(host: str, port: int | str) -> bool:
-    """
-    Ping a server to check if it's alive.
-    Args:
-        host (str): The server host.
-        port (int): The server port.
-    Returns:
-        bool: True if the server responds, False otherwise.
-    """
     try:
         response = requests.get(f"http://{host}:{port}/ping", timeout=5)
         return response.status_code == 200
@@ -46,15 +38,6 @@ def format_command(cmd: list[str]) -> str:
 
 
 def terminate_process(process: subprocess.Popen | None, name: str) -> None:
-    """
-    Terminate a subprocess if it exists.
-    Args:
-        process (subprocess.Popen | None): The process to terminate.
-        name (str): Name of the process for logging purposes.
-    Returns:
-        None
-
-    """
     if process is not None:
         logger.info(f"Terminating {name} process...")
         # process might have already exited
