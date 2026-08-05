@@ -15,8 +15,6 @@ from optax import GradientTransformation
 from stax import HFModelBase
 from stax import staxLogger as logger
 
-from src.data import RLBatch
-
 from .config import BaseModel, KVCache, ModelConfig
 from .utils import convert_dtype, fused_linear_selection, get_embedding_weights
 
@@ -157,28 +155,38 @@ class Model(HFModelBase):
 
         return logits, cache  # type: ignore
 
-    def get_logprobs(self, params: PyTree, batch: RLBatch) -> Array:
-        targets = batch.tokens[:, 1:]
+    def get_logprobs(self, params: PyTree, tokens: Array, seq_lens: Array) -> Array:
+        """
+        Log probability of each target token under the model.
+        Args:
+            params: Model parameters.
+            tokens: Input tokens of shape (B, T).
+            seq_lens: Sequence lengths of shape (B,).
+        Returns:
+            x_logprobs: Log probabilities of shape (B, T - 1).
+        """
+
+        target_tokens = tokens[:, 1:]
+
         if self.config.fused_chunk_size is not None:
-            x_logprobs, kv_cache = self.fused_selection_call(
+            x_logprobs, _ = self.fused_selection_call(
                 {"params": params},
-                x=batch.tokens,  # type: ignore
-                sequence_lens=batch.seq_lens,  # type: ignore
-                targets=targets,  # type: ignore
+                x=tokens,
+                sequence_lens=seq_lens,
+                targets=target_tokens,
                 kv_cache=None,
                 chunk_size=self.config.fused_chunk_size,
             )
-
         else:
-            x_logits, kv_cache = self.apply(
+            x_logits, _ = self.apply(
                 {"params": params},
-                x=batch.tokens,  # type: ignore
-                sequence_lens=batch.seq_lens,  # type: ignore
+                x=tokens,
+                sequence_lens=seq_lens,
                 kv_cache=None,
             )
 
             x_logprobs = jax.nn.log_softmax(x_logits[:, :-1, :], axis=-1)
-            x_logprobs: Array = jnp.take_along_axis(x_logprobs, targets[..., None], axis=-1)[..., 0]
+            x_logprobs = jnp.take_along_axis(x_logprobs, target_tokens[..., None], axis=-1)[..., 0]
 
         return x_logprobs
 

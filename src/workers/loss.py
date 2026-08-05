@@ -40,7 +40,7 @@ class LossFunction(abc.ABC):
         raise NotImplementedError()
 
     def __call__(self, model: Model, params: PyTree, batch: RLBatch, train: bool = True) -> tuple[Array, PyTree]:
-        x_logprobs = model.get_logprobs(params, batch)
+        x_logprobs = model.get_logprobs(params, batch.tokens, batch.seq_lens)  # type: ignore
 
         batch = batch.replace(  # type: ignore
             tokens=batch.tokens[:, 1:],
