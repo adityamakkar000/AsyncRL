@@ -30,8 +30,7 @@ from .rdma_transfer import RDMATransferServer
 from .utils import Key, reduce_inference_metric, setup, write_to_gcs
 from .worker import Worker
 
-load_dotenv()
-
+load_dotenv() 
 
 class AsyncTrainerWorker(Worker):
     """
@@ -127,6 +126,8 @@ class AsyncTrainerWorker(Worker):
         self.tx = None
 
         self.params = None
+        self.teacher_params = None 
+
         self.opt_state = None
         self.params_sharding = None
         self.opt_state_sharding = None
@@ -226,6 +227,11 @@ class AsyncTrainerWorker(Worker):
 
         self.train_mesh = shardings.mesh
 
+        if self.teacher_params is not None: 
+            self.teacher_params = jax.tree.map(
+                lambda x, s: jax.device_put(x, s), self.teacher_params, self.params_sharding
+            )
+
     @partial(setup, component="dataset")
     def _setup_dataset(self):
         self.train_n_prompts: int = self.config.data_config.batch_size // (
@@ -249,6 +255,14 @@ class AsyncTrainerWorker(Worker):
         """Setup the model for training."""
         self.model = Model(self.config.model_config)
 
+        if self.config.teacher_config is not None: 
+            logger.info("Loading teacher/reference model", log_for_all=True)
+            teacher_step, teacher_params, _teacher_data = self.model.load_from_ckpt_old(
+                self.config.teacher_config.teacher_checkpoint,
+                self.config.teacher_config.teacher_step
+            )
+            self.teacher_params = teacher_params
+
     @partial(setup, component="train state")
     def _setup_train_state(self):
         assert self.model is not None, "Model must be set up before train state init."
@@ -268,9 +282,9 @@ class AsyncTrainerWorker(Worker):
         logger.info("Initializing new run ...", log_for_all=True)
         sharding = {"params": self.params_sharding, "opt_state": self.opt_state_sharding}
         out_state = self.model.init_state(rng=self.key(), tx=self.tx, sharding=sharding, abstract=False)
-        self.params = out_state["params"]
         self.opt_state = out_state["opt_state"]
 
+        self.params: Any = out_state["params"]
         logger.info(
             f"Params intialized with total size: {self.model.count_params(self.params):_} parameters.", log_for_all=True
         )
@@ -493,7 +507,7 @@ class AsyncTrainerWorker(Worker):
 
         return metrics
 
-    def train_step(self, params, opt_state, local_batch, profile=False) -> tuple[PyTree, PyTree, dict]:
+    def train_step(self, params, opt_state, local_batch, teacher_params=None, profile=False) -> tuple[PyTree, PyTree, dict]:
         assert self.train_fn is not None, "Train function not set up."
         assert self.shard_data_fn is not None, "Sharding function not set up."
 
@@ -516,10 +530,11 @@ class AsyncTrainerWorker(Worker):
                     self.train_fn,  # type: ignore
                     params,
                     opt_state,
+                    teacher_params,
                     global_train_batch,
                 )
             else:
-                out = self.train_fn(params, opt_state, global_train_batch)
+                out = self.train_fn(params, opt_state, teacher_params, global_train_batch)
 
             # we have to sync weights so might as well block to get true step time
             jax.tree.map(lambda x: x.block_until_ready(), out)
@@ -543,7 +558,7 @@ class AsyncTrainerWorker(Worker):
             batch_size=self.config.data_config.batch_size // self.config.async_config.train_workers,
             max_seq_len=self.config.loss_config.inference_config.max_seq_len,
         )
-        self.train_step(self.params, self.opt_state, local_test_batch, profile=False)
+        self.train_step(self.params, self.opt_state, local_test_batch, self.teacher_params, profile=False)
 
         logger.info(f"Starting training loop at step {self.global_step}", log_for_all=True)
         while self.global_step < self.total_steps:
@@ -551,7 +566,7 @@ class AsyncTrainerWorker(Worker):
                 generations, local_rollout_metrics = self.get_rollouts()
                 local_train_batch, local_train_batch_metrics = self.train_dataset.prepare_batch(generations, train=True)
                 self.params, self.opt_state, train_metrics = self.train_step(
-                    self.params, self.opt_state, local_train_batch
+                    self.params, self.opt_state, local_train_batch, teacher_params=self.teacher_params
                 )
                 weight_sync_time = self.train_sync_weights()
 

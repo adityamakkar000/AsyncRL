@@ -142,6 +142,10 @@ class AsyncConfig:
     train_workers: int = 1
     max_lag: int = 4
 
+@dataclass
+class TeacherConfig:
+    teacher_checkpoint: str = MISSING
+    teacher_step: Optional[int] = None
 
 @dataclass
 class TrainerConfig:
@@ -152,6 +156,8 @@ class TrainerConfig:
 
     async_config: AsyncConfig = field(default_factory=AsyncConfig)  # The configuration for asynchronous training
     sharding_config: ShardingConfig = field(default_factory=ShardingConfig)  # The configuration for sharding
+
+    teacher_config: Optional[TeacherConfig] = None 
 
     # training config
     seed: int = 0

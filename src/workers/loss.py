@@ -1,5 +1,5 @@
 import abc
-from typing import Callable
+from typing import Callable, Optional
 
 import jax
 import jax.numpy as jnp
@@ -16,9 +16,10 @@ class LossFunction(abc.ABC):
 
     def __init__(self, loss_config: LossConfig):
         self.config = loss_config
+        self.teacher_params: Optional[PyTree] = None
 
     @abc.abstractmethod
-    def compute_advantage(self, batch: RLBatch) -> Array:
+    def compute_advantage(self, batch: RLBatch, teacher_params: PyTree = None) -> Array:
         raise NotImplementedError()
 
     @property
@@ -27,7 +28,7 @@ class LossFunction(abc.ABC):
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def compute_loss(self, x_logprobs: Array, advantages: Array, batch: RLBatch) -> Array:
+    def compute_loss(self, x_logprobs: Array, advantages: Array, batch: RLBatch, teacher_params: PyTree = None) -> Array:
         """
         Compute the loss from the pre-computed PPO-clipped objective.
         Args:
@@ -39,8 +40,12 @@ class LossFunction(abc.ABC):
         """
         raise NotImplementedError()
 
-    def __call__(self, model: Model, params: PyTree, batch: RLBatch, train: bool = True) -> tuple[Array, PyTree]:
-        x_logprobs = model.get_logprobs(params, batch.tokens, batch.seq_lens)  # type: ignore
+    def __call__(self, model: Model, params: PyTree, batch: RLBatch, teacher_params=None, train: bool = True) -> tuple[Array, PyTree]:
+        x_logprobs = model.get_logprobs(params, batch.tokens, batch.seq_lens)
+
+        teacher_logprobs = None
+        if teacher_params is not None:
+            teacher_logprobs = model.get_logprobs(teacher_params, batch.tokens, batch.seq_lens)
 
         batch = batch.replace(  # type: ignore
             tokens=batch.tokens[:, 1:],
@@ -62,6 +67,11 @@ class LossFunction(abc.ABC):
             "is_ratio": jnp.sum(ratio * batch.token_mask),
         }
 
+        if teacher_logprobs is not None:
+            diff = (x_logprobs - teacher_logprobs) * batch.token_mask
+            aux_metrics["teacher_kl"] = jnp.sum(diff)
+            aux_metrics["teacher_abs_diff"] = jnp.sum(jnp.abs(diff))
+
         return loss, aux_metrics
 
 
@@ -72,10 +82,10 @@ class CISPOLoss(LossFunction):
         super().__init__(loss_config)
         self.epsilon = epsilon
 
-    def compute_advantage(self, batch: RLBatch) -> Array:
+    def compute_advantage(self, batch: RLBatch, teacher_params: PyTree = None) -> Array:
         return batch.rewards - batch.group_mean
 
-    def compute_loss(self, x_logprobs: Array, advantages: Array, batch: RLBatch) -> Array:
+    def compute_loss(self, x_logprobs: Array, advantages: Array, batch: RLBatch, teacher_params: PyTree = None) -> Array:
         ratio = jnp.exp(x_logprobs - batch.reference_model_logprobs)
         min_ratio = jax.lax.stop_gradient(jnp.minimum(ratio, self.epsilon))
         token_loss = jnp.sum(advantages[:, None] * min_ratio * x_logprobs * batch.token_mask)
@@ -95,13 +105,13 @@ class RLOOLoss(LossFunction):
             f"RLOO requires group_size > 1 for leave-one-out baseline, got {loss_config.inference_config.group_size}"
         )
 
-    def compute_advantage(self, batch: RLBatch) -> Array:
+    def compute_advantage(self, batch: RLBatch, teacher_params: PyTree = None) -> Array:
         G = self.config.inference_config.group_size
         loo_mean = (G * batch.group_mean - batch.rewards) / (G - 1)
         advantages = batch.rewards - loo_mean
         return advantages
 
-    def compute_loss(self, x_logprobs: Array, advantages: Array, batch: RLBatch) -> Array:
+    def compute_loss(self, x_logprobs: Array, advantages: Array, batch: RLBatch, teacher_params: PyTree = None) -> Array:
         token_loss = x_logprobs * batch.token_mask * advantages[:, None]
         return token_loss.sum()
 
