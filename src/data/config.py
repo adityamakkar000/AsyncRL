@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import cast
 
 import jax
 import numpy as np
@@ -43,17 +44,17 @@ class DatasetConfig:
 
 @struct.dataclass
 class RLBatch:
-    tokens: jax.Array | np.ndarray  # [B, max_seq_len] where B = P * G, P = num prompts, G = group size
-    reference_model_logprobs: jax.Array | np.ndarray  # [B, max_seq_len] logprobs of sampled token
-    seq_lens: jax.Array | np.ndarray  # [B] length of sequences (excluding padding)
-    rewards: jax.Array | np.ndarray  # [B] reward of each sequence
-    group_mean: jax.Array | np.ndarray  # [B] mean reward for sequence's group
-    group_std: jax.Array | np.ndarray  # [B] std of reward for sequence's group
-    token_mask: jax.Array | np.ndarray  # [B, T] mask for applying rl
+    tokens: jax.Array  # [B, max_seq_len] where B = P * G, P = num prompts, G = group size
+    reference_model_logprobs: jax.Array  # [B, max_seq_len] logprobs of sampled token
+    seq_lens: jax.Array  # [B] length of sequences (excluding padding)
+    rewards: jax.Array  # [B] reward of each sequence
+    group_mean: jax.Array  # [B] mean reward for sequence's group
+    group_std: jax.Array  # [B] std of reward for sequence's group
+    token_mask: jax.Array  # [B, T] mask for applying rl
 
     @classmethod
     def get_test_batch(cls, batch_size: int, max_seq_len: int) -> "RLBatch":
-        return cls(
+        return RLBatch.from_numpy(
             tokens=np.zeros((batch_size, max_seq_len), dtype=np.int32),
             reference_model_logprobs=np.zeros((batch_size, max_seq_len), dtype=np.float32),
             seq_lens=np.zeros((batch_size,), dtype=np.int32),
@@ -61,6 +62,27 @@ class RLBatch:
             group_mean=np.zeros((batch_size,), dtype=np.float32),
             group_std=np.ones((batch_size,), dtype=np.float32),
             token_mask=np.zeros((batch_size, max_seq_len), dtype=np.bool),
+        )
+
+    @classmethod
+    def from_numpy(
+        cls,
+        tokens: np.ndarray,
+        reference_model_logprobs: np.ndarray,
+        seq_lens: np.ndarray,
+        rewards: np.ndarray,
+        group_mean: np.ndarray,
+        group_std: np.ndarray,
+        token_mask: np.ndarray,
+    ) -> "RLBatch":
+        return cls(
+            tokens=cast(jax.Array, tokens),
+            reference_model_logprobs=cast(jax.Array, reference_model_logprobs),
+            seq_lens=cast(jax.Array, seq_lens),
+            rewards=cast(jax.Array, rewards),
+            group_mean=cast(jax.Array, group_mean),
+            group_std=cast(jax.Array, group_std),
+            token_mask=cast(jax.Array, token_mask),
         )
 
 

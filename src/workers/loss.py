@@ -28,7 +28,9 @@ class LossFunction(abc.ABC):
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def compute_loss(self, x_logprobs: Array, advantages: Array, batch: RLBatch, teacher_params: PyTree = None) -> Array:
+    def compute_loss(
+        self, x_logprobs: Array, advantages: Array, batch: RLBatch, teacher_params: PyTree = None
+    ) -> Array:
         """
         Compute the loss from the pre-computed PPO-clipped objective.
         Args:
@@ -40,7 +42,9 @@ class LossFunction(abc.ABC):
         """
         raise NotImplementedError()
 
-    def __call__(self, model: Model, params: PyTree, batch: RLBatch, teacher_params=None, train: bool = True) -> tuple[Array, PyTree]:
+    def __call__(
+        self, model: Model, params: PyTree, batch: RLBatch, teacher_params=None, train: bool = True
+    ) -> tuple[Array, PyTree]:
         x_logprobs = model.get_logprobs(params, batch.tokens, batch.seq_lens)
 
         teacher_logprobs = None
@@ -54,7 +58,7 @@ class LossFunction(abc.ABC):
         )
 
         advantages = self.compute_advantage(batch)
-        loss = -1 * self.compute_loss(x_logprobs, advantages, batch)  # negate loss since grad descent
+        loss = -1 * self.compute_loss(x_logprobs, advantages, batch, teacher_params)  # negate loss since grad descent
 
         safe_reference_logprobs = jnp.where(
             jnp.isfinite(batch.reference_model_logprobs), batch.reference_model_logprobs, 0.0
@@ -85,7 +89,9 @@ class CISPOLoss(LossFunction):
     def compute_advantage(self, batch: RLBatch, teacher_params: PyTree = None) -> Array:
         return batch.rewards - batch.group_mean
 
-    def compute_loss(self, x_logprobs: Array, advantages: Array, batch: RLBatch, teacher_params: PyTree = None) -> Array:
+    def compute_loss(
+        self, x_logprobs: Array, advantages: Array, batch: RLBatch, teacher_params: PyTree = None
+    ) -> Array:
         ratio = jnp.exp(x_logprobs - batch.reference_model_logprobs)
         min_ratio = jax.lax.stop_gradient(jnp.minimum(ratio, self.epsilon))
         token_loss = jnp.sum(advantages[:, None] * min_ratio * x_logprobs * batch.token_mask)
@@ -111,7 +117,9 @@ class RLOOLoss(LossFunction):
         advantages = batch.rewards - loo_mean
         return advantages
 
-    def compute_loss(self, x_logprobs: Array, advantages: Array, batch: RLBatch, teacher_params: PyTree = None) -> Array:
+    def compute_loss(
+        self, x_logprobs: Array, advantages: Array, batch: RLBatch, teacher_params: PyTree = None
+    ) -> Array:
         token_loss = x_logprobs * batch.token_mask * advantages[:, None]
         return token_loss.sum()
 

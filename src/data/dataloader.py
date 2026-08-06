@@ -110,7 +110,7 @@ class DataLoader:
 
         rl_batch = jax.tree.map(
             compress,
-            RLBatch(
+            RLBatch.from_numpy(
                 tokens,
                 np.where(np.isfinite(reference_model_logprobs), reference_model_logprobs, 0.0),
                 seq_lens,
