@@ -71,4 +71,4 @@ metrics_to_log:
   - "val/mean_reward"
   - "train/num_unparsable"
 
-debug: true
+debug: false
