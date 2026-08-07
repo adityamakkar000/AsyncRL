@@ -1,0 +1,9 @@
+name: ???
+
+verifier:
+  _target_: src.data.verifier.MathVerifier
+
+filters:
+  - _target_: src.data.filters.PromptLengthFilter
+    max_length: 1024
+  - _target_: src.data.filters.EnglishFilter

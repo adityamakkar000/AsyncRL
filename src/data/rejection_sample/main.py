@@ -42,8 +42,7 @@ class RejectionSample:
             samples_dict = existing_samples + samples_dict
 
         with open(local_path, "w") as f:
-            for s in samples_dict:
-                f.write(json.dumps(s) + "\n")
+            f.writelines(json.dumps(s) + "\n" for s in samples_dict)
 
         logger.info(f"Uploading to gcs {gcs_path}...")
 

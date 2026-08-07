@@ -1,2 +1,5 @@
+defaults:
+  - math
+  - _self_
+
 name: polaris
-gcs_path: gs://arl-experiments/data/polaris/

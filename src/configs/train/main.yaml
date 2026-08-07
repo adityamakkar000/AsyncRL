@@ -3,9 +3,10 @@ defaults:
   - model_config: qwen_0.6b
   - sharding_config: fsdp
   - loss_config: loss
-  - datasets@data_config: omnimath
+  - datasets@train_dataset_config: omnimath
   - _self_
 
+train_batch_size: 512
 grad_accum_steps: 1
 val_steps: 1
 seed: 0

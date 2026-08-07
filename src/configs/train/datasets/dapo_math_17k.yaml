@@ -1,2 +1,5 @@
-name: dapo-math-17k
-gcs_path: gs://arl-experiments/data/dapo-math-17k
+defaults:
+  - math
+  - _self_
+
+name: dapo_math_17k

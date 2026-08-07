@@ -1,0 +1,12 @@
+defaults:
+  - math
+  - _self_
+
+name: omnimath
+
+filters:
+  - _target_: src.data.filters.PromptLengthFilter
+    max_length: 1024
+  - _target_: src.data.filters.EnglishFilter
+  - _target_: src.data.filters.RandomSampleFilter
+    n: 1000

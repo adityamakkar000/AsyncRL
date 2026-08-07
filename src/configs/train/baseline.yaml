@@ -2,9 +2,10 @@ defaults:
   - base
   - model_config: qwen_1.7b_base
   - loss_config: loss
-  - datasets@data_config: troll-17k-train-filtered
+  - datasets@train_dataset_config: troll-17k-train
   - _self_
 
+train_batch_size: 512
 grad_accum_steps: 8
 seed: 0
 num_steps: 1000
@@ -28,8 +29,6 @@ wandb_config:
   notes: null
   tags: null
 
-data_config:
-  batch_size: 512
 
 loss_config:
   inference_config:

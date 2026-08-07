@@ -69,7 +69,7 @@ def _strip_string(string: str):
         try:
             a = int(a)
             b = int(b)
-            assert string == "{}/{}".format(a, b)
+            assert string == f"{a}/{b}"
             new_string = "\\frac{" + str(a) + "}{" + str(b) + "}"
             return new_string
         except Exception:
@@ -444,11 +444,11 @@ def grade_answer_sympy(given_answer: str, ground_truth: str) -> bool:
     ground_truth_elems = split_tuple(ground_truth_normalized)
     given_elems = split_tuple(given_normalized)
 
-    if len(ground_truth_elems) > 1 and (
-        ground_truth_normalized[0] != given_normalized[0] or ground_truth_normalized[-1] != given_normalized[-1]
+    if (
+        len(ground_truth_elems) > 1
+        and (ground_truth_normalized[0] != given_normalized[0] or ground_truth_normalized[-1] != given_normalized[-1])
+        or len(ground_truth_elems) != len(given_elems)
     ):
-        is_correct = False
-    elif len(ground_truth_elems) != len(given_elems):
         is_correct = False
     else:
         for ground_truth_elem, given_elem in zip(ground_truth_elems, given_elems, strict=False):

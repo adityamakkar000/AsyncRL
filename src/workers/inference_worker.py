@@ -1,6 +1,7 @@
 import threading
 import time
 from functools import partial
+from queue import Empty
 
 import jax
 import jax.numpy as jnp
@@ -36,6 +37,7 @@ class AsyncInferenceWorker(Worker):
     def __init__(self, trainer_config: TrainerConfig, async_options: AsyncOptions):
         self.trainer_config = trainer_config
         self.inference_config = trainer_config.loss_config.inference_config
+        self.eval_config = trainer_config.eval_config
         self.async_options = async_options
 
         self.model = Model(trainer_config.model_config)
@@ -149,10 +151,11 @@ class AsyncInferenceWorker(Worker):
             f"max_decode_prompts {self.inference_config.max_decode_prompts} must be divisible by local devices {jax.local_device_count()}"
         )
 
-        assert (self.inference_config.max_decode_prompts * self.inference_config.group_size) % (
-            self.inference_config.max_decode_batch_size
-        ) == 0, (
-            f"group_size * max_decode_prompts {self.inference_config.group_size * self.inference_config.max_decode_prompts} must be divisible by max_decode_batch_size {self.inference_config.max_decode_batch_size}"
+        min_group_size = min(self.inference_config.group_size, self.eval_config.group_size)
+        assert (
+            self.inference_config.max_decode_prompts * min_group_size >= self.inference_config.max_decode_batch_size
+        ), (
+            f"max_decode_prompts * min group size {self.inference_config.max_decode_prompts * min_group_size} must be at least max_decode_batch_size {self.inference_config.max_decode_batch_size} to seed the decode pipeline"
         )
 
         assert self.inference_config.max_decode_batch_size % jax.local_device_count() == 0, (
@@ -376,7 +379,7 @@ class AsyncInferenceWorker(Worker):
     def prefill_step(
         self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array
     ) -> tuple[InferenceState, dict[str, float]]:
-        if self.precompile_dict["prefill"].get((precompiled_length := input_tokens.shape[1])) is None:
+        if self.precompile_dict["prefill"].get(precompiled_length := input_tokens.shape[1]) is None:
             self.precompile_dict["prefill"][precompiled_length] = jax.jit(
                 self.prefill,
                 **self.shardings.prefill_shardings,
@@ -574,7 +577,9 @@ class AsyncInferenceWorker(Worker):
         global_ids = jax.device_get(prompts.prompt_id).flatten().tolist()
         local_to_global = {i: gid for i, gid in enumerate(global_ids)}
 
-        prompt_queue: list[int] = [i for i in range(P) for _ in range(self.inference_config.group_size)]
+        prompt_queue: list[int] = [
+            i for i in range(P) for _ in range(self.global_rollouts[local_to_global[i]].n_rollouts)
+        ]
         finished = {
             "tokens": [],
             "logprobs": [],
@@ -639,34 +644,56 @@ class AsyncInferenceWorker(Worker):
         return prev_state, prefill_metrics | decode_metrics
 
     def get_samples(self):
+        self._maybe_update_params()
+
         with Tracker(timer=True) as t1:
-            samples: list[Sample] = []
+            samples: list[tuple[Sample, bool]] = []
             while len(samples) < self.inference_config.max_decode_prompts:
-                samples.append(self.async_options.prompt_queue.get(timeout=TIMEOUT))
+                try:
+                    samples.append((self.async_options.eval_prompt_queue.get_nowait(), True))
+                except Empty:
+                    break
+
+            n_eval = len(samples)
+            while len(samples) < self.inference_config.max_decode_prompts:
+                samples.append((self.async_options.prompt_queue.get(timeout=TIMEOUT), False))
 
         with Tracker(timer=True) as t2:
-            for i, sample in enumerate(samples):
+            for i, (sample, is_eval) in enumerate(samples):
                 self.global_rollouts[self.prompt_id_offset + i] = InferenceRollout(
-                    sample=sample, rollout_tokens=[], rollout_logprobs=[], rollout_strs=[], weight_iteration=[]
+                    sample=sample,
+                    rollout_tokens=[],
+                    rollout_logprobs=[],
+                    rollout_strs=[],
+                    weight_iteration=[],
+                    n_rollouts=self.eval_config.group_size if is_eval else self.inference_config.group_size,
+                    is_eval=is_eval,
                 )
 
-            prompts = [sample.prompt for sample in samples]
+            prompts = [sample.prompt for sample, _ in samples]
             input_tokens, seq_lens = self.tokenize(prompts)
 
-        return input_tokens, seq_lens, {"get_prompts_time": t1.data["time"], "tokenize_time": t2.data["time"]}
+        metrics = {"get_prompts_time": t1.data["time"], "tokenize_time": t2.data["time"], "eval_prompts": n_eval}
+        return input_tokens, seq_lens, metrics
 
     def gather_rollouts(self):
         with Tracker(timer=True) as t:
             pid_ready_to_process: list[int] = []
             for k, v in self.global_rollouts.items():
-                if len(v) == self.inference_config.group_size:
+                if len(v) == v.n_rollouts:
                     pid_ready_to_process.append(k)
 
             self.cleanup_rollouts(pid_ready_to_process)
             self.detokenizer(pid_ready_to_process)
 
+            n_eval = 0
             for pid in pid_ready_to_process:
-                self.async_options.rollout_queue.put(self.global_rollouts[pid])
+                rollout = self.global_rollouts[pid]
+                if rollout.is_eval:
+                    self.async_options.eval_rollout_queue.put(rollout)
+                    n_eval += 1
+                else:
+                    self.async_options.rollout_queue.put(rollout)
                 del self.global_rollouts[pid]
 
             logger.info(
@@ -674,7 +701,11 @@ class AsyncInferenceWorker(Worker):
                 log_for_all=True,
             )
 
-        return {"gather_time": t.data["time"], "ready_rollouts": len(pid_ready_to_process)}
+        return {
+            "gather_time": t.data["time"],
+            "ready_rollouts": len(pid_ready_to_process),
+            "ready_eval_rollouts": n_eval,
+        }
 
     def inference(self):
         key = jax.device_get(jax.random.fold_in(jax.random.PRNGKey(1024), stax.get_rank()))

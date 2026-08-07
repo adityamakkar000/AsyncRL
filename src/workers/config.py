@@ -142,27 +142,41 @@ class AsyncConfig:
     train_workers: int = 1
     max_lag: int = 4
 
+
+@dataclass
+class EvalConfig:
+    group_size: int = 8
+    pass_k: list[int] = field(default_factory=lambda: [32, 64, 128])
+    log_traces_n_prompts: int = -1
+    eval_every_n_steps: int = 50
+    val_dataset_configs: list[DatasetConfig] = field(default_factory=list)
+
+
 @dataclass
 class TeacherConfig:
     teacher_checkpoint: str = MISSING
     teacher_step: Optional[int] = None
 
+
 @dataclass
 class TrainerConfig:
     experiment_name: str = MISSING  # The name of the experiment
-    data_config: DatasetConfig = MISSING  # The configuration for the data module
+    train_dataset_config: DatasetConfig = MISSING  # The configuration for the data module
     model_config: ModelConfig = MISSING  # The configuration for the model
     loss_config: LossConfig = MISSING  # The configuration for the loss function
+
+    eval_config: EvalConfig = field(default_factory=EvalConfig)
 
     async_config: AsyncConfig = field(default_factory=AsyncConfig)  # The configuration for asynchronous training
     sharding_config: ShardingConfig = field(default_factory=ShardingConfig)  # The configuration for sharding
 
-    teacher_config: Optional[TeacherConfig] = None 
+    teacher_config: Optional[TeacherConfig] = None
 
     # training config
     seed: int = 0
 
     num_steps: int = 1000
+    train_batch_size: int = MISSING
     grad_accum_steps: int = 1  # gradient accumulation steps
 
     optimizer: str = "adamw"  # "adamw", "adam", "sgd"

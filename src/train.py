@@ -42,6 +42,9 @@ def get_queues():
                 manager.get_rollout_queue(),  # type: ignore
                 manager.get_weight_sync_queue(),  # type: ignore
                 manager.get_inference_metrics_queue(),  # type: ignore
+                manager.get_eval_prompt_queue(),  # type: ignore
+                manager.get_eval_rollout_queue(),  # type: ignore
+                manager.get_eval_done_queue(),  # type: ignore
             )
         except ConnectionError:
             logger.info(f"[Client] Waiting for server at {GLOBAL_IP}...", log_for_all=True)
@@ -86,24 +89,36 @@ def main(cfg: DictConfig) -> None:
         axis_types=(AxisType.Explicit, AxisType.Explicit),
     )
 
-    local_prompt_queue = queue.Queue(
-        maxsize=(cfg.data_config.batch_size // cfg.loss_config.inference_config.group_size)
-    )
+    local_prompt_queue = queue.Queue(maxsize=(cfg.train_batch_size // cfg.loss_config.inference_config.group_size))
     local_rollout_queue = queue.Queue()
     local_weight_sync_queue = queue.Queue(maxsize=inference_workers)
     local_inference_metrics_queue = queue.Queue()
+    local_eval_prompt_queue = queue.Queue()
+    local_eval_rollout_queue = queue.Queue()
+    local_eval_done_queue = queue.Queue()
 
     QueueManager.register("get_prompt_queue", callable=lambda: local_prompt_queue)
     QueueManager.register("get_rollout_queue", callable=lambda: local_rollout_queue)
     QueueManager.register("get_weight_sync_queue", callable=lambda: local_weight_sync_queue)
     QueueManager.register("get_inference_metrics_queue", callable=lambda: local_inference_metrics_queue)
+    QueueManager.register("get_eval_prompt_queue", callable=lambda: local_eval_prompt_queue)
+    QueueManager.register("get_eval_rollout_queue", callable=lambda: local_eval_rollout_queue)
+    QueueManager.register("get_eval_done_queue", callable=lambda: local_eval_done_queue)
 
     if VM_IP == GLOBAL_IP:
         start_server()
 
     sync_global_devices("serverReady")
 
-    global_prompt_queue, global_rollout_queue, global_weight_sync_queue, global_inference_metrics_queue = get_queues()
+    (
+        global_prompt_queue,
+        global_rollout_queue,
+        global_weight_sync_queue,
+        global_inference_metrics_queue,
+        global_eval_prompt_queue,
+        global_eval_rollout_queue,
+        global_eval_done_queue,
+    ) = get_queues()
 
     async_options = AsyncOptions(
         train_workers=train_workers,
@@ -112,6 +127,9 @@ def main(cfg: DictConfig) -> None:
         rollout_queue=global_rollout_queue,
         weight_sync_queue=global_weight_sync_queue,
         inference_metrics_queue=global_inference_metrics_queue,
+        eval_prompt_queue=global_eval_prompt_queue,
+        eval_rollout_queue=global_eval_rollout_queue,
+        eval_done_queue=global_eval_done_queue,
         train_mesh=train_mesh,
         inference_mesh=inference_mesh,
         global_mesh=global_mesh,

@@ -1,2 +1,5 @@
+defaults:
+  - math
+  - _self_
+
 name: omnimath
-gcs_path: gs://arl-experiments/data/omnimath

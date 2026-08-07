@@ -1,19 +1,11 @@
 import json
-import os
-from typing import Dict
 
 import gcsfs
 import numpy as np
-from datasets import Dataset
 
 from src.constants import SYSTEM_PROMPT
 
 from .config import RLBatch, Sample
-
-
-def samples_to_dataset(samples: list[Sample]) -> Dataset:
-    """Convert a list of Sample to a HuggingFace Dataset (prompt, answer, solution columns)."""
-    return Dataset.from_list([s.get_dict() for s in samples])
 
 
 def load_jsonl_from_gcs(gs_prefix: str) -> list[dict]:
@@ -46,19 +38,7 @@ def upload_local_file_to_gcs(local_path: str, gs_path: str):
             dst.write(data)
 
 
-def write_dataset_to_local_jsonl(dataset: Dataset, local_path: str) -> None:
-    """Write dataset to a local JSONL file (all columns)."""
-
-    dataset.to_json(local_path, lines=True)
-
-
-def delete_local_file(local_path: str) -> None:
-    """Remove the local file to free disk. Make sure to only remove .jsonl files"""
-    if os.path.isfile(local_path) and local_path.endswith(".jsonl"):
-        os.remove(local_path)
-
-
-def compute_aux_metrics(batch: RLBatch) -> Dict[str, float]:
+def compute_aux_metrics(batch: RLBatch) -> dict[str, float]:
     token_mask = batch.reference_model_logprobs != -np.inf
     return {
         "mean_reward": np.mean(batch.rewards).item(),
@@ -114,3 +94,11 @@ def get_chat_template(system_prompt: bool, text: str) -> list[dict[str, str]]:
         chat.append({"role": "system", "content": SYSTEM_PROMPT})
     chat.append({"role": "user", "content": apply_prompt_template(text)})
     return chat
+
+
+def pass_at_k(n: int, c: int, k: int) -> float:
+    if k > n:
+        return float(1.0 - (1.0 - c / n) ** k)
+    if n - c < k:
+        return 1.0
+    return float(1.0 - np.prod(1.0 - k / np.arange(n - c + 1, n + 1)))

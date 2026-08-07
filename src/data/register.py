@@ -12,12 +12,10 @@ Helper functions:
 - Sample.from_dict(data: dict) -> Sample
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from datasets import load_dataset
-from transformers import AutoTokenizer
 
-from src.constants import SYSTEM_PROMPT
 from src.data.config import Sample
 
 # Registry: name -> function that returns list[Sample] and takes no inputs
@@ -34,108 +32,11 @@ def register_dataset(name: str) -> Callable[[Callable[[], list[Sample]]], Callab
     return decorator
 
 
-def apply_prompt_template(text: str) -> str:
-    return f"""Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
-{text}
-Remember to put your answer inside \\boxed{{}}."""
-
-
-def apply_system_prompt_template() -> str:
-    return SYSTEM_PROMPT
-
-
-def get_chat_template(system_prompt: bool, text: str) -> list[dict[str, str]]:
-    chat = []
-    if system_prompt:
-        chat.append({"role": "system", "content": apply_system_prompt_template()})
-    chat.append({"role": "user", "content": apply_prompt_template(text)})
-    return chat
-
-
-def filter_dataset(samples: list[Sample], max_length: int, tokenizer: AutoTokenizer) -> list[Sample]:
-    """Filter a dataset to only include samples where the prompt is less than max_length tokens."""
-
-    tokenized_prompts = [
-        tokenizer.apply_chat_template(
-            get_chat_template(system_prompt=True, text=sample.prompt),
-            add_generation_prompt=True,
-            tokenize=True,
-        )["input_ids"]
-        for sample in samples
-    ]
-
-    filtered_samples = [sample for sample, ids in zip(samples, tokenized_prompts) if len(ids) < max_length]
-
-    print(
-        f"Filtered {len(samples) - len(filtered_samples)} samples that were too long for the model. Remaining samples: {len(filtered_samples)}"
-    )
-
-    return filtered_samples
-
-
 @register_dataset("omnimath")
 def load_omnimath() -> list[Sample]:
     ds = load_dataset("KbsdJames/Omni-MATH", split="test")
     samples = [
         Sample(prompt=example["problem"], answer=example["answer"], solution=example["solution"]) for example in ds
-    ]
-    ds.cleanup_cache_files()
-    return samples
-
-
-@register_dataset("omnimath_debug_1k")
-def load_omnimath_debug_1k() -> list[Sample]:
-    ds = load_dataset("KbsdJames/Omni-MATH", split="test")
-    ds_sorted = ds.sort("difficulty")[2000:3000]
-
-    samples = [
-        Sample(prompt=ds_sorted["problem"][i], answer=ds_sorted["answer"][i], solution=ds_sorted["solution"][i])
-        for i in range(1000)
-    ]
-    ds.cleanup_cache_files()
-    return samples
-
-
-@register_dataset("omnimath_debug_250_500")
-def load_omnimath_debug_250_500() -> list[Sample]:
-    """omnimath with the 250-500 problems sorted by difficulty"""
-
-    ds = load_dataset("KbsdJames/Omni-MATH", split="test")
-    ds_sorted = ds.sort("difficulty")[250:500]
-
-    samples = [
-        Sample(prompt=ds_sorted["problem"][i], answer=ds_sorted["answer"][i], solution=ds_sorted["solution"][i])
-        for i in range(250)
-    ]
-    ds.cleanup_cache_files()
-    return samples
-
-
-@register_dataset("omnimath_debug_500_750")
-def load_omnimath_debug_500_750() -> list[Sample]:
-    """omnimath with the 500-750 problems sorted by difficulty"""
-
-    ds = load_dataset("KbsdJames/Omni-MATH", split="test")
-    ds_sorted = ds.sort("difficulty")[500:750]
-
-    samples = [
-        Sample(prompt=ds_sorted["problem"][i], answer=ds_sorted["answer"][i], solution=ds_sorted["solution"][i])
-        for i in range(250)
-    ]
-    ds.cleanup_cache_files()
-    return samples
-
-
-@register_dataset("omnimath_debug_1500_1750")
-def load_omnimath_debug_1500_1750() -> list[Sample]:
-    """omnimath with the 1500-1750 problems sorted by difficulty"""
-
-    ds = load_dataset("KbsdJames/Omni-MATH", split="test")
-    ds_sorted = ds.sort("difficulty")[1500:1750]
-
-    samples = [
-        Sample(prompt=ds_sorted["problem"][i], answer=ds_sorted["answer"][i], solution=ds_sorted["solution"][i])
-        for i in range(250)
     ]
     ds.cleanup_cache_files()
     return samples
@@ -168,10 +69,6 @@ def load_gsm8k_hard_256() -> list[Sample]:
     ds_sorted = ds.sort("len_solution", reverse=True)
 
     def get_answer(answer: str) -> str:
-        """
-        Answers are of the form '... #### 15'
-        So we seperate, take the last part after the # and strip whitespace to get the answer.
-        """
         return answer.split("#")[-1].strip()
 
     samples = [
@@ -249,18 +146,6 @@ def load_polaris() -> list[Sample]:
     return samples
 
 
-@register_dataset("polaris-1024-filtered")
-def load_polaris_1024_filtered() -> list[Sample]:
-    ds = load_dataset("POLARIS-Project/Polaris-Dataset-53K")["train"]
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B", trust_remote_code=True)
-
-    samples = [Sample(prompt=example["problem"], answer=str(example["answer"]), solution=None) for example in ds]
-
-    filtered_samples = filter_dataset(samples, 1024, tokenizer)
-    ds.cleanup_cache_files()
-    return filtered_samples
-
-
 @register_dataset("troll-17k-train")
 def load_troll_17k() -> list[Sample]:
     ds = load_dataset("philippbecker/troll_data")["train"]
@@ -272,23 +157,6 @@ def load_troll_17k() -> list[Sample]:
     ]
     ds.cleanup_cache_files()
     return samples
-
-
-@register_dataset("troll-17k-train-filtered")
-def load_troll_17k_train_filtered() -> list[Sample]:
-    ds = load_dataset("philippbecker/troll_data")["train"]
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B", trust_remote_code=True)
-
-    samples = [
-        Sample(
-            prompt=example["prompt"][1]["content"], answer=str(example["reward_model"]["ground_truth"]), solution=None
-        )
-        for example in ds
-    ]
-
-    filtered_samples = filter_dataset(samples, 1024, tokenizer)
-    ds.cleanup_cache_files()
-    return filtered_samples
 
 
 @register_dataset("troll-10k-test")
@@ -304,18 +172,22 @@ def load_troll_10k_test() -> list[Sample]:
     return samples
 
 
-@register_dataset("troll-10k-test-filtered")
-def load_troll_10k_test_filtered() -> list[Sample]:
-    ds = load_dataset("philippbecker/troll_data")["test"]
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B", trust_remote_code=True)
+DAPO_PROMPT_PREFIX = (
+    "Solve the following math problem step by step. The last line of your response should be of the form "
+    "Answer: $Answer (without quotes) where $Answer is the answer to the problem.\n\n"
+)
 
+
+@register_dataset("dapo_math_17k")
+def load_dapo_math_17k() -> list[Sample]:
+    ds = load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", split="train")
     samples = [
         Sample(
-            prompt=example["prompt"][1]["content"], answer=str(example["reward_model"]["ground_truth"]), solution=None
+            prompt=example["prompt"][0]["content"].removeprefix(DAPO_PROMPT_PREFIX),
+            answer=str(example["reward_model"]["ground_truth"]),
+            solution=None,
         )
         for example in ds
     ]
-
-    filtered_samples = filter_dataset(samples, 1024, tokenizer)
     ds.cleanup_cache_files()
-    return filtered_samples
+    return samples

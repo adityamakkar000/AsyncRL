@@ -1,5 +1,5 @@
 defaults:
-  - base 
+  - base
   - model_config: qwen_0.6b_base
   - loss_config: loss
   - datasets@train_dataset_config: gsm8k
@@ -11,8 +11,8 @@ train_batch_size: 512
 
 eval_config:
   group_size: 8
-  pass_k: [1, 4, 8]
-  eval_every_n_steps: 5
+  pass_k: [8, 32, 64, 128]
+  eval_every_n_steps: 75
   val_dataset_configs:
     - name: gsm8k
       verifier:
@@ -21,12 +21,10 @@ eval_config:
         - _target_: src.data.filters.PromptLengthFilter
           max_length: 1024
         - _target_: src.data.filters.EnglishFilter
-        - _target_: src.data.filters.RandomSampleFilter
-          n: 16
 
 grad_accum_steps: 4
 seed: 0
-num_steps: 250
+num_steps: 1000
 
 optimizer: "adamw"
 weight_decay: 0.01
@@ -38,12 +36,14 @@ learning_rate_end: 1e-6
 warmup_steps: 0.0
 decay_steps: 1.0
 
-spot_training: true 
-checkpoint_interval: 50
-max_checkpoints_to_keep: 1
+spot_training: true
+checkpoint_interval: 100
+max_checkpoints_to_keep: 2
 
-wandb_config: 
-  project: "Debug"
+log_generations_every_n_steps: 5000
+
+wandb_config:
+  project: "AnnealedRL"
   notes: null
   tags: null
 
@@ -54,7 +54,7 @@ loss_config:
     max_decode_batch_size: 64
     group_size: 16
     temperature: 1.0
-    reasoning_budget: null 
+    reasoning_budget: null
     think_mode: true
     system_prompt: false
   rl_config:
@@ -64,14 +64,14 @@ loss_config:
 model_config:
   fused_chunk_size: !!null
 
-sharding_config: 
+sharding_config:
   opt_state_offload: false
   min_bytes_for_fsdp: 1048576
   weight_shard_dim: 0
   data_shard_dim: 0
   cp_shard_dim: 1
   dp_group_size: 1
-  cp_group_size: 1 
+  cp_group_size: 1
   fsdp_group_size: -1
 
 
@@ -81,9 +81,9 @@ async_config:
 
 metrics_to_log:
   - "train/loss"
-  - "train/is_ratio_step_0"
   - "train/mean_reward"
-  - "val/mean_reward"
   - "train/num_unparsable"
+  - "eval/gsm8k/avg@8"
+  - "eval/gsm8k/pass@8"
 
 debug: false

@@ -52,6 +52,9 @@ class AsyncOptions:
     rollout_queue: queue.Queue
     weight_sync_queue: queue.Queue[str]
     inference_metrics_queue: queue.Queue[dict]
+    eval_prompt_queue: queue.Queue
+    eval_rollout_queue: queue.Queue
+    eval_done_queue: queue.Queue[str]
     train_mesh: jax.sharding.Mesh
     inference_mesh: jax.sharding.Mesh
     global_mesh: jax.sharding.Mesh

@@ -1,14 +1,16 @@
+import random
 from typing import Any
 
 import jax
 import numpy as np
+from hydra.utils import instantiate
 from stax.logger import staxLogger as logger
 from transformers import AutoTokenizer
 
-from src.constants import DATA, GS_BUCKET
-
 from .config import DatasetConfig, InferenceRollout, RLBatch, Sample
-from .utils import compute_aux_metrics, get_chat_template, load_jsonl_from_gcs, resolve_pad_eos
+from .filters import Filter
+from .register import GLOBAL_DICT
+from .utils import compute_aux_metrics, pass_at_k, resolve_pad_eos
 from .verifier import Verifier
 
 
@@ -19,53 +21,41 @@ class DataLoader:
         max_seq_length: int,
         use_system_prompt: bool,
         hf_model: str,
-        mesh: jax.sharding.Mesh,
     ) -> None:
         self.dataset_config = dataset_config
         self.max_seq_length = max_seq_length
         self.use_system_prompt = use_system_prompt
         self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
         self.pad_token, self.eos_token = resolve_pad_eos(self.tokenizer)
-        self.mesh = mesh
 
-        self.samples = self._load_from_gcs()
-        self.total_samples = len(self.samples)
-
-    def _resolve_gcs_path(self) -> str:
-        if self.dataset_config.gcs_path:
-            return self.dataset_config.gcs_path
-        return f"{GS_BUCKET}/{DATA}/{self.dataset_config.name}"
-
-    def _load_from_gcs(self) -> list[Sample]:
-        gs_path = self._resolve_gcs_path()
-        rows = load_jsonl_from_gcs(gs_path)
-        if not rows:
-            raise ValueError(f"No rows found at {gs_path}")
-        samples = [Sample.from_dict(r) for r in rows]
-        samples = self.filter_samples(samples)
+        self.verifier: Verifier = instantiate(dataset_config.verifier)
+        self.filters: list[Filter] = [instantiate(f) for f in dataset_config.filters]
+        for data_filter in self.filters:
+            data_filter.bind(self.tokenizer, self.use_system_prompt)
 
         self._current_idx = 0
-        return samples
+        self.samples = self._load_samples()
+        self.total_samples = len(self.samples)
+
+    def _load_samples(self) -> list[Sample]:
+        name = self.dataset_config.name
+        if name not in GLOBAL_DICT:
+            raise ValueError(f"Unknown dataset {name!r}. Registered datasets: {sorted(GLOBAL_DICT)}")
+
+        samples = GLOBAL_DICT[name]()
+        if not samples:
+            raise ValueError(f"Dataset {name!r} returned no samples")
+        return self.filter_samples(samples)
 
     def filter_samples(self, samples: list[Sample]) -> list[Sample]:
-        def filter_fn(x: Sample) -> bool:
-            if self.dataset_config.prompt_length is not None:
-                prompt_tokens = self.tokenizer.apply_chat_template(
-                    get_chat_template(self.use_system_prompt, x.prompt),
-                    add_generation_prompt=True,
-                    enable_thinking=True,
-                    tokenize=True,
-                )
-                if len(prompt_tokens) > self.dataset_config.prompt_length:
-                    return False
-
-            return True
-
-        filtered_dataset = [s for s in samples if filter_fn(s)]
+        kept = samples
+        for data_filter in self.filters:
+            kept = data_filter.select(kept)
         logger.info(
-            f"[dataset] Filtered {len(samples) - len(filtered_dataset)} samples out of {len(samples)} based on prompt_length and solution_length constraints."
+            f"[dataset] {self.dataset_config.name}: kept {len(kept)}/{len(samples)} samples "
+            f"after {len(self.filters)} filter(s)"
         )
-        return filtered_dataset
+        return kept
 
     def __call__(self, num_prompts: int) -> list[Sample]:
         samples = [
@@ -129,6 +119,43 @@ class DataLoader:
 
         return rl_batch, metrics
 
+    def score_rollouts(
+        self, generations: list[InferenceRollout], k: int, pass_k: list[int]
+    ) -> tuple[dict[str, float], np.ndarray]:
+        rewards, num_unparsable = self._get_rewards(generations)
+        iterations = [i for g in generations for i in g.weight_iteration]
+        n_correct = (rewards > 0).sum(axis=1)
+
+        metrics = {
+            f"avg@{k}": rewards.mean().item(),
+            "num_unparsable": num_unparsable / rewards.size,
+            "n_prompts": float(len(generations)),
+            "weight_iteration_min": float(min(iterations)) if iterations else 0.0,
+            "weight_iteration_max": float(max(iterations)) if iterations else 0.0,
+        }
+        for target_k in pass_k:
+            label = f"pass@{target_k}" if target_k <= k else f"pass@k={target_k}"
+            metrics[label] = float(np.mean([pass_at_k(k, int(c), target_k) for c in n_correct]))
+        return metrics, rewards
+
+    def build_trace_table(
+        self, generations: list[InferenceRollout], rewards: np.ndarray, n_prompts: int
+    ) -> dict[str, list[str]]:
+        table: dict[str, list[str]] = {"prompt": [], "answer": [], "rollout": [], "extracted": [], "reward": []}
+        indices = range(len(generations))
+        if 0 <= n_prompts < len(generations):
+            indices = sorted(random.Random(0).sample(indices, n_prompts))
+
+        for prompt_idx in indices:
+            rollout = generations[prompt_idx]
+            for rollout_idx, text in enumerate(rollout.rollout_strs):
+                table["prompt"].append(rollout.sample.prompt)
+                table["answer"].append(rollout.sample.answer)
+                table["rollout"].append(text)
+                table["extracted"].append(str(self.verifier.extract(text)))
+                table["reward"].append(str(rewards[prompt_idx][rollout_idx]))
+        return table
+
     def pad_tokens(self, inference_rollouts: list[InferenceRollout], constant_val, field_name: str) -> np.ndarray:
         for inference_rollout in inference_rollouts:
             for field in getattr(inference_rollout, field_name):
@@ -166,7 +193,7 @@ class DataLoader:
         return True
 
     def get_reward(self, output_str: str, answer: str) -> float | None:
-        return Verifier.get_reward(output_str, answer)
+        return self.verifier.get_reward(output_str, answer)
 
     def save_checkpoint(self) -> dict[str, Any]:
         return {

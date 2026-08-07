@@ -20,6 +20,7 @@ from omegaconf import OmegaConf
 from stax import staxLogger as logger
 from stax import sync_over_mesh
 from stax.utils import metrics_all_reduce
+from stax.writer import TableMetrics
 
 from src.constants import CHECKPOINTS, GS_BUCKET, PROFILE, TIMEOUT, AsyncOptions
 from src.data import DataLoader, InferenceRollout, RLBatch
@@ -30,7 +31,8 @@ from .rdma_transfer import RDMATransferServer
 from .utils import Key, reduce_inference_metric, setup, write_to_gcs
 from .worker import Worker
 
-load_dotenv() 
+load_dotenv()
+
 
 class AsyncTrainerWorker(Worker):
     """
@@ -91,9 +93,9 @@ class AsyncTrainerWorker(Worker):
             raise ValueError("grad_clip must be positive if set")
         if (cfg.warmup_steps + cfg.decay_steps) > 1.0:
             raise ValueError("warmup_steps and decay_steps must sum to at most 1.0")
-        if cfg.data_config.batch_size % cfg.loss_config.inference_config.group_size != 0:
+        if cfg.train_batch_size % cfg.loss_config.inference_config.group_size != 0:
             raise ValueError(
-                f"Batch size must be divisible by group size for proper batching in inference, got {cfg.data_config.batch_size} batch size and {cfg.loss_config.inference_config.group_size} group size."
+                f"Batch size must be divisible by group size for proper batching in inference, got {cfg.train_batch_size} batch size and {cfg.loss_config.inference_config.group_size} group size."
             )
         if cfg.model_config.fused_chunk_size is not None:
             vocab_size = cfg.model_config.model_args.get("vocab_size", None)
@@ -103,7 +105,7 @@ class AsyncTrainerWorker(Worker):
                 )
 
         n_hosts = jax.process_count()
-        train_batch_size = cfg.data_config.batch_size
+        train_batch_size = cfg.train_batch_size
         assert train_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
             f"Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {train_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
         )
@@ -126,7 +128,7 @@ class AsyncTrainerWorker(Worker):
         self.tx = None
 
         self.params = None
-        self.teacher_params = None 
+        self.teacher_params = None
 
         self.opt_state = None
         self.params_sharding = None
@@ -227,14 +229,9 @@ class AsyncTrainerWorker(Worker):
 
         self.train_mesh = shardings.mesh
 
-        if self.teacher_params is not None: 
-            self.teacher_params = jax.tree.map(
-                lambda x, s: jax.device_put(x, s), self.teacher_params, self.params_sharding
-            )
-
     @partial(setup, component="dataset")
     def _setup_dataset(self):
-        self.train_n_prompts: int = self.config.data_config.batch_size // (
+        self.train_n_prompts: int = self.config.train_batch_size // (
             self.config.loss_config.inference_config.group_size
         )
 
@@ -243,25 +240,26 @@ class AsyncTrainerWorker(Worker):
         max_seq_length = self.config.loss_config.inference_config.max_seq_len
         hf_model = self.config.model_config.hf_model_name
         self.train_dataset = DataLoader(
-            self.config.data_config,
+            self.config.train_dataset_config,
             max_seq_length,
             self.config.loss_config.inference_config.system_prompt,
             hf_model,
-            self.async_options.train_mesh,
         )
+
+        self.val_datasets = [
+            DataLoader(
+                val_dataset_config,
+                max_seq_length,
+                self.config.loss_config.inference_config.system_prompt,
+                hf_model,
+            )
+            for val_dataset_config in self.config.eval_config.val_dataset_configs
+        ]
 
     @partial(setup, component="model")
     def _setup_model(self):
         """Setup the model for training."""
         self.model = Model(self.config.model_config)
-
-        if self.config.teacher_config is not None: 
-            logger.info("Loading teacher/reference model", log_for_all=True)
-            teacher_step, teacher_params, _teacher_data = self.model.load_from_ckpt_old(
-                self.config.teacher_config.teacher_checkpoint,
-                self.config.teacher_config.teacher_step
-            )
-            self.teacher_params = teacher_params
 
     @partial(setup, component="train state")
     def _setup_train_state(self):
@@ -271,6 +269,13 @@ class AsyncTrainerWorker(Worker):
             "Sharding must be set up before train state init."
         )
         assert self.checkpointer is not None, "checkpointer must be set up before initializing train state"
+
+        if self.config.teacher_config is not None:
+            logger.info("Loading teacher/reference model", log_for_all=True)
+            _teacher_step, teacher_params, _teacher_metadata = self.model.load_from_ckpt_old(
+                self.config.teacher_config.teacher_checkpoint, self.config.teacher_config.teacher_step
+            )
+            self.teacher_params = jax.tree.map(lambda x, s: jax.device_put(x, s), teacher_params, self.params_sharding)
 
         if self.resumed:
             logger.info(
@@ -426,6 +431,43 @@ class AsyncTrainerWorker(Worker):
         logger.info(f"[weight_sync] Weights sent to inference worker in {t.data['time']:.2f} seconds", log_for_all=True)
         return {"train/weight_sync_time": t.data["time"]}
 
+    def run_eval(self) -> tuple[dict[str, float], list[TableMetrics]]:
+        metrics: dict[str, float] = {}
+        tables: list[TableMetrics] = []
+
+        with stax.Tracker(timer=True) as t:
+            if self.worker_rank == 0:
+                for val_dataset in self.val_datasets:
+                    name = val_dataset.dataset_config.name
+                    samples = val_dataset.samples
+                    for sample in samples:
+                        self.async_options.eval_prompt_queue.put(sample)
+
+                    logger.info(f"[eval] {name}: waiting on {len(samples)} prompts", log_for_all=True)
+                    generations: list[InferenceRollout] = []
+                    while len(generations) < len(samples):
+                        generations.append(self.async_options.eval_rollout_queue.get(timeout=TIMEOUT))
+
+                    scores, rewards = val_dataset.score_rollouts(
+                        generations, self.config.eval_config.group_size, list(self.config.eval_config.pass_k)
+                    )
+                    metrics |= {f"eval/{name}/{key}": v for key, v in scores.items()}
+
+                    if self.config.eval_config.log_traces_n_prompts != 0:
+                        traces = val_dataset.build_trace_table(
+                            generations, rewards, self.config.eval_config.log_traces_n_prompts
+                        )
+                        tables.append(TableMetrics(f"eval/generations/{name}", traces))
+
+                for _ in range(self.async_options.train_workers - 1):
+                    self.async_options.eval_done_queue.put("done")
+            else:
+                self.async_options.eval_done_queue.get(timeout=TIMEOUT)
+
+        metrics["eval/time"] = t.data["time"]
+        logger.info(f"[eval] complete in {t.data['time']:.2f}s", log_for_all=True)
+        return metrics, tables
+
     def _start_queue(self):
         def fn():
             assert self.train_dataset is not None, "Train dataset must be set up to fill queue."
@@ -507,7 +549,9 @@ class AsyncTrainerWorker(Worker):
 
         return metrics
 
-    def train_step(self, params, opt_state, local_batch, teacher_params=None, profile=False) -> tuple[PyTree, PyTree, dict]:
+    def train_step(
+        self, params, opt_state, local_batch, teacher_params=None, profile=False
+    ) -> tuple[PyTree, PyTree, dict]:
         assert self.train_fn is not None, "Train function not set up."
         assert self.shard_data_fn is not None, "Sharding function not set up."
 
@@ -517,7 +561,7 @@ class AsyncTrainerWorker(Worker):
                 lambda x: rearrange(
                     x,
                     "(m g) ... -> g m ...",
-                    m=self.config.data_config.batch_size // self.config.grad_accum_steps,
+                    m=self.config.train_batch_size // self.config.grad_accum_steps,
                     g=self.config.grad_accum_steps,
                 ),  # [grad_accum_steps, minibatch_size, seq_len]
                 global_batch,
@@ -530,11 +574,11 @@ class AsyncTrainerWorker(Worker):
                     self.train_fn,  # type: ignore
                     params,
                     opt_state,
-                    teacher_params,
                     global_train_batch,
+                    teacher_params=teacher_params,
                 )
             else:
-                out = self.train_fn(params, opt_state, teacher_params, global_train_batch)
+                out = self.train_fn(params, opt_state, global_train_batch, teacher_params=teacher_params)
 
             # we have to sync weights so might as well block to get true step time
             jax.tree.map(lambda x: x.block_until_ready(), out)
@@ -555,13 +599,15 @@ class AsyncTrainerWorker(Worker):
         # We overlap this with inference workers as they are async filling rollout queue
         # thus we have some time we can use to compile before we start the training loop
         local_test_batch = RLBatch.get_test_batch(
-            batch_size=self.config.data_config.batch_size // self.config.async_config.train_workers,
+            batch_size=self.config.train_batch_size // self.config.async_config.train_workers,
             max_seq_len=self.config.loss_config.inference_config.max_seq_len,
         )
         self.train_step(self.params, self.opt_state, local_test_batch, self.teacher_params, profile=False)
 
         logger.info(f"Starting training loop at step {self.global_step}", log_for_all=True)
         while self.global_step < self.total_steps:
+            tables: list[TableMetrics] = []
+
             with stax.Tracker(timer=True) as t:
                 generations, local_rollout_metrics = self.get_rollouts()
                 local_train_batch, local_train_batch_metrics = self.train_dataset.prepare_batch(generations, train=True)
@@ -589,11 +635,23 @@ class AsyncTrainerWorker(Worker):
             if stax.get_rank() == 0:
                 metrics |= self.get_inference_metrics()
 
-            generations_to_log = None
-            if self.global_step % self.config.log_generations_every_n_steps == 0:
-                generations_to_log = [(g.rollout_strs, g.sample.answer) for g in generations]
+            if self.global_step % self.config.eval_config.eval_every_n_steps == 0:
+                eval_metrics, eval_tables = self.run_eval()
+                metrics |= eval_metrics
+                tables.extend(eval_tables)
 
-            self.writer(self.global_step, metrics, generations=generations_to_log)
+            if self.global_step % self.config.log_generations_every_n_steps == 0:
+                tables.append(
+                    TableMetrics(
+                        f"train/generations/{self.train_dataset.dataset_config.name}",
+                        {
+                            "answer": [g.sample.answer for g in generations for _ in g.rollout_strs],
+                            "rollout": [r for g in generations for r in g.rollout_strs],
+                        },
+                    )
+                )
+
+            self.writer(self.global_step, metrics, table_metrics=tables)
             self.global_step += 1
 
             # save after you update state since if you want to save every 10 steps

@@ -1,9 +1,10 @@
-from dataclasses import dataclass
-from typing import cast
+from dataclasses import dataclass, field
+from typing import Any, cast
 
 import jax
 import numpy as np
 from flax import struct
+from omegaconf import MISSING
 
 
 @dataclass
@@ -28,18 +29,10 @@ class Sample:
 
 
 @dataclass
-class ProcessDatasetConfig:
-    name: list[str]
-    chunk_size: int
-    seed: int
-
-
-@dataclass
 class DatasetConfig:
-    name: str
-    batch_size: int
-    gcs_path: str | None = None
-    prompt_length: int | None = None
+    name: str = MISSING
+    verifier: dict[str, Any] = MISSING
+    filters: list[dict[str, Any]] = field(default_factory=list)
 
 
 @struct.dataclass
@@ -54,7 +47,7 @@ class RLBatch:
 
     @classmethod
     def get_test_batch(cls, batch_size: int, max_seq_len: int) -> "RLBatch":
-        return RLBatch.from_numpy(
+        return cls.from_numpy(
             tokens=np.zeros((batch_size, max_seq_len), dtype=np.int32),
             reference_model_logprobs=np.zeros((batch_size, max_seq_len), dtype=np.float32),
             seq_lens=np.zeros((batch_size,), dtype=np.int32),
@@ -76,13 +69,18 @@ class RLBatch:
         token_mask: np.ndarray,
     ) -> "RLBatch":
         return cls(
-            tokens=cast(jax.Array, tokens),
-            reference_model_logprobs=cast(jax.Array, reference_model_logprobs),
-            seq_lens=cast(jax.Array, seq_lens),
-            rewards=cast(jax.Array, rewards),
-            group_mean=cast(jax.Array, group_mean),
-            group_std=cast(jax.Array, group_std),
-            token_mask=cast(jax.Array, token_mask),
+            **jax.tree.map(
+                lambda x: cast(jax.Array, x),
+                {
+                    "tokens": tokens,
+                    "reference_model_logprobs": reference_model_logprobs,
+                    "seq_lens": seq_lens,
+                    "rewards": rewards,
+                    "group_mean": group_mean,
+                    "group_std": group_std,
+                    "token_mask": token_mask,
+                },
+            )
         )
 
 
@@ -93,6 +91,8 @@ class InferenceRollout:
     rollout_tokens: list[np.ndarray]
     rollout_logprobs: list[np.ndarray]
     weight_iteration: list[int]
+    n_rollouts: int = 0
+    is_eval: bool = False
 
     def __len__(self):
         assert len(self.rollout_logprobs) == len(self.rollout_tokens), (
