@@ -169,6 +169,7 @@ class Model(HFModelBase):
         target_tokens = tokens[:, 1:]
 
         if self.config.fused_chunk_size is not None:
+            logger.info(f"Using fused logprob path (chunk_size={self.config.fused_chunk_size})")
             x_logprobs, _ = self.fused_selection_call(
                 {"params": params},
                 x=tokens,

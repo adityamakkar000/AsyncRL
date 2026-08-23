@@ -63,6 +63,7 @@ loss_config:
 
 model_config:
   fused_chunk_size: !!null
+  # fused_chunk_size: 1187
 
 sharding_config: 
   opt_state_offload: false
