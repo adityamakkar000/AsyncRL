@@ -1,5 +1,5 @@
 import abc
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
@@ -16,7 +16,7 @@ class LossFunction(abc.ABC):
 
     def __init__(self, loss_config: LossConfig):
         self.config = loss_config
-        self.teacher_params: Optional[PyTree] = None
+        self.teacher_params: PyTree | None = None
 
     @abc.abstractmethod
     def compute_advantage(self, batch: RLBatch, teacher_params: PyTree = None) -> Array:
@@ -30,7 +30,7 @@ class LossFunction(abc.ABC):
     @abc.abstractmethod
     def compute_loss(
         self, x_logprobs: Array, advantages: Array, batch: RLBatch, teacher_params: PyTree = None
-    ) -> Array:
+    ) -> tuple[Array, dict[str, Array]]:
         """
         Compute the loss from the pre-computed PPO-clipped objective.
         Args:
@@ -47,10 +47,6 @@ class LossFunction(abc.ABC):
     ) -> tuple[Array, PyTree]:
         x_logprobs = model.get_logprobs(params, batch.tokens, batch.seq_lens)
 
-        teacher_logprobs = None
-        if teacher_params is not None:
-            teacher_logprobs = model.get_logprobs(teacher_params, batch.tokens, batch.seq_lens)
-
         batch = batch.replace(  # type: ignore
             tokens=batch.tokens[:, 1:],
             reference_model_logprobs=batch.reference_model_logprobs[:, 1:],
@@ -58,7 +54,10 @@ class LossFunction(abc.ABC):
         )
 
         advantages = self.compute_advantage(batch)
-        loss = -1 * self.compute_loss(x_logprobs, advantages, batch, teacher_params)  # negate loss since grad descent
+        loss, aux_metrics = self.compute_loss(
+            x_logprobs, advantages, batch, teacher_params
+        )  # negate loss since grad descent
+        loss *= -1  # gradient descen
 
         safe_reference_logprobs = jnp.where(
             jnp.isfinite(batch.reference_model_logprobs), batch.reference_model_logprobs, 0.0
@@ -66,15 +65,10 @@ class LossFunction(abc.ABC):
         ratio = jnp.exp(x_logprobs - safe_reference_logprobs)
 
         # metrics will be reduced by compute_normalization function
-        aux_metrics = {
+        aux_metrics |= {
             "loss": loss,
             "is_ratio": jnp.sum(ratio * batch.token_mask),
         }
-
-        if teacher_logprobs is not None:
-            diff = (x_logprobs - teacher_logprobs) * batch.token_mask
-            aux_metrics["teacher_kl"] = jnp.sum(diff)
-            aux_metrics["teacher_abs_diff"] = jnp.sum(jnp.abs(diff))
 
         return loss, aux_metrics
 
@@ -91,11 +85,11 @@ class CISPOLoss(LossFunction):
 
     def compute_loss(
         self, x_logprobs: Array, advantages: Array, batch: RLBatch, teacher_params: PyTree = None
-    ) -> Array:
+    ) -> tuple[Array, dict[str, Array]]:
         ratio = jnp.exp(x_logprobs - batch.reference_model_logprobs)
         min_ratio = jax.lax.stop_gradient(jnp.minimum(ratio, self.epsilon))
         token_loss = jnp.sum(advantages[:, None] * min_ratio * x_logprobs * batch.token_mask)
-        return token_loss
+        return token_loss, {}
 
     @property
     def compute_normalization(self) -> Callable[[int | Array, PyTree], int | Array]:
@@ -119,9 +113,10 @@ class RLOOLoss(LossFunction):
 
     def compute_loss(
         self, x_logprobs: Array, advantages: Array, batch: RLBatch, teacher_params: PyTree = None
-    ) -> Array:
+    ) -> tuple[Array, dict[str, Array]]:
         token_loss = x_logprobs * batch.token_mask * advantages[:, None]
-        return token_loss.sum()
+        token_loss = token_loss.sum()
+        return token_loss, {}
 
     @property
     def compute_normalization(self) -> Callable[[int | Array, PyTree], int | Array]:
