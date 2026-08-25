@@ -451,6 +451,7 @@ def grade_answer_sympy(given_answer: str, ground_truth: str) -> bool:
     ):
         is_correct = False
     else:
+        is_correct = True
         for ground_truth_elem, given_elem in zip(ground_truth_elems, given_elems, strict=False):
             if _is_frac(ground_truth_elem) and _is_frac(given_elem):
                 # if fractions aren't reduced, then shouldn't be marked as correct

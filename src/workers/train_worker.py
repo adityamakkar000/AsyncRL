@@ -5,7 +5,7 @@ import time
 from collections import defaultdict
 from functools import partial
 from statistics import fmean
-from typing import Any, Optional
+from typing import Any
 
 import jax
 import jax._src.distributed as dist
@@ -51,8 +51,8 @@ class AsyncTrainerWorker(Worker):
         self.async_options = async_options
         self.validate_config()
 
-        logger.info(f"Setting up {self.config.experiment_name}", log_for_all=True)
-        logger.info(f"runtime={stax.get_rank()}, distributed={dist.global_state.process_id}", log_for_all=True)
+        self.log_info(f"Setting up {self.config.experiment_name}")
+        self.log_info(f"runtime={stax.get_rank()}, distributed={dist.global_state.process_id}")
 
         with stax.Tracker(timer=True) as tracker:
             self._init_state()
@@ -66,7 +66,7 @@ class AsyncTrainerWorker(Worker):
             self._start_queue()
 
             if not self.resumed:
-                logger.info("Saving intial checkpoint ...", log_for_all=True)
+                self.log_info("Saving intial checkpoint ...")
                 self.save_checkpoint(step=0)
                 dict_config = json.dumps(OmegaConf.to_container(self.config))
                 config_path = f"{self.gs_path}/config.json"
@@ -75,7 +75,7 @@ class AsyncTrainerWorker(Worker):
             self.train_sync_weights()
             self.sync_train_workers("Trainer initialization")
 
-        logger.info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds", log_for_all=True)
+        self.log_info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds")
 
     def validate_config(self):
         """Method to validate the TrainerConfig parameters."""
@@ -110,11 +110,9 @@ class AsyncTrainerWorker(Worker):
             f"Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {train_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
         )
 
-        n_devices = jax.device_count()  # total mesh size is n_devices and they all shard batch
-        # dp_group = cfg.sharding_config.dp_group_size * cfg.sharding_config.fsdp_group_size
-        # assert dp_group > jax.process_count(), f"dp group sharding batch should be greater than the number of hosts, got {dp_group} dp group size and {jax.process_count()} hosts."
-        assert train_batch_size % (n_devices * cfg.grad_accum_steps) == 0, (
-            f"Train batch size must be divisible by number of devices * grad_accum_steps for proper gradient accumulation, got {train_batch_size} train batch size, {n_devices} devices, and {cfg.grad_accum_steps} grad_accum_steps."
+        n_devices_train = jax.local_device_count() * cfg.async_config.train_workers
+        assert train_batch_size % (n_devices_train * cfg.grad_accum_steps) == 0, (
+            f"Train batch size must be divisible by train devices * grad_accum_steps for proper gradient accumulation, got {train_batch_size} train batch size, {n_devices_train} train devices, and {cfg.grad_accum_steps} grad_accum_steps."
         )
         assert (train_batch_size // cfg.loss_config.inference_config.group_size) % jax.process_count() == 0, (
             f"Number of groups per step must be divisible by number of hosts for proper distribution of groups, got {train_batch_size} train batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
@@ -194,16 +192,18 @@ class AsyncTrainerWorker(Worker):
         abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx, abstract=True)
         params_shape, opt_state_shape = abstract_state["params"], abstract_state["opt_state"]
 
-        loss_fn = instantiate(self.config.loss_config.rl_config, _recursive_=False, loss_config=self.config.loss_config)
+        self.loss_fn = instantiate(
+            self.config.loss_config.rl_config, _recursive_=False, loss_config=self.config.loss_config
+        )
 
         # val fn not needed since we just care about val reward, not loss
         self.train_fn, _val_fn, shardings = stax.fn.get_steps_fn(
-            loss_fn,
+            self.loss_fn,
             self.model,
             self.tx,
             has_aux=True,
             grad_steps=self.config.grad_accum_steps,
-            reduce_fn=loss_fn.compute_normalization,
+            reduce_fn=self.loss_fn.compute_normalization,
             val_steps=0,  # val steps is not used
             sharding=stax.ShardingConfig(
                 params_shape=params_shape,
@@ -248,10 +248,7 @@ class AsyncTrainerWorker(Worker):
 
         self.val_datasets = [
             DataLoader(
-                val_dataset_config,
-                max_seq_length,
-                self.config.loss_config.inference_config.system_prompt,
-                hf_model,
+                val_dataset_config, max_seq_length, self.config.loss_config.inference_config.system_prompt, hf_model
             )
             for val_dataset_config in self.config.eval_config.val_dataset_configs
         ]
@@ -278,13 +275,11 @@ class AsyncTrainerWorker(Worker):
             self.teacher_params = jax.tree.map(lambda x, s: jax.device_put(x, s), teacher_params, self.params_sharding)
 
         if self.resumed:
-            logger.info(
-                "Spot training enabled and checkpoint found, skipping parameter initialization.", log_for_all=True
-            )
+            self.log_info("Spot training enabled and checkpoint found, skipping parameter initialization.")
             self.restore_save_tree()
             return
 
-        logger.info("Initializing new run ...", log_for_all=True)
+        self.log_info("Initializing new run ...")
         sharding = {"params": self.params_sharding, "opt_state": self.opt_state_sharding}
         out_state = self.model.init_state(rng=self.key(), tx=self.tx, sharding=sharding, abstract=False)
         self.opt_state = out_state["opt_state"]
@@ -319,27 +314,20 @@ class AsyncTrainerWorker(Worker):
             optax.clip_by_global_norm(self.config.grad_clip) if self.config.grad_clip is not None else optax.identity()
         )
 
-        optimizer_args: dict = {
-            "learning_rate": lr_scheduler,
-        }
+        optimizer_args: dict = {"learning_rate": lr_scheduler}
         if self.config.weight_decay is not None and self.config.optimizer == "adamw":
             optimizer_args["weight_decay"] = self.config.weight_decay
             optimizer_args["eps"] = 1e-15
         if self.config.optimizer == "adam" or self.config.optimizer == "adamw":
             optimizer_args["mu_dtype"] = "float32"
-        self.tx = optax.chain(
-            clip,
-            optax.inject_hyperparams(optimizer)(
-                **optimizer_args,
-            ),
-        )
+        self.tx = optax.chain(clip, optax.inject_hyperparams(optimizer)(**optimizer_args))
 
     @partial(setup, component="checkpointer")
     def _setup_checkpointer(self):
         """Setup checkpointing mechanism."""
 
         path = f"{self.gs_path}/{CHECKPOINTS}/"
-        logger.info(f"rank: {stax.get_rank()}", log_for_all=True)
+        self.log_info(f"rank: {stax.get_rank()}")
 
         self.checkpointer = stax.OldCheckpointer(
             output_dir=path,
@@ -351,9 +339,9 @@ class AsyncTrainerWorker(Worker):
     def make_save_tree(
         self,
         *,
-        params: Optional[PyTree] = None,
-        opt_state: Optional[PyTree] = None,
-        metadata_metrics: Optional[dict[str, float]] = None,
+        params: PyTree | None = None,
+        opt_state: PyTree | None = None,
+        metadata_metrics: dict[str, float] | None = None,
     ):
         assert self.train_dataset is not None, "Train dataset must be set up to make save tree."
         assert self.train_mesh is not None, "train mesh should be intialized for checkpointing"
@@ -368,9 +356,7 @@ class AsyncTrainerWorker(Worker):
             "key": self.key.key,
         }
 
-        metadata = {
-            "writer_id": self.writer_id,
-        }
+        metadata = {"writer_id": self.writer_id}
 
         def convert_metric(x):
             return x.item() if isinstance(x, Array) else x
@@ -385,10 +371,10 @@ class AsyncTrainerWorker(Worker):
         if not self.config.debug:
             assert self.checkpointer is not None, "Checkpointer not set up."
             state, metadata = self.make_save_tree()
-            logger.info(f"Saving checkpoint at step {step} ...", log_for_all=True)
+            self.log_info(f"Saving checkpoint at step {step} ...")
             self.checkpointer.save(step=step, checkpoint_data=state, metadata=metadata)
         else:
-            logger.info(f"Debug mode enabled, skipping checkpoint save at step {step}.", log_for_all=True)
+            self.log_info(f"Debug mode enabled, skipping checkpoint save at step {step}.")
 
     def restore_save_tree(self):
         assert self.checkpointer is not None, "Checkpointer not set up."
@@ -423,12 +409,12 @@ class AsyncTrainerWorker(Worker):
                 for _ in range(self.async_options.inference_workers):
                     self.async_options.weight_sync_queue.put("sync")
 
-            _ = self.rdma_server.transfer({"params": params_cast})
+            _ = self.rdma_server.transfer({"params": params_cast}, init_mesh=self.train_mesh)
 
             del params_cast
 
         self.weight_iteration += 1
-        logger.info(f"[weight_sync] Weights sent to inference worker in {t.data['time']:.2f} seconds", log_for_all=True)
+        self.log_info(f"[weight_sync] Weights sent to inference worker in {t.data['time']:.2f} seconds")
         return {"train/weight_sync_time": t.data["time"]}
 
     def run_eval(self) -> tuple[dict[str, float], list[TableMetrics]]:
@@ -503,10 +489,11 @@ class AsyncTrainerWorker(Worker):
                     num_filtered_rollouts += 1
                     continue
 
-                if self.config.loss_config.filter_zero_variance:
-                    if self.train_dataset.check_rollout_zero_variance(rollout):
-                        num_filtered_rollouts += 1
-                        continue
+                if self.config.loss_config.filter_zero_variance and self.train_dataset.check_rollout_zero_variance(
+                    rollout
+                ):
+                    num_filtered_rollouts += 1
+                    continue
 
                 rollouts.append(rollout)
                 weight_iterations.append(lag_diff)
@@ -593,24 +580,24 @@ class AsyncTrainerWorker(Worker):
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
-        logger.info("Precompiling test batch", log_for_all=True)
+        self.log_info("Precompiling test batch")
 
-        # Profile first step
-        # We overlap this with inference workers as they are async filling rollout queue
-        # thus we have some time we can use to compile before we start the training loop
+        # Profile first step to overlap compile with intial inference queue filling
         local_test_batch = RLBatch.get_test_batch(
             batch_size=self.config.train_batch_size // self.config.async_config.train_workers,
             max_seq_len=self.config.loss_config.inference_config.max_seq_len,
         )
-        self.train_step(self.params, self.opt_state, local_test_batch, self.teacher_params, profile=False)
+        self.train_step(self.params, self.opt_state, local_test_batch, self.teacher_params, profile=True)
 
-        logger.info(f"Starting training loop at step {self.global_step}", log_for_all=True)
+        self.log_info(f"Starting training loop at step {self.global_step}")
         while self.global_step < self.total_steps:
             tables: list[TableMetrics] = []
 
             with stax.Tracker(timer=True) as t:
                 generations, local_rollout_metrics = self.get_rollouts()
+
                 local_train_batch, local_train_batch_metrics = self.train_dataset.prepare_batch(generations, train=True)
+
                 self.params, self.opt_state, train_metrics = self.train_step(
                     self.params, self.opt_state, local_train_batch, teacher_params=self.teacher_params
                 )
@@ -659,7 +646,7 @@ class AsyncTrainerWorker(Worker):
             if self.global_step % self.config.checkpoint_interval == 0 or self.global_step == self.total_steps:
                 self.save_checkpoint(step=self.global_step)
 
-        logger.info("Training complete.", log_for_all=True)
+        self.log_info("Training complete.")
 
     def start(self):
         try:
@@ -678,7 +665,7 @@ class AsyncTrainerWorker(Worker):
     def finish(self):
         """Finalize training and clean up resources."""
         if self.checkpointer:
-            logger.info("Cleaning up checkpointer resources...", log_for_all=True)
+            self.log_info("Cleaning up checkpointer resources...")
             self.block_checkpointer()
 
     @property
@@ -689,3 +676,6 @@ class AsyncTrainerWorker(Worker):
     def resumed(self):
         assert self.checkpointer is not None, "Checkpointer not set up."
         return self.config.spot_training and self.checkpointer.latest_step is not None
+
+    def log_info(self, msg: str):
+        logger.info(msg, log_for_all=self.config.debug)

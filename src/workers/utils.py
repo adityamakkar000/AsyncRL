@@ -1,7 +1,8 @@
 import time
+from collections.abc import Callable
 from functools import wraps
 from statistics import fmean
-from typing import Any, Callable, Optional
+from typing import Any
 
 import gcsfs
 import jax
@@ -79,7 +80,6 @@ def write_to_gcs(path: str, data: str):
 
 
 def naive_temp_sample(logits: Array, key: Array, *, temperature: float) -> tuple[Array, Array]:
-    B, T, V = logits.shape
     logits = logits[:, -1, :] / temperature
 
     next_tokens = jax.random.categorical(key, logits, axis=-1)[:, None]
@@ -88,7 +88,7 @@ def naive_temp_sample(logits: Array, key: Array, *, temperature: float) -> tuple
 
 
 def naive_sample(
-    logits: Array, key: Array, *, temperature: float = 1.0, top_k: Optional[int] = None, top_p: Optional[float] = None
+    logits: Array, key: Array, *, temperature: float = 1.0, top_k: int | None = None, top_p: float | None = None
 ) -> tuple[Array, Array]:
     """
     Sample the next token from the logits using temperature, top-k, and top-p sampling.
@@ -99,7 +99,7 @@ def naive_sample(
         next_tokens (Array): The sampled next tokens. Shape: [batch_size, 1].
         next_logprobs (Array): The log probabilities of the sampled tokens. Shape: [batch_size, 1].
     """
-    B, T, V = logits.shape
+    B, _T, V = logits.shape
     logits = logits[:, -1, :] / temperature
 
     if top_k:
@@ -141,6 +141,7 @@ def _maybe_force_eot(
     total_tokens = len(token_sequence)
 
     end_of_think_mask = end_of_think_mask | (next_token == think_token)
+    interrupt_mask = jnp.zeros_like(end_of_think_mask)
 
     for t in range(total_tokens):
         # NOTE: only 1 token in the loop can be inserted at most since the equality is differnt

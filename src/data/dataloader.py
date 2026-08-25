@@ -5,12 +5,11 @@ import jax
 import numpy as np
 from hydra.utils import instantiate
 from stax.logger import staxLogger as logger
-from transformers import AutoTokenizer
 
 from .config import DatasetConfig, InferenceRollout, RLBatch, Sample
 from .filters import Filter
 from .register import GLOBAL_DICT
-from .utils import compute_aux_metrics, pass_at_k, resolve_pad_eos
+from .utils import compute_aux_metrics, decode_tokens, load_tokenizer, pass_at_k, resolve_pad_eos
 from .verifier import Verifier
 
 
@@ -25,7 +24,7 @@ class DataLoader:
         self.dataset_config = dataset_config
         self.max_seq_length = max_seq_length
         self.use_system_prompt = use_system_prompt
-        self.tokenizer = AutoTokenizer.from_pretrained(hf_model)
+        self.tokenizer = load_tokenizer(hf_model)
         self.pad_token, self.eos_token = resolve_pad_eos(self.tokenizer)
 
         self.verifier: Verifier = instantiate(dataset_config.verifier)
@@ -70,7 +69,7 @@ class DataLoader:
         for inference_rollout in generations:
             token_rewards = []
             for tokens in inference_rollout.rollout_tokens:
-                reward = self.get_reward(self.tokenizer.decode(tokens), inference_rollout.sample.answer)
+                reward = self.get_reward(decode_tokens(self.tokenizer, tokens), inference_rollout.sample.answer)
                 if reward is None:
                     num_unparsable += 1
                     reward = 0.0
@@ -183,7 +182,7 @@ class DataLoader:
     def check_rollout_zero_variance(self, InferenceRollout: InferenceRollout) -> bool:
         reward_set = set()
         for tokens in InferenceRollout.rollout_tokens:
-            reward = self.get_reward(self.tokenizer.decode(tokens), InferenceRollout.sample.answer)
+            reward = self.get_reward(decode_tokens(self.tokenizer, tokens), InferenceRollout.sample.answer)
             if reward is None:
                 reward = 0.0
             reward_set.add(reward)

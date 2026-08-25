@@ -1,19 +1,20 @@
 import abc
 import random
 import re
-from typing import Any
+
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from .config import Sample
-from .utils import get_chat_template
+from .utils import apply_chat_template
 
 CHINESE_CHARACTERS = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
 
 
 class Filter(abc.ABC):
-    tokenizer: Any = None
+    tokenizer: PreTrainedTokenizerBase
     use_system_prompt: bool = False
 
-    def bind(self, tokenizer: Any, use_system_prompt: bool) -> None:
+    def bind(self, tokenizer: PreTrainedTokenizerBase, use_system_prompt: bool) -> None:
         self.tokenizer = tokenizer
         self.use_system_prompt = use_system_prompt
 
@@ -30,12 +31,7 @@ class PromptLengthFilter(Filter):
         self.max_length = max_length
 
     def __call__(self, sample: Sample) -> bool:
-        tokens = self.tokenizer.apply_chat_template(
-            get_chat_template(self.use_system_prompt, sample.prompt),
-            add_generation_prompt=True,
-            enable_thinking=True,
-            tokenize=True,
-        )
+        tokens = apply_chat_template(self.tokenizer, self.use_system_prompt, sample.prompt)
         return len(tokens) <= self.max_length
 
 

@@ -3,14 +3,14 @@ name = "annealedrl"
 version = "0.1.0"
 description = "annealed RL experiments"
 readme = "README.md"
-requires-python = "==3.11.13"
+requires-python = ">=3.12"
 
 dependencies = [
     "einops>=0.8.1",
     "gcsfs>=2024.6.0",
     "hydra-core==1.3.2",
-    "jax==0.8.0; platform_system != 'Linux'",
-    "jax[tpu]==0.8.0; platform_system == 'Linux'",
+    "jax==0.11.0; platform_system != 'Linux'",
+    "jax[tpu]==0.11.0; platform_system == 'Linux'",
     "jaxtyping>=0.3.4",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
@@ -18,14 +18,14 @@ dependencies = [
     "ruff>=0.14.10",
     "stax",
     "torch>=2.9.0",
-    "transformers==4.57.6",
+    "transformers==5.14.1",
     "datasets>=4.5.0",
     "openai>=2.21.0",
-    "tensorboard==2.20.0",
-    "tensorboard-plugin-profile==2.21.6",
+    "tensorboard>=2.20.0",
+    "xprof>=2.23.1",
     "pylatexenc>=2.10",
-    "openbench>=0.5.3",
-    "optax==0.2.7",
+    "jinja2>=3.1.0",
+    "optax==0.2.8",
     "wandb==0.27.0",
     "rich<14.0.0",
 ]
@@ -42,7 +42,7 @@ data = [
 ]
 
 eval = [
-    "vllm-tpu==0.12.0; platform_system == 'Linux'",
+    "vllm-tpu==0.27.0; platform_system == 'Linux'",
     "lm-eval>=0.4.11",
 ]
 

@@ -11,10 +11,16 @@ from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, PyTree
 from stax import Tracker
 from stax.logger import staxLogger as logger
-from transformers import AutoTokenizer
 
 from src.constants import INTERUPT_THINKING_PHARSE, TIMEOUT, AsyncOptions
-from src.data import InferenceRollout, Sample, get_chat_template, resolve_pad_eos
+from src.data import (
+    InferenceRollout,
+    Sample,
+    apply_chat_template,
+    decode_tokens,
+    load_tokenizer,
+    resolve_pad_eos,
+)
 from src.model import KVCache, Model
 
 from .config import AsyncState, InferenceShardings, InferenceState, TrainerConfig
@@ -62,7 +68,7 @@ class AsyncInferenceWorker(Worker):
         )
         self.monitor_thread.start()
 
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model.config.hf_model_name)
+        self.tokenizer = load_tokenizer(self.model.config.hf_model_name)
 
         self.pad_token, self.eos_token = resolve_pad_eos(self.tokenizer)
 
@@ -286,11 +292,11 @@ class AsyncInferenceWorker(Worker):
 
     def tokenize(self, texts: list[str]) -> tuple[np.ndarray, np.ndarray]:
         inputs: list[list[int]] = [
-            self.tokenizer.apply_chat_template(
-                get_chat_template(self.inference_config.system_prompt, text),
-                add_generation_prompt=True,
+            apply_chat_template(
+                self.tokenizer,
+                self.inference_config.system_prompt,
+                text,
                 enable_thinking=self.inference_config.think_mode,
-                tokenize=True,
             )
             for text in texts
         ]
@@ -314,7 +320,7 @@ class AsyncInferenceWorker(Worker):
                     "No eos token found in rollout.\nToken sequence: "
                     + str(tokens_not_padded)
                     + "\nDetokenized string: "
-                    + self.tokenizer.decode(tokens_not_padded, skip_special_tokens=False)
+                    + decode_tokens(self.tokenizer, tokens_not_padded)
                 )
 
             return tokens_not_padded[: eos_idx + 1], logprobs_not_padded[: eos_idx + 1]
@@ -331,7 +337,7 @@ class AsyncInferenceWorker(Worker):
 
     def detokenizer(self, pids: list[int]):
         for pid in pids:
-            rollout_tokens = self.global_rollouts[pid].rollout_tokens
+            rollout_tokens = [t.tolist() for t in self.global_rollouts[pid].rollout_tokens]
             rollout_strs = self.tokenizer.batch_decode(rollout_tokens, skip_special_tokens=False)
             self.global_rollouts[pid].rollout_strs = rollout_strs
 
@@ -471,10 +477,7 @@ class AsyncInferenceWorker(Worker):
 
         index = jnp.argmax(state.stop_mask[:, 0], keepdims=True)
 
-        state = state.shift_batch()
-        new_batch = new_batch.shift_batch()
-
-        kv_index = jnp.maximum(state.kv_cache[0].length, new_batch.kv_cache[0].length)
+        kv_index = jnp.maximum(jnp.max(state.seq_lens), jnp.max(new_batch.seq_lens)) - 1
 
         new_batch = new_batch.roll(kv_index)
         state = state.roll(kv_index)

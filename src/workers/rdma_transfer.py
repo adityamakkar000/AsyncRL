@@ -1,3 +1,4 @@
+import itertools
 from functools import cached_property
 
 import jax
@@ -6,6 +7,23 @@ import numpy as np
 from jaxtyping import PyTree
 
 EXPLICIT = jax.sharding.AxisType.Explicit
+
+
+def allocate_buffer(shapes: PyTree, sharding: jax.NamedSharding):
+    return jax.tree.map(
+        lambda s: jax.make_array_from_single_device_arrays(s.shape, sharding=sharding, arrays=[], dtype=s.dtype), shapes
+    )
+
+
+def get_default_sharding(mesh: jax.sharding.Mesh) -> jax.NamedSharding:
+    return jax.NamedSharding(mesh, jax.P())
+
+
+def create_mesh(devices: np.ndarray) -> jax.sharding.Mesh:
+    assert devices.ndim == 1, "devices must be a 1-dimensional array"
+    return jax.make_mesh(
+        axis_shapes=(devices.size,), axis_names=("devices",), axis_types=(EXPLICIT,), devices=tuple(devices)
+    )
 
 
 class RDMATransferServer:
@@ -20,32 +38,28 @@ class RDMATransferServer:
         self.slot_size = train_workers * jax.local_device_count()
 
         devices = np.array(jax.devices())
+        self.meshes = [create_mesh(devices[j * self.slot_size : (j + 1) * self.slot_size]) for j in range(self.n_slots)]
 
-        self.shardings = [
-            jax.NamedSharding(
-                jax.make_mesh(
-                    axis_shapes=(train_workers, jax.local_device_count()),
-                    axis_names=("processes", "local_devices"),
-                    axis_types=(EXPLICIT, EXPLICIT),
-                    devices=devices[j * self.slot_size : (j + 1) * self.slot_size],  # type: ignore
-                ),
-                jax.P(),
-            )
-            for j in range(self.n_slots)
-        ]
+    def get_zero_sharding(self, mesh: jax.sharding.Mesh) -> jax.NamedSharding:
+        devices = np.array(mesh.devices).reshape(-1)
+        mesh = create_mesh(devices)
+        return get_default_sharding(mesh)
 
-    def transfer(self, tree: PyTree) -> PyTree:
+    def transfer(self, tree: PyTree, init_mesh: jax.sharding.Mesh | None = None) -> PyTree:
         shapes = jax.tree.map(lambda leaf: jax.ShapeDtypeStruct(leaf.shape, leaf.dtype), tree)
+        shardings = list(map(get_default_sharding, self.meshes))
 
-        def make_buffer(s, sh):
-            return jax.make_array_from_single_device_arrays(s.shape, sh, arrays=[], dtype=s.dtype)
+        if init_mesh is not None:
+            if not self.slot == 0:
+                raise ValueError("only train workers should pass and init mesh")
+            shardings[0] = self.get_zero_sharding(init_mesh)
 
         if self.slot == 0:
-            tree = jax.device_put(tree, self.shardings[0])
-        for i in range(self.n_slots - 1):
-            src = self.shardings[i]
-            buffer = tree if self.slot == i else jax.tree.map(lambda s: make_buffer(s, src), shapes)
-            out = jax.device_put(buffer, self.shardings[i + 1])
+            tree = jax.device_put(tree, shardings[0])
+
+        for i, (src, dest) in enumerate(itertools.pairwise(shardings)):
+            buffer = tree if self.slot == i else allocate_buffer(shapes, src)
+            out = jax.device_put(buffer, dest)
             if self.slot == i + 1:
                 tree = out
 
@@ -64,7 +78,3 @@ class RDMATransferServer:
     @cached_property
     def slot(self) -> int:
         return self.rank // self.train_workers
-
-    @property
-    def is_train_worker(self) -> bool:
-        return self.rank < self.train_workers

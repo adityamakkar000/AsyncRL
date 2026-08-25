@@ -159,8 +159,8 @@ def run_tpu_jobs(
                 response.raise_for_status()
                 print(f"Job submitted: {response.json()}, details: {response.text}")
             except requests.exceptions.HTTPError as err:
-                if response.status_code == 409:
-                    print("Conflict Details:", response.text)  # Look here for the exact cause
+                if err.response is not None and err.response.status_code == 409:
+                    print("Conflict Details:", err.response.text)  # Look here for the exact cause
                 else:
                     print("HTTP Error:", err)
         else:
