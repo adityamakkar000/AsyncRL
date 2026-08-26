@@ -40,7 +40,7 @@ class QueueManager(BaseManager):
 PORT = 9000
 KEY = b"aaa"
 VM_IP = socket.gethostbyname(socket.gethostname())
-GLOBAL_IP = GceTpuCluster.get_coordinator_address(60, None).split(":")[0]
+GLOBAL_IP = GceTpuCluster.get_coordinator_address(60).split(":")[0]
 TIMEOUT = 60 * 10  # 10 minutes for all queue
 
 

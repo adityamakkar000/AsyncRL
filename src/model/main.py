@@ -40,7 +40,7 @@ class Model(HFModelBase):
             ]
             out_state = {"params": params}
             if tx:
-                out_state["opt_state"] = tx.init(params)
+                out_state["opt_state"] = tx.init(jax.tree.map(lambda x: jnp.empty(x.shape, dtype=x.dtype), params))
             return out_state
 
         if abstract:

@@ -44,6 +44,26 @@ def load_omnimath() -> list[Sample]:
 
 @register_dataset("gsm8k")
 def load_gsm8k() -> list[Sample]:
+    ds = load_dataset("openai/gsm8k", "main", split="train")
+
+    def get_answer(answer: str) -> str:
+        """
+        Answers are of the form '... #### 15'
+        So we seperate, take the last part after the # and strip whitespace to get the answer.
+        """
+        return answer.split("#")[-1].strip()
+
+    samples = [
+        Sample(prompt=example["question"], answer=get_answer(example["answer"]), solution=example["answer"])
+        for example in ds
+    ]
+
+    ds.cleanup_cache_files()
+    return samples
+
+
+@register_dataset("gsm8k_val")
+def load_gsm8k_val() -> list[Sample]:
     ds = load_dataset("openai/gsm8k", "main", split="test")
 
     def get_answer(answer: str) -> str:

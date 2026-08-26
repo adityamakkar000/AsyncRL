@@ -7,6 +7,8 @@ defaults:
   - _self_
 
 
+debug: true
+
 train_batch_size: 512
 
 eval_config:
@@ -14,7 +16,7 @@ eval_config:
   pass_k: [1, 4, 8]
   eval_every_n_steps: 5
   val_dataset_configs:
-    - name: gsm8k
+    - name: gsm8k_val
       verifier:
         _target_: src.data.verifier.MathVerifier
       filters:
@@ -24,7 +26,7 @@ eval_config:
         - _target_: src.data.filters.RandomSampleFilter
           n: 16
 
-grad_accum_steps: 4
+grad_accum_steps: 1
 seed: 0
 num_steps: 250
 
@@ -62,8 +64,7 @@ loss_config:
     epsilon: 4
 
 model_config:
-  fused_chunk_size: !!null
-  # fused_chunk_size: 1187
+  fused_chunk_size: 1187
 
 sharding_config: 
   opt_state_offload: false
@@ -86,5 +87,3 @@ metrics_to_log:
   - "train/mean_reward"
   - "val/mean_reward"
   - "train/num_unparsable"
-
-debug: false

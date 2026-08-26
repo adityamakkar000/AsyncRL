@@ -404,7 +404,6 @@ class AsyncTrainerWorker(Worker):
             params_cast = jax.tree.map(
                 lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), self.params
             )
-
             if self.worker_rank == 0:
                 for _ in range(self.async_options.inference_workers):
                     self.async_options.weight_sync_queue.put("sync")

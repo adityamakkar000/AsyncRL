@@ -67,6 +67,14 @@ class RDMATransferServer:
         mh.sync_global_devices("rdma_transfer")
         return tree
 
+    def get_mesh(self, index: int = 0) -> jax.sharding.Mesh:
+        if index < 0 or index > len(self.meshes):
+            raise ValueError(f"expected index in 0 to {len(self.meshes)}, got {index}")
+        return self.meshes[index]
+
+    def get_sharding(self, index: int = 0) -> jax.sharding.NamedSharding:
+        return get_default_sharding(self.get_mesh(index))
+
     @cached_property
     def max_rank(self) -> int:
         return jax.process_count()

@@ -1,6 +1,6 @@
 import abc
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 from flax import linen as nn
 from flax import struct
@@ -20,8 +20,8 @@ class KVCache:
 @dataclass
 class ModelConfig:
     hf_model_name: str
-    model_args: Dict[str, Any] = MISSING
-    fused_chunk_size: Optional[int] = 1024
+    model_args: dict[str, Any] = MISSING
+    fused_chunk_size: int | None = 1024
 
 
 class BaseModel(abc.ABC, nn.Module):
@@ -58,6 +58,6 @@ class BaseModel(abc.ABC, nn.Module):
 
     @abc.abstractmethod
     def __call__(
-        self, x: Array, sequence_lens: Array, kv_cache: Optional[list[KVCache]] = None
+        self, x: Array, sequence_lens: Array, kv_cache: list[KVCache] | None = None
     ) -> tuple[Array, list[KVCache]]:
         pass
