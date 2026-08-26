@@ -5,7 +5,7 @@ import gcsfs
 import lm_eval
 from dotenv import load_dotenv
 from lm_eval.loggers import WandbLogger
-from lm_eval.tasks import TaskManager, get_task_dict
+from lm_eval.tasks import TaskManager
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
@@ -83,7 +83,7 @@ class EvalRunner:
         }
 
         task_manager = TaskManager(include_path="./src/configs/eval/tasks_yaml/")
-        tasks = list(get_task_dict(list(self.config.tasks), task_manager).values())
+        tasks = list(task_manager.load(list(self.config.tasks))["tasks"].values())
         for task in tasks:
             task.set_config(key="repeats", value=self.config.epochs)
 

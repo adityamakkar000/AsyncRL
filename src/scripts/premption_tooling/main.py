@@ -3,6 +3,7 @@ import subprocess
 import threading
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import IO, Any
 
 from rich.console import Console
 
@@ -79,7 +80,7 @@ class TPUJob:
     cmd: str
     cwd: str
     process: subprocess.Popen | None = None
-    _log_file: object = field(default=None, init=False, repr=False)
+    _log_file: IO[Any] | None = field(default=None, init=False, repr=False)
     retries: int = 3
     launched_by: str = ""
     cleanup_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)

@@ -1,5 +1,4 @@
 from functools import partial
-from typing import Optional, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -18,7 +17,7 @@ from stax import staxLogger as logger
 from .config import BaseModel, KVCache, ModelConfig
 from .utils import convert_dtype, fused_linear_selection, get_embedding_weights
 
-shardingType = Optional[PyTree[Sharding]]
+shardingType = PyTree[Sharding] | None
 
 
 class Model(HFModelBase):
@@ -30,7 +29,7 @@ class Model(HFModelBase):
         )
 
     def init_state(
-        self, rng: Array, tx: Optional[GradientTransformation], *, sharding: shardingType = None, abstract: bool = False
+        self, rng: Array, tx: GradientTransformation | None, *, sharding: shardingType = None, abstract: bool = False
     ) -> PyTree:
         x_init = jnp.ones((1, self.sequence_len), dtype=jnp.int32)
         seq_lens = jnp.array([1])
@@ -86,8 +85,8 @@ class Model(HFModelBase):
         return [_init() for _ in range(n_layers)]
 
     def load_from_ckpt(
-        self, path: str, step_number: Optional[int] = None, use_best=False
-    ) -> Tuple[int, PyTree, dict[str, float]]:
+        self, path: str, step_number: int | None = None, use_best=False
+    ) -> tuple[int, PyTree, dict[str, float]]:
         assert (step_number is not None) ^ use_best, "Either step_number or use_best must be set."
         path = f"{path}/checkpoints/"
         if use_best:
@@ -120,8 +119,8 @@ class Model(HFModelBase):
     def load_from_ckpt_old(
         self,
         path: str,
-        step_number: Optional[int] = None,
-    ) -> Tuple[int, PyTree, dict[str, float]]:
+        step_number: int | None = None,
+    ) -> tuple[int, PyTree, dict[str, float]]:
         path = f"{path}/checkpoints/"
 
         checkpointer = stax.OldCheckpointer(path)
@@ -148,7 +147,7 @@ class Model(HFModelBase):
         *,
         x: Array,
         sequence_lens: Array,
-        kv_cache: Optional[list[KVCache]] = None,
+        kv_cache: list[KVCache] | None = None,
         fused_output: bool = False,
     ) -> tuple[Array, list[KVCache]]:
         logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, fused_output)
@@ -198,7 +197,7 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         targets: Array,
-        kv_cache: Optional[list[KVCache]] = None,
+        kv_cache: list[KVCache] | None = None,
         chunk_size: int = 1024,
     ) -> tuple[Array, list[KVCache]]:
         """
@@ -231,7 +230,7 @@ class Model(HFModelBase):
         *,
         x: Array,
         sequence_lens: Array,
-        kv_cache: Optional[list[KVCache]] = None,
+        kv_cache: list[KVCache] | None = None,
         fused_output: bool = False,
     ) -> tuple[Array, list[KVCache]]:
         """

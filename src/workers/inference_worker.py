@@ -84,8 +84,8 @@ class AsyncInferenceWorker(Worker):
         )
 
         self.prompt_id_offset = 0
-        self.pid_to_sample = dict()
-        self.global_rollouts: dict[int, InferenceRollout] = dict()
+        self.pid_to_sample = {}
+        self.global_rollouts: dict[int, InferenceRollout] = {}
 
         self.weight_iteration = 0
         self.worker_rank = stax.get_rank() - self.async_options.train_workers

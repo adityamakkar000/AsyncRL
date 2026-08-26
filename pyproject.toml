@@ -25,6 +25,8 @@ dependencies = [
     "xprof>=2.23.1",
     "pylatexenc>=2.10",
     "jinja2>=3.1.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
     "optax==0.2.8",
     "wandb==0.27.0",
     "rich<14.0.0",

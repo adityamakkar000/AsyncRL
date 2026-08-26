@@ -42,6 +42,7 @@ class LocalModelEval(TemplateAPI):
         eos=None,
         **kwargs,
     ) -> dict:
+        gen_kwargs = gen_kwargs or {}
         gen_kwargs.pop("do_sample", False)
         if "max_tokens" in gen_kwargs:
             max_tokens = gen_kwargs.pop("max_tokens")
@@ -69,11 +70,11 @@ class LocalModelEval(TemplateAPI):
         if not isinstance(outputs, list):
             outputs = [outputs]
         for out in outputs:
-            for choice, ctxlen in zip(sorted(out["choices"], key=itemgetter("index")), ctxlen):
-                assert ctxlen > 0, "Context length must be greater than 0"
-                logprobs = sum(choice["logprobs"]["token_logprobs"][ctxlen:-1])
-                tokens_logprobs = choice["logprobs"]["token_logprobs"][ctxlen:-1]
-                top_logprobs = choice["logprobs"]["top_logprobs"][ctxlen:-1]
+            for choice, ctx in zip(sorted(out["choices"], key=itemgetter("index")), ctxlen or [], strict=False):
+                assert ctx > 0, "Context length must be greater than 0"
+                logprobs = sum(choice["logprobs"]["token_logprobs"][ctx:-1])
+                tokens_logprobs = choice["logprobs"]["token_logprobs"][ctx:-1]
+                top_logprobs = choice["logprobs"]["top_logprobs"][ctx:-1]
                 is_greedy = True
                 for tok, top in zip(tokens_logprobs, top_logprobs):
                     if tok != max(top.values()):
@@ -88,7 +89,7 @@ class LocalModelEval(TemplateAPI):
         if not isinstance(outputs, list):
             outputs = [outputs]
         for out in outputs:
-            tmp = [None] * len(out["choices"])
+            tmp: List[str] = [""] * len(out["choices"])
             for choices in out["choices"]:
                 tmp[choices["index"]] = choices["text"]
             res = res + tmp

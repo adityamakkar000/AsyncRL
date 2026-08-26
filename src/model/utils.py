@@ -273,9 +273,11 @@ def make_chunks(V: int, chunk_size: int):
     chunk_starts = jnp.arange(num_chunks) * chunk_size
     return num_chunks, chunk_starts
 
+
 @functools.partial(jax.custom_vjp, nondiff_argnums=(3,))
 def fused_linear_selection(h, W, targets, chunk_size=1024) -> Array:
     return _fwd(h, W, targets, chunk_size)[0]
+
 
 def _fwd(h, W, targets, chunk_size):
     B, D = h.shape  # where B = B * T
@@ -307,14 +309,13 @@ def _fwd(h, W, targets, chunk_size):
 
         return (new_max_logits, sum_exp, target_logits, h), None
 
-    (max_logits, sum_exp, target_logits, _), _ = jax.lax.scan(
-        body_fn, init_state, (weighted_chunks, chunk_starts)
-    )
+    (max_logits, sum_exp, target_logits, _), _ = jax.lax.scan(body_fn, init_state, (weighted_chunks, chunk_starts))
 
     log_sum_exp = max_logits + jnp.log(sum_exp)
     output = target_logits - log_sum_exp  # (B,)
 
     return output, (h, W, targets, max_logits, sum_exp)  # (B, )
+
 
 def _bwd(chunk_size, res, dy):
     h, W, targets, max_logits, sum_exp = res
@@ -340,7 +341,7 @@ def _bwd(chunk_size, res, dy):
     dh, dW_slices = jax.lax.scan(body, jnp.zeros_like(h), (w_chunked, chunk_starts))
     dW = dW_slices.transpose(1, 0, 2).reshape(D, V)
     d_targets = jnp.zeros(targets.shape, jax.dtypes.float0)
-    return dh, dW , d_targets
+    return dh, dW, d_targets
 
 
 fused_linear_selection.defvjp(_fwd, _bwd)

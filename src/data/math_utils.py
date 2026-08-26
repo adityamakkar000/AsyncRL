@@ -220,17 +220,14 @@ def _is_frac(expr: str) -> bool:
 
 def _str_is_int(x: str) -> bool:
     try:
-        x = _strip_properly_formatted_commas(x)
-        x = float(x)
-        return abs(x - int(round(x))) <= 1e-7
+        value = float(_strip_properly_formatted_commas(x))
+        return abs(value - int(round(value))) <= 1e-7
     except Exception:
         return False
 
 
-def _str_to_int(x: str) -> bool:
-    x = x.replace(",", "")
-    x = float(x)
-    return int(x)
+def _str_to_int(x: str) -> int:
+    return int(float(x.replace(",", "")))
 
 
 def _inject_implicit_mixed_number(step: str):

@@ -6,14 +6,14 @@ from src.data.config import Sample
 from src.data.register import GLOBAL_DICT
 from src.data.rejection_sample.config import RejectionSingleSample
 from src.data.utils import load_jsonl_from_gcs, upload_local_file_to_gcs
-from src.data.verifier import Verifier, VerifierInput
+from src.data.verifier import MathVerifier
 from src.vllm_engine.main import vLLMEngine, vLLMOutput
 
 
 class RejectionSample:
     def __init__(self, config):
         self.config = config
-        self.verifier = Verifier()
+        self.verifier = MathVerifier()
 
         self.check_config()
         self.vllm_engine = vLLMEngine(config.vllm_config, self.config.max_workers, debug=True)
@@ -67,7 +67,7 @@ class RejectionSample:
 
     def get_reward(self, completion: str, reference_answer: str) -> float | None:
         """Calls the verifier to get the reward for a given prompt and completion."""
-        return self.verifier(VerifierInput(completion, reference_answer))
+        return self.verifier.get_reward(completion, reference_answer)
 
     def convert_to_rejection_sample(self, sample: Sample, completions: list[str]) -> RejectionSingleSample:
         rewards = [self.get_reward(c, sample.answer) for c in completions]

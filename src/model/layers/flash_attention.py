@@ -1125,7 +1125,7 @@ def _flash_attention_dq_kernel(
         should_not_run = lax.select(should_run, False, True)
     else:
         should_run = True
-        should_not_run = False  # type: ignore
+        should_not_run = False
 
     @pl.when(should_run)
     def run():
