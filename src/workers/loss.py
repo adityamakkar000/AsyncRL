@@ -54,10 +54,8 @@ class LossFunction(abc.ABC):
         )
 
         advantages = self.compute_advantage(batch)
-        loss, aux_metrics = self.compute_loss(
-            x_logprobs, advantages, batch, teacher_params
-        )  # negate loss since grad descent
-        loss *= -1  # gradient descen
+        loss, aux_metrics = self.compute_loss(x_logprobs, advantages, batch, teacher_params)
+        loss *= -1  # gradient descent
 
         safe_reference_logprobs = jnp.where(
             jnp.isfinite(batch.reference_model_logprobs), batch.reference_model_logprobs, 0.0

@@ -1,7 +1,3 @@
-import queue
-import threading
-import time
-
 import hydra
 import jax
 import numpy as np
@@ -12,45 +8,11 @@ from jax.sharding import AxisType
 from omegaconf import DictConfig, OmegaConf
 from stax.logger import staxLogger as logger
 
-from src.constants import GLOBAL_IP, KEY, PORT, VM_IP, AsyncOptions, QueueManager
+from src.constants import GLOBAL_IP, VM_IP, AsyncOptions, MPQueues
 from src.workers import AsyncInferenceWorker, AsyncTrainerWorker, TrainerConfig
 
 cs = ConfigStore.instance()
 cs.store(name="base", node=TrainerConfig)
-
-
-def start_server():
-    def _start_server():
-        manager = QueueManager(address=("0.0.0.0", PORT), authkey=KEY)
-        server = manager.get_server()
-        logger.info(f"[Server] Queue server listening on {GLOBAL_IP}:{PORT}...")
-        server.serve_forever()
-
-    server_thread = threading.Thread(target=_start_server, daemon=True)
-    server_thread.start()
-
-
-def get_queues():
-    manager = QueueManager(address=(GLOBAL_IP, PORT), authkey=KEY)
-
-    RETRIES = 6
-    for _ in range(RETRIES):
-        try:
-            manager.connect()
-            return (
-                manager.get_prompt_queue(),  # type: ignore
-                manager.get_rollout_queue(),  # type: ignore
-                manager.get_weight_sync_queue(),  # type: ignore
-                manager.get_inference_metrics_queue(),  # type: ignore
-                manager.get_eval_prompt_queue(),  # type: ignore
-                manager.get_eval_rollout_queue(),  # type: ignore
-                manager.get_eval_done_queue(),  # type: ignore
-            )
-        except ConnectionError:
-            logger.info(f"[Client] Waiting for server at {GLOBAL_IP}...", log_for_all=True)
-            time.sleep(1)
-
-    raise ConnectionError(f"Could not connect to server at {GLOBAL_IP} after multiple attempts.")
 
 
 @hydra.main(version_base=None, config_path="./configs/train")
@@ -88,47 +50,24 @@ def main(cfg: DictConfig) -> None:
         axis_types=(AxisType.Explicit, AxisType.Explicit),
     )
 
-    local_prompt_queue = queue.Queue(maxsize=(cfg.train_batch_size // cfg.loss_config.inference_config.group_size))
-    local_rollout_queue = queue.Queue()
-    local_weight_sync_queue = queue.Queue(maxsize=inference_workers)
-    local_inference_metrics_queue = queue.Queue()
-    local_eval_prompt_queue = queue.Queue()
-    local_eval_rollout_queue = queue.Queue()
-    local_eval_done_queue = queue.Queue()
-
-    QueueManager.register("get_prompt_queue", callable=lambda: local_prompt_queue)
-    QueueManager.register("get_rollout_queue", callable=lambda: local_rollout_queue)
-    QueueManager.register("get_weight_sync_queue", callable=lambda: local_weight_sync_queue)
-    QueueManager.register("get_inference_metrics_queue", callable=lambda: local_inference_metrics_queue)
-    QueueManager.register("get_eval_prompt_queue", callable=lambda: local_eval_prompt_queue)
-    QueueManager.register("get_eval_rollout_queue", callable=lambda: local_eval_rollout_queue)
-    QueueManager.register("get_eval_done_queue", callable=lambda: local_eval_done_queue)
+    queues = MPQueues(GLOBAL_IP)
+    queues.register(
+        maxsizes={
+            "prompt_queue": cfg.train_batch_size // cfg.loss_config.inference_config.group_size,
+            "weight_sync_queue": inference_workers,
+        }
+    )
 
     if VM_IP == GLOBAL_IP:
-        start_server()
-
+        queues.start_server()
     sync_global_devices("serverReady")
 
-    (
-        global_prompt_queue,
-        global_rollout_queue,
-        global_weight_sync_queue,
-        global_inference_metrics_queue,
-        global_eval_prompt_queue,
-        global_eval_rollout_queue,
-        global_eval_done_queue,
-    ) = get_queues()
+    queues.connect()
 
     async_options = AsyncOptions(
         train_workers=train_workers,
         inference_workers=inference_workers,
-        prompt_queue=global_prompt_queue,
-        rollout_queue=global_rollout_queue,
-        weight_sync_queue=global_weight_sync_queue,
-        inference_metrics_queue=global_inference_metrics_queue,
-        eval_prompt_queue=global_eval_prompt_queue,
-        eval_rollout_queue=global_eval_rollout_queue,
-        eval_done_queue=global_eval_done_queue,
+        queues=queues,
         train_mesh=train_mesh,
         inference_mesh=inference_mesh,
         global_mesh=global_mesh,

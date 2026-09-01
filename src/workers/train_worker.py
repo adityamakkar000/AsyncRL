@@ -406,7 +406,7 @@ class AsyncTrainerWorker(Worker):
             )
             if self.worker_rank == 0:
                 for _ in range(self.async_options.inference_workers):
-                    self.async_options.weight_sync_queue.put("sync")
+                    self.async_options.queues.weight_sync_queue.put("sync")
 
             _ = self.rdma_server.transfer({"params": params_cast}, init_mesh=self.train_mesh)
 
@@ -426,12 +426,12 @@ class AsyncTrainerWorker(Worker):
                     name = val_dataset.dataset_config.name
                     samples = val_dataset.samples
                     for sample in samples:
-                        self.async_options.eval_prompt_queue.put(sample)
+                        self.async_options.queues.eval_prompt_queue.put(sample)
 
                     logger.info(f"[eval] {name}: waiting on {len(samples)} prompts", log_for_all=True)
                     generations: list[InferenceRollout] = []
                     while len(generations) < len(samples):
-                        generations.append(self.async_options.eval_rollout_queue.get(timeout=TIMEOUT))
+                        generations.append(self.async_options.queues.eval_rollout_queue.get(timeout=TIMEOUT))
 
                     scores, rewards = val_dataset.score_rollouts(
                         generations, self.config.eval_config.group_size, list(self.config.eval_config.pass_k)
@@ -445,9 +445,9 @@ class AsyncTrainerWorker(Worker):
                         tables.append(TableMetrics(f"eval/generations/{name}", traces))
 
                 for _ in range(self.async_options.train_workers - 1):
-                    self.async_options.eval_done_queue.put("done")
+                    self.async_options.queues.eval_done_queue.put("done")
             else:
-                self.async_options.eval_done_queue.get(timeout=TIMEOUT)
+                self.async_options.queues.eval_done_queue.get(timeout=TIMEOUT)
 
         metrics["eval/time"] = t.data["time"]
         logger.info(f"[eval] complete in {t.data['time']:.2f}s", log_for_all=True)
@@ -457,9 +457,9 @@ class AsyncTrainerWorker(Worker):
         def fn():
             assert self.train_dataset is not None, "Train dataset must be set up to fill queue."
             while True:
-                if self.async_options.prompt_queue.empty():
+                if self.async_options.queues.prompt_queue.empty():
                     for s in self.train_dataset(self.train_n_prompts):
-                        self.async_options.prompt_queue.put(s)
+                        self.async_options.queues.prompt_queue.put(s)
                 time.sleep(0.1)
 
         if self.worker_rank == 0:
@@ -476,7 +476,7 @@ class AsyncTrainerWorker(Worker):
         num_filtered_rollouts = 0
         with stax.Tracker(timer=True) as t:
             while len(rollouts) < self.train_n_prompts_per_host:
-                rollout: InferenceRollout = self.async_options.rollout_queue.get(timeout=TIMEOUT)
+                rollout: InferenceRollout = self.async_options.queues.rollout_queue.get(timeout=TIMEOUT)
 
                 if num_filtered_rollouts > 0 and num_filtered_rollouts % 10 == 0:
                     logger.warning(
@@ -509,8 +509,8 @@ class AsyncTrainerWorker(Worker):
 
     def get_inference_metrics(self) -> dict[str, float]:
         by_worker: dict[int, list[dict]] = defaultdict(list)
-        while not self.async_options.inference_metrics_queue.empty():
-            record = self.async_options.inference_metrics_queue.get(timeout=TIMEOUT)
+        while not self.async_options.queues.inference_metrics_queue.empty():
+            record = self.async_options.queues.inference_metrics_queue.get(timeout=TIMEOUT)
             by_worker[record["worker_id"]].append(record)
 
         metrics: dict[str, float] = {}
@@ -525,11 +525,12 @@ class AsyncTrainerWorker(Worker):
         for k, values in per_key.items():
             metrics[f"inference/{k}"] = reduce_inference_metric(k, values)
 
+        expected_workers = self.async_options.inference_workers * jax.local_device_count()
         metrics["inference/workers_reporting"] = len(by_worker)
 
-        if len(by_worker) < self.async_options.inference_workers:
+        if len(by_worker) < expected_workers:
             logger.warning(
-                f"Only {len(by_worker)}/{self.async_options.inference_workers} inference workers reported metrics.",
+                f"Only {len(by_worker)}/{expected_workers} inference workers reported metrics.",
                 log_for_all=True,
             )
 

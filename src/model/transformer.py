@@ -1,5 +1,3 @@
-from typing import Optional
-
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
@@ -31,7 +29,7 @@ class Transformer(BaseModel):
         self,
         x: Array,
         sequence_lens: jax.Array,
-        kv_cache: Optional[list[KVCache]] = None,
+        kv_cache: list[KVCache] | None = None,
         fused_output: bool = False,
     ) -> tuple[Array, list[KVCache]]:
         B, T = x.shape
