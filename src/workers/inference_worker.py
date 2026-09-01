@@ -48,6 +48,7 @@ class SingleInferenceThread:
         async_options: AsyncOptions,
         worker_id: int,
         inference_rank: int,
+        devices: np.ndarray,
         *,
         eval_group_size: int | None = None,
     ):
@@ -68,9 +69,11 @@ class SingleInferenceThread:
 
         self.worker_id = worker_id
         self.inference_rank = inference_rank
-        self.global_worker_id = jax.local_device_count() * inference_rank + worker_id
-        self.device = jax.local_devices()[worker_id]
-        self.sharding = jax.sharding.SingleDeviceSharding(self.device)
+        self.devices = devices
+        self.tp = devices.size
+        self.global_worker_id = (jax.local_device_count() // self.tp) * inference_rank + worker_id
+        self.mesh = jax.sharding.Mesh(devices, axis_names=(TP_AXIS,), axis_types=(jax.sharding.AxisType.Explicit,))
+        self.sharding = jax.NamedSharding(self.mesh, P())
         self.kv_cache_sharding = KVCache(k=self.sharding, v=self.sharding, length=self.sharding)  # type: ignore
 
         self.prefill_fns = {}
@@ -464,7 +467,7 @@ class SingleInferenceThread:
         with self.async_state.read_write_lock:
             if self.weight_iteration != self.async_state.weight_iteration:
                 self.params = jax.tree.map(
-                    lambda x: jax.device_put(x.addressable_shards[self.worker_id].data, self.sharding),
+                    lambda x: jax.device_put(x.addressable_shards[self.worker_id * self.tp].data, self.sharding),
                     self.async_state.MRUparams,
                 )
                 logger.info(f"Params updated on inference worker {self.global_worker_id}", log_for_all=True)
@@ -531,8 +534,8 @@ class AsyncInferenceWorker(Worker):
         )
         self.validate_config()
 
-        self.mesh = jax.make_mesh(
-            (jax.local_device_count(),), axis_names=(GLOBAL_AXIS,), axis_types=(jax.sharding.AxisType.Explicit,)
+        self.mesh = jax.sharding.Mesh(
+            np.array(jax.local_devices()), axis_names=(GLOBAL_AXIS,), axis_types=(jax.sharding.AxisType.Explicit,)
         )
 
         self.sharding = jax.NamedSharding(self.mesh, P())
@@ -548,6 +551,8 @@ class AsyncInferenceWorker(Worker):
         )
         self.monitor_thread.start()
 
+        device_groups = np.array(jax.local_devices()).reshape(-1, self.inference_config.tp)
+
         workers = [
             SingleInferenceThread(
                 self.inference_config,
@@ -556,9 +561,10 @@ class AsyncInferenceWorker(Worker):
                 async_options,
                 i,
                 self.worker_rank,
+                device_groups[i],
                 eval_group_size=self.eval_config.group_size,
             )
-            for i in range(jax.local_device_count())
+            for i in range(device_groups.shape[0])
         ]
 
         init_keys = jax.random.split(jax.random.PRNGKey(1024), len(workers))
@@ -587,6 +593,9 @@ class AsyncInferenceWorker(Worker):
 
     def validate_config(self):
         """Validate the inference configuration to ensure it meets the requirements for the inference engine."""
+        assert jax.local_device_count() % self.inference_config.tp == 0, (
+            f"tp {self.inference_config.tp} must divide local device count {jax.local_device_count()}"
+        )
         assert self.inference_config.max_seq_len <= self.model.sequence_len, (
             f"expected inference max seq len {self.inference_config.max_seq_len} to be less than model sequence length {self.model.sequence_len}"
         )
@@ -615,3 +624,6 @@ class AsyncInferenceWorker(Worker):
             assert 0.0 < self.inference_config.top_p <= 1.0, (
                 f"top_p must be in the range (0, 1], got {self.inference_config.top_p}"
             )
+
+        if self.inference_config.tp > 1:
+            raise NotImplementedError("tp >1 is not supported right now")

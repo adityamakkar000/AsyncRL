@@ -18,7 +18,8 @@ class InferenceConfig:
     top_k: int | None = MISSING
     top_p: float | None = MISSING
     max_seq_len: int = MISSING
-    max_decode_batch_size: int = MISSING  # at decode time how many samples to take for each device
+    max_decode_batch_size: int = MISSING
+    tp: int = 1
     group_size: int = MISSING
     initial_sequence_len: int = 64
     kv_cache_dtype: str = "bfloat16"
@@ -164,28 +165,27 @@ class TrainerConfig:
 
     eval_config: EvalConfig = field(default_factory=EvalConfig)
 
-    async_config: AsyncConfig = field(default_factory=AsyncConfig)  # The configuration for asynchronous training
-    sharding_config: ShardingConfig = field(default_factory=ShardingConfig)  # The configuration for sharding
+    async_config: AsyncConfig = field(default_factory=AsyncConfig)
+    sharding_config: ShardingConfig = field(default_factory=ShardingConfig)
 
     teacher_config: TeacherConfig | None = None
 
-    # training config
     seed: int = 0
 
     num_steps: int = 1000
     train_batch_size: int = MISSING
-    grad_accum_steps: int = 1  # gradient accumulation steps
+    grad_accum_steps: int = 1
 
     optimizer: str = "adamw"  # "adamw", "adam", "sgd"
-    weight_decay: float | None = None  # The weight decay coefficient
-    grad_clip: float | None = None  # The maximum gradient norm for clipping
+    weight_decay: float | None = None
+    grad_clip: float | None = None
 
     # cosine lr
-    learning_rate_init: float = 0.0  # The initial learning rate
-    learning_rate_peak: float = 1e-4  # The maximum learning rate
-    learning_rate_end: float = 1e-5  # The final learning rate
-    warmup_steps: float = 0.1  # The fraction of total steps to use for learning rate warmup
-    decay_steps: float = 0.9  # The fraction of total steps to use for learning rate decay
+    learning_rate_init: float = 0.0
+    learning_rate_peak: float = 1e-4
+    learning_rate_end: float = 1e-5
+    warmup_steps: float = 0.1  # fraction of total steps to use for learning rate warmup
+    decay_steps: float = 0.9  # fraction of total steps to use for learning rate decay
 
     wandb_config: WandBConfig | None = None
     metrics_to_log: list[str] = field(default_factory=lambda: ["train/loss", "val/loss"])  # Metrics to log to terminal
