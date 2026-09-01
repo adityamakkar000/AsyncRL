@@ -91,7 +91,7 @@ class InferenceRollout:
     rollout_tokens: list[np.ndarray]
     rollout_logprobs: list[np.ndarray]
     weight_iteration: list[int]
-    n_rollouts: int = 0
+    n_rollouts: int = 1
     is_eval: bool = False
 
     def __len__(self):

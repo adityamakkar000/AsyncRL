@@ -33,7 +33,6 @@ wandb_config:
 loss_config:
   inference_config:
     max_seq_len: 4096
-    max_decode_prompts: 8
     max_decode_batch_size: 64
     group_size: 16
     temperature: 1.0

@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -15,18 +15,17 @@ from src.model import KVCache, ModelConfig
 @dataclass
 class InferenceConfig:
     temperature: float = MISSING
-    top_k: Optional[int] = MISSING
-    top_p: Optional[float] = MISSING
+    top_k: int | None = MISSING
+    top_p: float | None = MISSING
     max_seq_len: int = MISSING
-    max_decode_prompts: int = MISSING  # number of prompts to take during each continous run of the engine
-    max_decode_batch_size: int = MISSING  # at decode time how many samples to take for each device
+    max_decode_batch_size: int = MISSING
+    tp: int = 1
     group_size: int = MISSING
     initial_sequence_len: int = 64
     kv_cache_dtype: str = "bfloat16"
     params_dtype: str = "bfloat16"
-    reasoning_budget: Optional[int] = None
+    reasoning_budget: int | None = None
     think_mode: bool = True
-    max_prefill_sequence_len: int = 1024
     system_prompt: bool = False
 
 
@@ -42,7 +41,7 @@ class InferenceState:
     out_logprobs: Array
     prompt_id: Array
 
-    def sub(self, new_batch: "InferenceState", index: int) -> "InferenceState":
+    def sub(self, new_batch: "InferenceState", index: Array | int) -> "InferenceState":
         return self.replace(  # type: ignore
             next_token=self.next_token.at[index].set(new_batch.next_token),
             kv_cache=[
@@ -75,6 +74,9 @@ class InferenceState:
         """
 
         diff = index - self.kv_cache[0].length
+        if diff == 0:
+            return self
+
         return self.replace(  # type: ignore
             out_tokens=jnp.roll(self.out_tokens, diff, axis=1),
             out_logprobs=jnp.roll(self.out_logprobs, diff, axis=1),
@@ -104,8 +106,7 @@ class InferenceShardings:
 @dataclass
 class AsyncState:
     MRUparams: jax.Array
-    updated: bool
-    update_lock: Lock = field(default_factory=Lock)
+    read_write_lock: Lock = field(default_factory=Lock)
     weight_iteration: int = 0
 
 
@@ -126,13 +127,13 @@ class ShardingConfig:
 @dataclass
 class WandBConfig:
     project: str = "Debug"
-    notes: Optional[str] = None
-    tags: Optional[List[str]] = None
+    notes: str | None = None
+    tags: list[str] | None = None
 
 
 @dataclass
 class LossConfig:
-    rl_config: Dict[str, Any] = MISSING
+    rl_config: dict[str, Any] = MISSING
     inference_config: InferenceConfig = field(default_factory=InferenceConfig)
     filter_zero_variance: bool = False
 
@@ -155,7 +156,7 @@ class EvalConfig:
 @dataclass
 class TeacherConfig:
     teacher_checkpoint: str = MISSING
-    teacher_step: Optional[int] = None
+    teacher_step: int | None = None
 
 
 @dataclass
@@ -167,31 +168,30 @@ class TrainerConfig:
 
     eval_config: EvalConfig = field(default_factory=EvalConfig)
 
-    async_config: AsyncConfig = field(default_factory=AsyncConfig)  # The configuration for asynchronous training
-    sharding_config: ShardingConfig = field(default_factory=ShardingConfig)  # The configuration for sharding
+    async_config: AsyncConfig = field(default_factory=AsyncConfig)
+    sharding_config: ShardingConfig = field(default_factory=ShardingConfig)
 
-    teacher_config: Optional[TeacherConfig] = None
+    teacher_config: TeacherConfig | None = None
 
-    # training config
     seed: int = 0
 
     num_steps: int = 1000
     train_batch_size: int = MISSING
-    grad_accum_steps: int = 1  # gradient accumulation steps
+    grad_accum_steps: int = 1
 
     optimizer: str = "adamw"  # "adamw", "adam", "sgd"
-    weight_decay: Optional[float] = None  # The weight decay coefficient
-    grad_clip: Optional[float] = None  # The maximum gradient norm for clipping
+    weight_decay: float | None = None
+    grad_clip: float | None = None
 
     # cosine lr
-    learning_rate_init: float = 0.0  # The initial learning rate
-    learning_rate_peak: float = 1e-4  # The maximum learning rate
-    learning_rate_end: float = 1e-5  # The final learning rate
-    warmup_steps: float = 0.1  # The fraction of total steps to use for learning rate warmup
-    decay_steps: float = 0.9  # The fraction of total steps to use for learning rate decay
+    learning_rate_init: float = 0.0
+    learning_rate_peak: float = 1e-4
+    learning_rate_end: float = 1e-5
+    warmup_steps: float = 0.1  # fraction of total steps to use for learning rate warmup
+    decay_steps: float = 0.9  # fraction of total steps to use for learning rate decay
 
-    wandb_config: Optional[WandBConfig] = None
-    metrics_to_log: List[str] = field(default_factory=lambda: ["train/loss", "val/loss"])  # Metrics to log to terminal
+    wandb_config: WandBConfig | None = None
+    metrics_to_log: list[str] = field(default_factory=lambda: ["train/loss", "val/loss"])  # Metrics to log to terminal
     log_generations_every_n_steps: int = 25
 
     spot_training: bool = False  # Whether to enable spot training
