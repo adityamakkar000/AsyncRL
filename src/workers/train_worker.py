@@ -208,14 +208,16 @@ class AsyncTrainerWorker(Worker):
             sharding=stax.ShardingConfig(
                 params_shape=params_shape,
                 opt_state_shape=opt_state_shape,
+                mesh_config=stax.MeshConfig(
+                    dp=self.config.sharding_config.dp_group_size,
+                    fsdp=self.config.sharding_config.fsdp_group_size,
+                    cp_ulysses=self.config.sharding_config.cp_group_size,
+                ),
                 opt_state_offload=self.config.sharding_config.opt_state_offload,
                 min_bytes_for_fsdp=self.config.sharding_config.min_bytes_for_fsdp,
                 data_shard_dim=self.config.sharding_config.data_shard_dim,
                 cp_shard_dim=self.config.sharding_config.cp_shard_dim,
                 weight_shard_dim=self.config.sharding_config.weight_shard_dim,
-                dp_group_size=self.config.sharding_config.dp_group_size,
-                cp_group_size=self.config.sharding_config.cp_group_size,
-                fsdp_group_size=self.config.sharding_config.fsdp_group_size,
             ),
             # only use devices on the train worker's mesh
             devices=self.async_options.train_mesh.devices.reshape(-1),
