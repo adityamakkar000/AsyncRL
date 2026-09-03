@@ -1,5 +1,3 @@
-from typing import Optional
-
 import einops
 import jax
 import jax.numpy as jnp
@@ -9,6 +7,7 @@ from jaxtyping import Array
 from stax.sharding.main import AXIS_NAMES_ENUM
 
 from ..config import KVCache
+from ..utils import dynamic_update_rows
 from .flash_attention import SegmentIds, flash_attention
 from .norm import RMSNorm
 from .rope import apply_rope
@@ -55,7 +54,7 @@ class GroupedQueryAttention(nn.Module):
         T = q.shape[1]
 
         k, v = jax.tree.map(
-            lambda cache, val: jax.lax.dynamic_update_slice_in_dim(cache, val.astype(cache.dtype), t_start, axis=1),
+            lambda cache, val: dynamic_update_rows(cache, val.astype(cache.dtype), t_start),
             (kv_cache.k, kv_cache.v),
             (k, v),
         )
@@ -101,7 +100,7 @@ class GroupedQueryAttention(nn.Module):
         x: Array,
         mask: Array,
         rope_matrix: tuple[Array, Array],
-        kv_cache: Optional[KVCache] = None,
+        kv_cache: KVCache | None = None,
     ):
         assert self.n_heads % self.n_kv_heads == 0, "Number of heads must be divisible by number of kv heads"
         assert self.model_dim % self.n_heads == 0, "Model dim must be divisible by number of heads"

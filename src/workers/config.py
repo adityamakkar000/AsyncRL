@@ -10,6 +10,7 @@ from omegaconf import MISSING
 
 from src.data import DatasetConfig
 from src.model import KVCache, ModelConfig
+from src.workers.utils import MPQueues
 
 
 @dataclass
@@ -48,7 +49,7 @@ class InferenceState:
                 KVCache(
                     k=self.kv_cache[i].k.at[index].set(new_batch.kv_cache[i].k),
                     v=self.kv_cache[i].v.at[index].set(new_batch.kv_cache[i].v),
-                    length=self.kv_cache[i].length.copy(),
+                    length=self.kv_cache[i].length.at[index].set(new_batch.kv_cache[i].length),
                 )
                 for i in range(len(self.kv_cache))
             ],
@@ -61,19 +62,16 @@ class InferenceState:
             prompt_id=self.prompt_id.at[index].set(new_batch.prompt_id),
         )
 
-    def shift_batch(self) -> "InferenceState":
-        return self.roll(jnp.max(self.seq_lens) - 1)
-
     def roll(self, index: Array) -> "InferenceState":
         """
-        Roll the state to index
+        Roll a single-row state so its content starts at column 0.
         Args:
-            index (int | Array): The index to roll to.
+            index (Array): The cache length the row should have after rolling.
         Returns:
             InferenceState: The rolled state.
         """
 
-        diff = index - self.kv_cache[0].length
+        diff = jnp.reshape(index - self.kv_cache[0].length, ())
         return self.replace(  # type: ignore
             out_tokens=jnp.roll(self.out_tokens, diff, axis=1),
             out_logprobs=jnp.roll(self.out_logprobs, diff, axis=1),
@@ -81,7 +79,7 @@ class InferenceState:
                 KVCache(
                     k=jnp.roll(kv.k, diff, axis=1),
                     v=jnp.roll(kv.v, diff, axis=1),
-                    length=index.copy(),
+                    length=jnp.reshape(index, (1,)),
                 )
                 for kv in self.kv_cache
             ],
@@ -147,6 +145,7 @@ class EvalConfig:
     pass_k: list[int] = field(default_factory=lambda: [32, 64, 128])
     log_traces_n_prompts: int = -1
     eval_every_n_steps: int = 50
+    eval_on_step_0: bool = False
     val_dataset_configs: list[DatasetConfig] = field(default_factory=list)
 
 
@@ -197,5 +196,16 @@ class TrainerConfig:
 
     checkpoint_interval: int = 1000
     max_checkpoints_to_keep: int = 5
+    keep_every: int | None = None
 
     debug: bool = False
+
+
+@dataclass
+class AsyncOptions:
+    train_workers: int
+    inference_workers: int
+    queues: MPQueues
+    train_mesh: jax.sharding.Mesh
+    inference_mesh: jax.sharding.Mesh
+    global_mesh: jax.sharding.Mesh

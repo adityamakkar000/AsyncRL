@@ -120,11 +120,9 @@ def run_tpu_jobs(
     # NOTE: this assumes the launch server is named "server" in cluster.yaml
     subprocess.run(["mesh", "copy", "server", f"~/{server_dir}"], cwd=copy_dir)
 
-    NODE_COUNTER = 0
-    for combo in combos:
-        NODE_COUNTER += 1
+    for node_counter, combo in enumerate(combos):
         rng_combo = random.randint(0, 1000000)
-        node_id = f"node_{NODE_COUNTER}_{rng_combo}"
+        node_id = f"node_{node_counter}_{rng_combo}"
 
         name = make_name(combo, EXPERIMENT_PREFIX)
         overrides = {**FIXED_OVERRIDES, **combo}
@@ -135,7 +133,7 @@ def run_tpu_jobs(
             f"--config-name {BASE_CONFIG}",
         ]
         if JOB_TYPE == JOB_TYPES.TRAIN:
-            inner_parts.append(f"experiment_name={name}")
+            inner_parts.append(f"experiment_name={node_id}_{name}")
 
         for k, v in overrides.items():
             inner_parts.append(f"{k}={v}")

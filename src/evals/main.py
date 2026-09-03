@@ -9,7 +9,8 @@ from lm_eval.tasks import TaskManager
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-from src.constants import GS_BUCKET, HF_CHECKPOINT_PATH, SERVED_MODEL_NAME
+from src.constants import GS_BUCKET, HF_CHECKPOINT_PATH
+from src.evals.constants import SERVED_MODEL_NAME
 from src.model import Model
 from src.vllm_engine.main import vLLMEngine
 

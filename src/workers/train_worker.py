@@ -22,11 +22,12 @@ from stax import sync_over_mesh
 from stax.utils import metrics_all_reduce
 from stax.writer import TableMetrics
 
-from src.constants import CHECKPOINTS, GS_BUCKET, PROFILE, TIMEOUT, AsyncOptions
+from src.constants import CHECKPOINTS, GS_BUCKET, PROFILE
 from src.data import DataLoader, InferenceRollout, RLBatch
 from src.model import Model
 
-from .config import TrainerConfig
+from .config import AsyncOptions, TrainerConfig
+from .constants import TIMEOUT
 from .rdma_transfer import RDMATransferServer
 from .utils import Key, reduce_inference_metric, setup, write_to_gcs
 from .worker import Worker
@@ -257,7 +258,6 @@ class AsyncTrainerWorker(Worker):
 
     @partial(setup, component="model")
     def _setup_model(self):
-        """Setup the model for training."""
         self.model = Model(self.config.model_config)
 
     @partial(setup, component="train state")
@@ -326,8 +326,6 @@ class AsyncTrainerWorker(Worker):
 
     @partial(setup, component="checkpointer")
     def _setup_checkpointer(self):
-        """Setup checkpointing mechanism."""
-
         path = f"{self.gs_path}/{CHECKPOINTS}/"
         self.log_info(f"rank: {stax.get_rank()}")
 
@@ -336,6 +334,7 @@ class AsyncTrainerWorker(Worker):
             max_to_keep=self.config.max_checkpoints_to_keep,
             # only allow train workers to write checkpoints
             train_mesh=self.async_options.train_mesh,
+            keep_every=self.config.keep_every,
         )
 
     def make_save_tree(
@@ -624,7 +623,9 @@ class AsyncTrainerWorker(Worker):
             if stax.get_rank() == 0:
                 metrics |= self.get_inference_metrics()
 
-            if self.global_step % self.config.eval_config.eval_every_n_steps == 0:
+            if self.global_step % self.config.eval_config.eval_every_n_steps == 0 and (
+                self.global_step > 0 or self.config.eval_config.eval_on_step_0
+            ):
                 eval_metrics, eval_tables = self.run_eval()
                 metrics |= eval_metrics
                 tables.extend(eval_tables)

@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from typing import Optional
 
 from omegaconf import MISSING
 
@@ -9,7 +8,7 @@ from src.vllm_engine.config import vLLMConfig
 @dataclass
 class modelConfig:
     model_name: str = MISSING
-    step_number: Optional[int] = None
+    step_number: int | None = None
 
 
 @dataclass

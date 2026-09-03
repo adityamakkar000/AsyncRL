@@ -1,0 +1,90 @@
+defaults:
+  - base 
+  - model_config: llama_3.1_8b_instruct
+  - loss_config: loss
+  - datasets@train_dataset_config: troll-17k-train
+  - override loss_config/inference_config: debug
+  - _self_
+
+train_batch_size: 512
+
+eval_config:
+  group_size: 8
+  pass_k: [32]
+  eval_every_n_steps: 100
+  eval_on_step_0: true
+  val_dataset_configs:
+    - name: aime_2025
+      verifier:
+        _target_: src.data.verifier.MathVerifier
+    - name: aime_2026
+      verifier:
+        _target_: src.data.verifier.MathVerifier
+    - name: math_500
+      verifier:
+        _target_: src.data.verifier.MathVerifier
+    - name: amc_25
+      verifier:
+        _target_: src.data.verifier.MathVerifier
+
+grad_accum_steps: 4
+seed: 123
+num_steps: 10000
+
+optimizer: "adamw"
+weight_decay: 0.01
+grad_clip: 1.0
+
+learning_rate_init: 0.0
+learning_rate_peak: 1e-6
+learning_rate_end: 1e-7
+warmup_steps: 0.01
+decay_steps: 0.95
+
+spot_training: true 
+checkpoint_interval: 50
+max_checkpoints_to_keep: 1
+keep_every: 100
+log_generations_every_n_steps: 100
+
+wandb_config: 
+  project: "BigRUn"
+  notes: null
+  tags: null
+
+loss_config:
+  inference_config:
+    max_seq_len: 2048
+    max_decode_batch_size: 64
+    group_size: 16
+    temperature: 1.0
+    reasoning_budget: null 
+    think_mode: true
+    system_prompt: false
+  rl_config:
+    _target_: src.workers.loss.CISPOLoss
+    epsilon: 4
+
+#TODO: figure this one out
+model_config:
+  fused_chunk_size: !!null
+
+sharding_config:
+  opt_state_offload: false
+  min_bytes_for_fsdp: 10000000
+  weight_shard_dim: 0
+  data_shard_dim: 0
+  cp_shard_dim: 1
+  dp_group_size: 1
+  cp_group_size: 1 
+  fsdp_group_size: -1
+
+
+async_config:
+  train_workers: 2
+  max_lag: 8
+
+metrics_to_log:
+  - "train/loss"
+  - "train/mean_reward"
+  - "train/num_unparsable"

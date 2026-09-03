@@ -8,3 +8,4 @@ group_size: 32
 kv_cache_dtype: "bfloat16"
 reasoning_budget: null
 think_mode: true
+tp:1

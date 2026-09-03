@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple, Union
 from lm_eval.models.api_models import TemplateAPI
 from lm_eval.models.utils import handle_stop_sequences
 
-from src.constants import IP, PORT
+from src.evals.constants import IP, PORT
 
 URL = f"http://{IP}:{PORT}/v1/completions"
 

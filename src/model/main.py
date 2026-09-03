@@ -68,7 +68,7 @@ class Model(HFModelBase):
 
         @jax.jit
         def _init():
-            def zeros():
+            def zeros(out_sharding):
                 return jnp.zeros(
                     (
                         batch_size,
@@ -76,10 +76,14 @@ class Model(HFModelBase):
                         *kv_shape,
                     ),
                     dtype=convert_dtype(dtype),
-                    out_sharding=sharding.k,  # type: ignore
+                    out_sharding=out_sharding,
                 )
 
-            return KVCache(k=zeros(), v=zeros(), length=jnp.zeros((), dtype=jnp.int32, out_sharding=sharding.length))  # type: ignore
+            return KVCache(
+                k=zeros(sharding.k),
+                v=zeros(sharding.v),
+                length=jnp.zeros((batch_size,), dtype=jnp.int32, out_sharding=sharding.length),  # type: ignore
+            )
 
         return [_init() for _ in range(n_layers)]
 

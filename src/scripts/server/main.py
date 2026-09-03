@@ -7,8 +7,9 @@ import re
 import shutil
 import threading
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse

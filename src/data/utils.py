@@ -80,7 +80,11 @@ def convert_rejection_samples_to_dataset(
 
 
 def apply_prompt_template(text: str) -> str:
-    return f"""{text}. Please reason step by step, and put your final answer within <answer> \\boxed{{}} </answer>."""
+    return f"""Solve the following math problem step by step. Put your answer inside \\boxed{{}}.
+
+{text}
+
+Remember to put your answer inside \\boxed{{}}."""
 
 
 def resolve_pad_eos(tokenizer) -> tuple[int, int]:
@@ -104,7 +108,7 @@ def load_tokenizer(hf_model: str) -> PreTrainedTokenizerBase:
 
 
 def decode_tokens(tokenizer: PreTrainedTokenizerBase, tokens: Any, skip_special_tokens: bool = False) -> str:
-    return cast(str, tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens))
+    return tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
 
 
 def apply_chat_template(

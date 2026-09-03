@@ -21,7 +21,6 @@ CP_ULYSSES = AXIS_NAMES_ENUM.CP_ULYSSES.value
 
 
 def convert_dtype(dtype_str: str) -> jnp.dtype:
-    """Convert a string representation of a data type to a JAX data type."""
     match dtype_str:
         case "float32":
             return jnp.float32
@@ -33,112 +32,39 @@ def convert_dtype(dtype_str: str) -> jnp.dtype:
             raise ValueError(f"Unsupported dtype string: {dtype_str}")
 
 
-def make_prompt_mask(max_seq_len: int, cache_len, seq_lens: Array) -> Array:
-    """
-    This function generates a boolean mask that identifies valid (non-padded) tokens
-    within the cache region of each sequence. It handles left-padded sequences by
-    masking out padding tokens at the beginning of each sequence.
-
-        max_seq_len (int): The maximum sequence length including any tokens beyond the cache.
-        cache_len (int): The length of the cached tokens (KV cache size).
-        seq_lens (Array): Array of shape (batch_size,) containing the actual
-            sequence lengths for each batch element. Each element should be <= cache_len.
-
-    Returns:
-        Array: A boolean mask of shape (batch_size, max_seq_len) where True indicates
-            valid (non-padded) tokens within the cache region, and False indicates either
-            padding tokens or positions beyond the cache.
-
-    Example:
-        >>> seq_lens = jnp.array([3, 5])
-        >>> max_seq_len = 5
-        >>> cache_len = 4
-        >>> make_prompt_mask(max_seq_len, cache_len, seq_lens)
-        # Returns:
-        # [[False, False, True, True, False],
-        #  [True,  True,  True, True, False]]
-        #
-        # First sequence: 3 valid tokens, left-padded with 1 token, 1 position beyond cache
-        # Second sequence: 4 valid tokens (capped by cache_len), 1 position beyond cache
-    """
-    raw_length = jnp.arange(max_seq_len)[None, :]
-    # left padding mask
-    padding_mask = raw_length >= (cache_len - seq_lens[:, None])
-    # cache mask
-    cache_mask = raw_length < cache_len
-    return padding_mask & cache_mask
+def dynamic_slice_rows(x: Array, start: Array, size: int) -> Array:
+    rows = jnp.arange(x.shape[0])[:, None]
+    cols = start[:, None] + jnp.arange(size)[None, :]
+    return x[rows, cols]
 
 
-def make_tril_mask(query_shape: int, key_shape: int, t_start: int) -> Array:
-    """
-    Create a lower triangular mask for attention mechanisms.
-    This function generates a boolean mask where each query position can only
-    attend to key positions that are at or before its temporal position,
-    adjusted by a starting offset.
-    Args:
-        query_shape: The size of the query dimension (number of query positions).
-        key_shape: The size of the key dimension (number of key positions).
-        t_start: The temporal offset to apply to query positions.
-    Returns:
-        Array: A boolean array of shape (query_shape, key_shape) where
-            True indicates the query position can attend to the key position
-            (i.e., query_position + t_start >= key_position).
-    Example:
-        >>> t = 3
-        >>> T = 5
-        >>> tril_mask = make_tril_mask(t, T, t_start=0)
-        # Returns:
-        # [[ True, False, False, False, False],
-        #  [ True,  True, False, False, False],
-        #  [ True,  True,  True, False, False]]
-        # Each query position can attend to all key positions up to its own index.
-        >>> tril_mask = make_tril_mask(t, T, t_start=2)
-        # Returns:
-        # [[True, True, True, False, False],
-        #  [ True, True, True, True, False],
-        #  [ True,  True, True, True, True]]
-    """
-
-    return (jnp.arange(query_shape)[:, None] + t_start) >= (jnp.arange(key_shape)[None, :])
+def dynamic_update_rows(x: Array, update: Array, start: Array) -> Array:
+    rows = jnp.arange(x.shape[0])[:, None]
+    cols = start[:, None] + jnp.arange(update.shape[1])[None, :]
+    return x.at[rows, cols].set(update)
 
 
-def make_attention_mask(query_shape: int, key_shape: int, t_start: int, seq_lens: Array) -> Array:
-    """
-    Create an attention mask for sequences with padding and causal masking.
-    Args:
-        query_shape (int): Current time step or query length.
-        key_shape (int): Total sequence length or key length.
-        t_start (int): The temporal offset to apply to query positions.
-        seq_lens (Array): Array of sequence lengths for each batch element.
-    Returns:
-        Array: Attention mask of shape (batch_size, 1, query_shape, key_shape).
+def make_prompt_mask(kv_len: int, cache_len: Array, seq_lens: Array) -> Array:
+    raw_length = jnp.arange(kv_len)[None, :]  # [1, max_seq]
+    cache_len = cache_len[:, None]  # [B, 1]
+    left_padding_mask = raw_length >= (cache_len - seq_lens[:, None])  # [B, max_seq]
+    valid_cache_mask = raw_length < cache_len
+    return left_padding_mask & valid_cache_mask  # [B, mask_seq]
 
-    example:
-        seq_lens = jnp.array([3, 5])
-        query_shape = 3
-        key_shape = 5
-        prompt_mask = [[0 0 1 1 1]
-                       [1 1 1 1 1]]
-        tril = [[[True True True False False],
-                 [True True True True False],
-                 [True True True True True]]]
-        returns:
-        [[[0 0 1 0 0]
-          [0 0 1 1 0]
-          [0 0 1 1 1]]
 
-         [[1 1 1 0 0]
-          [1 1 1 1 0]
-          [1 1 1 1 1]]]
-    """
+def make_tril_mask(query_length: int, key_length: int, t_start: Array) -> Array:
+    q = jnp.arange(query_length)[None, :, None] + t_start[:, None, None]  # [B, 1, 1]
+    k = jnp.arange(key_length)[None, None, :]  # [B, 1, 1]
+    return q >= k
 
-    prompt_mask = make_prompt_mask(key_shape, t_start + query_shape, seq_lens)  # B, key_shape
-    tril = make_tril_mask(query_shape, key_shape, t_start)[None, None, :, :]  # 1,1, query_shape, key_shape
+
+def make_attention_mask(query_length: int, key_length: int, t_start: Array, seq_lens: Array) -> Array:
+    prompt_mask = make_prompt_mask(key_length, t_start + query_length, seq_lens)  # B, key_shape
+    tril = make_tril_mask(query_length, key_length, t_start)[:, None, :, :]  # B, 1, query_shape, key_shape
     return prompt_mask[:, None, None, :] * tril
 
 
 def download_hf_weights(name: str):
-    """Download model weights from Hugging Face if not already present locally."""
     if not os.path.isdir(name):
         snapshot_download(
             repo_id=name,
@@ -148,7 +74,6 @@ def download_hf_weights(name: str):
 
 
 def delete_hf_weights(name: str):
-    """Delete model weights from local directory."""
     if os.path.isdir(name):
         shutil.rmtree(name)
 

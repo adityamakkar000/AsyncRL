@@ -1,17 +1,3 @@
-"""
-Register datasets here. Each dataset is a function that returns a list of Sample.
-Use @register_dataset("name") so the dataset can be created in process.
-
-Recommended approach:
-- Use load_dataset from datasets to load the dataset and convert to json string for each row.
-- Use Sample.from_json to convert the dataset to a list of Sample.
-- Call ds.cleanup_cache_files() to clean up the cache files.
-
-Helper functions:
-- load_dataset(name: str, split: str) -> Dataset
-- Sample.from_dict(data: dict) -> Sample
-"""
-
 from collections.abc import Callable
 
 from datasets import load_dataset
@@ -23,8 +9,6 @@ GLOBAL_DICT: dict[str, Callable[[], list[Sample]]] = {}
 
 
 def register_dataset(name: str) -> Callable[[Callable[[], list[Sample]]], Callable[[], list[Sample]]]:
-    """Decorator to register a dataset function. The function should return a list of Sample and take no inputs."""
-
     def decorator(fn: Callable[[], list[Sample]]) -> Callable[[], list[Sample]]:
         GLOBAL_DICT[name] = fn
         return fn
@@ -150,9 +134,9 @@ def load_math_500() -> list[Sample]:
     return samples
 
 
-@register_dataset("amc_23")
-def load_amc_23() -> list[Sample]:
-    ds = load_dataset("zwhe99/amc23")["test"]
+@register_dataset("amc_25")
+def load_amc_25() -> list[Sample]:
+    ds = load_dataset("sonthenguyen/amc12-2025-non-figure")["train"]
     samples = [Sample(prompt=example["question"], answer=str(example["answer"]), solution=None) for example in ds]
     ds.cleanup_cache_files()
     return samples
@@ -169,9 +153,12 @@ def load_polaris() -> list[Sample]:
 @register_dataset("troll-17k-train")
 def load_troll_17k() -> list[Sample]:
     ds = load_dataset("philippbecker/troll_data")["train"]
+    TROLL_SUFFIX = "\n\nPresent the answer in LaTeX format: \\boxed{Your answer}."
     samples = [
         Sample(
-            prompt=example["prompt"][1]["content"], answer=str(example["reward_model"]["ground_truth"]), solution=None
+            prompt=example["prompt"][1]["content"].removesuffix(TROLL_SUFFIX),
+            answer=str(example["reward_model"]["ground_truth"]),
+            solution=None,
         )
         for example in ds
     ]
@@ -192,15 +179,13 @@ def load_troll_10k_test() -> list[Sample]:
     return samples
 
 
-DAPO_PROMPT_PREFIX = (
-    "Solve the following math problem step by step. The last line of your response should be of the form "
-    "Answer: $Answer (without quotes) where $Answer is the answer to the problem.\n\n"
-)
-
-
 @register_dataset("dapo_math_17k")
 def load_dapo_math_17k() -> list[Sample]:
     ds = load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", split="train")
+    DAPO_PROMPT_PREFIX = (
+        "Solve the following math problem step by step. The last line of your response should be of the form "
+        "Answer: $Answer (without quotes) where $Answer is the answer to the problem.\n\n"
+    )
     samples = [
         Sample(
             prompt=example["prompt"][0]["content"].removeprefix(DAPO_PROMPT_PREFIX),
@@ -211,3 +196,14 @@ def load_dapo_math_17k() -> list[Sample]:
     ]
     ds.cleanup_cache_files()
     return samples
+
+
+if __name__ == "__main__":
+    data = None
+    while not data:
+        inp = input("which dataset do you want to see?").strip()
+        data = GLOBAL_DICT.get(inp)
+        if data is None:
+            continue
+        data = data()
+    breakpoint()

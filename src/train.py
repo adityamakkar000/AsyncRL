@@ -8,8 +8,10 @@ from jax.sharding import AxisType
 from omegaconf import DictConfig, OmegaConf
 from stax.logger import staxLogger as logger
 
-from src.constants import GLOBAL_IP, VM_IP, AsyncOptions, MPQueues
 from src.workers import AsyncInferenceWorker, AsyncTrainerWorker, TrainerConfig
+from src.workers.config import AsyncOptions
+from src.workers.constants import GLOBAL_IP, VM_IP
+from src.workers.utils import MPQueues
 
 cs = ConfigStore.instance()
 cs.store(name="base", node=TrainerConfig)
@@ -53,7 +55,7 @@ def main(cfg: DictConfig) -> None:
     queues = MPQueues(GLOBAL_IP)
     queues.register(
         maxsizes={
-            "prompt_queue": cfg.train_batch_size // cfg.loss_config.inference_config.group_size,
+            "prompt_queue": cfg.loss_config.inference_config.max_decode_batch_size * jax.device_count(),
             "weight_sync_queue": inference_workers,
         }
     )

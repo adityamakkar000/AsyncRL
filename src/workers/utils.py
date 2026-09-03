@@ -1,6 +1,9 @@
+import queue
+import threading
 import time
 from collections.abc import Callable
 from functools import wraps
+from multiprocessing.managers import BaseManager
 from statistics import fmean
 from typing import Any
 
@@ -11,6 +14,8 @@ import stax
 from jax.experimental.transfer import start_transfer_server
 from jaxtyping import Array
 from stax import staxLogger as logger
+
+from src.workers.constants import GLOBAL_IP, KEY, PORT
 
 INFERENCE_REDUCTIONS: dict[str, Callable[[list[float]], float]] = {
     "decode_tps": sum,
@@ -188,3 +193,62 @@ def setup_transfer_server(local_ip: str, port: int):
         [f"{local_ip}:0"] * jax.device_count(),
     )
     return server
+
+
+class QueueManager(BaseManager):
+    pass
+
+
+class MPQueues:
+    prompt_queue: queue.Queue
+    rollout_queue: queue.Queue
+    weight_sync_queue: queue.Queue[str]
+    inference_metrics_queue: queue.Queue[dict]
+    eval_prompt_queue: queue.Queue
+    eval_rollout_queue: queue.Queue
+    eval_done_queue: queue.Queue[str]
+
+    NAMES = (
+        "prompt_queue",
+        "rollout_queue",
+        "weight_sync_queue",
+        "inference_metrics_queue",
+        "eval_prompt_queue",
+        "eval_rollout_queue",
+        "eval_done_queue",
+    )
+
+    def __init__(self, global_ip: str = GLOBAL_IP, port: int = PORT, key: bytes = KEY):
+        self.global_ip = global_ip
+        self.port = port
+        self.key = key
+
+    def register(self, maxsizes: dict[str, int] | None = None) -> None:
+        maxsizes = maxsizes or {}
+        for name in self.NAMES:
+            local_queue = queue.Queue(maxsize=maxsizes.get(name, 0))
+            QueueManager.register(f"get_{name}", callable=lambda q=local_queue: q)
+
+    def start_server(self) -> None:
+        def _serve():
+            manager = QueueManager(address=("0.0.0.0", self.port), authkey=self.key)
+            server = manager.get_server()
+            logger.info(f"[Server] Queue server listening on {self.global_ip}:{self.port}...")
+            server.serve_forever()
+
+        threading.Thread(target=_serve, daemon=True).start()
+
+    def connect(self, retries: int = 6):
+        manager = QueueManager(address=(self.global_ip, self.port), authkey=self.key)
+
+        for _ in range(retries):
+            try:
+                manager.connect()
+                for name in self.NAMES:
+                    setattr(self, name, getattr(manager, f"get_{name}")())
+                return
+            except ConnectionError:
+                logger.info(f"[Client] Waiting for server at {self.global_ip}...", log_for_all=True)
+                time.sleep(1)
+
+        raise ConnectionError(f"Could not connect to server at {self.global_ip} after {retries} attempts.")

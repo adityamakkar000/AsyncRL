@@ -1,0 +1,9 @@
+SERVED_MODEL_NAME = "eval_model"
+IP = "localhost"
+PORT = "8000"
+GPU_MEMORY_UTILIZATION = "0.98"
+EVAL_LOG_DIR = "logs/eval_logs"
+DISPLAY = "plain"
+MAX_TASKS = "5"
+VLLM_SERVER_TIMEOUT = 180
+OPENAI_TIMEOUT = 1000000
