@@ -6,14 +6,19 @@ import jax.numpy as jnp
 from flax import linen as nn
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array
+from stax.sharding.main import AXIS_NAMES_ENUM
 
 from ..config import KVCache
 from .flash_attention import SegmentIds, flash_attention
 from .norm import RMSNorm
 from .rope import apply_rope
 
-QKV_SPEC = P(("dp", "fsdp"), "cp", None, None)
-OUT_SPEC = P(("dp", "fsdp"), None, "cp", None)
+DP = AXIS_NAMES_ENUM.DP.value
+FSDP = AXIS_NAMES_ENUM.FSDP.value
+CP = AXIS_NAMES_ENUM.CP_ULYSSES.value
+
+QKV_SPEC = P((DP, FSDP), CP, None, None)
+OUT_SPEC = P((DP, FSDP), None, CP, None)
 
 
 def flash_attention_naive(q, k, v, mask, sm_scale):
