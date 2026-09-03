@@ -175,7 +175,7 @@ class Model(HFModelBase):
                 chunk_size=self.config.fused_chunk_size,
             )
         else:
-            target_tokens = tokens[:, 1:] # B, T-1
+            target_tokens = tokens[:, 1:]  # B, T-1
             x_logits, _ = self.apply(
                 {"params": params},
                 x=tokens,

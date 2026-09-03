@@ -272,23 +272,26 @@ def save_to_hf(dir_path: str, params: PyTree, hf_model_name: str, reverse_hf_map
 def get_embedding_weights(params: PyTree) -> Array:
     return jnp.transpose(params["token_emb"]["embedding"])
 
+
 def make_chunks(B: int, chunk_size: int):
     assert B % chunk_size == 0, "B must be divisible by chunk_size"
     num_chunks = B // chunk_size
     return num_chunks
 
+
 @functools.partial(jax.custom_vjp, nondiff_argnums=(3,))
 def fused_linear_selection(h, W, targets, chunk_size=1024) -> Array:
     return _fwd(h, W, targets, chunk_size)[0]
 
+
 def _fwd(h, W, targets, chunk_size):
-    B, D = h.shape  
+    B, D = h.shape
     _, _V = W.shape
     chunk_size = min(chunk_size, B)
 
     num_chunks = make_chunks(B, chunk_size)
     chunked_hidden_inputs = jax.lax.with_sharding_constraint(
-        h.reshape(num_chunks, chunk_size, D),  P(None, (DP, FSDP, CP_ULYSSES), None)
+        h.reshape(num_chunks, chunk_size, D), P(None, (DP, FSDP, CP_ULYSSES), None)
     )  # num_chunks, chunk_size, D
     chunked_targets = jax.lax.with_sharding_constraint(
         targets.reshape(num_chunks, chunk_size), P(None, (DP, FSDP, CP_ULYSSES))
@@ -301,21 +304,17 @@ def _fwd(h, W, targets, chunk_size):
         logits_chunked = hidden_chunk @ W_gather  # chunk_size x V
 
         chunk_max = jnp.max(logits_chunked, axis=-1)  # chunk_size
-        shifted_logits = logits_chunked - chunk_max[:, None] # chunk_size x V
+        shifted_logits = logits_chunked - chunk_max[:, None]  # chunk_size x V
 
         exp_shifted = jnp.exp(shifted_logits)
-        sum_exp = jnp.sum(exp_shifted, -1)[:, None] # chunk_size x 1
-        log_softmax = shifted_logits - jnp.log(sum_exp) # chunk_size x V
+        sum_exp = jnp.sum(exp_shifted, -1)[:, None]  # chunk_size x 1
+        log_softmax = shifted_logits - jnp.log(sum_exp)  # chunk_size x V
 
-        target_log_probs = jnp.take_along_axis(
-            log_softmax, target_chunk[:, None], axis=-1
-        )[:, 0]  # chunk_size
+        target_log_probs = jnp.take_along_axis(log_softmax, target_chunk[:, None], axis=-1)[:, 0]  # chunk_size
 
         return carry, target_log_probs
 
-    _, chunked_output = jax.lax.scan(
-        body_fn, None, (chunked_hidden_inputs, chunked_targets)
-    )  # num_chunks x chunk_size
+    _, chunked_output = jax.lax.scan(body_fn, None, (chunked_hidden_inputs, chunked_targets))  # num_chunks x chunk_size
 
     output = chunked_output.reshape(B)  # (B,)
 
@@ -326,7 +325,6 @@ def _bwd(chunk_size, residuals, dy):
     chunked_hidden_inputs, W_gather, chunked_targets = residuals
     num_chunks, chunk_size, D = chunked_hidden_inputs.shape
     _, V = W_gather.shape
-
 
     chunked_dy = jax.lax.with_sharding_constraint(
         dy.astype(jnp.float32).reshape(num_chunks, chunk_size), P(None, (DP, FSDP, CP_ULYSSES))
