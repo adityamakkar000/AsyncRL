@@ -48,7 +48,7 @@ class InferenceState:
                 KVCache(
                     k=self.kv_cache[i].k.at[index].set(new_batch.kv_cache[i].k),
                     v=self.kv_cache[i].v.at[index].set(new_batch.kv_cache[i].v),
-                    length=self.kv_cache[i].length.copy(),  # type: ignore
+                    length=self.kv_cache[i].length.copy(),
                 )
                 for i in range(len(self.kv_cache))
             ],
@@ -64,7 +64,7 @@ class InferenceState:
     def shift_batch(self) -> "InferenceState":
         return self.roll(jnp.max(self.seq_lens) - 1)
 
-    def roll(self, index: int | Array) -> "InferenceState":
+    def roll(self, index: Array) -> "InferenceState":
         """
         Roll the state to index
         Args:
@@ -74,9 +74,6 @@ class InferenceState:
         """
 
         diff = index - self.kv_cache[0].length
-        if diff == 0:
-            return self
-
         return self.replace(  # type: ignore
             out_tokens=jnp.roll(self.out_tokens, diff, axis=1),
             out_logprobs=jnp.roll(self.out_logprobs, diff, axis=1),
@@ -84,7 +81,7 @@ class InferenceState:
                 KVCache(
                     k=jnp.roll(kv.k, diff, axis=1),
                     v=jnp.roll(kv.v, diff, axis=1),
-                    length=index.copy(),  # type: ignore
+                    length=index.copy(),
                 )
                 for kv in self.kv_cache
             ],

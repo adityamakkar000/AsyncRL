@@ -14,7 +14,7 @@ from .utils import get_torch_weights_to_jax, save_to_hf
 class KVCache:
     k: Array
     v: Array
-    length: int
+    length: Array
 
 
 @dataclass

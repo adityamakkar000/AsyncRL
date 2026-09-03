@@ -1,4 +1,3 @@
-import contextlib
 import threading
 import time
 from queue import Empty
@@ -34,7 +33,6 @@ from .worker import Worker
 
 GLOBAL_AXIS = "global"
 TP_AXIS = "tp"
-COMPILE_LOCK = threading.Lock()
 
 
 class SingleInferenceReplica:
@@ -95,7 +93,7 @@ class SingleInferenceReplica:
                 prev_state, batch_metrics = self.batch_rollout(input_tokens, seq_lens, gen_key, prev_state)
                 gather_metrics = self.gather_rollouts()
 
-                self.prompt_id_offset = (self.prompt_id_offset + self.max_prefill_prompts) % 65536
+                self.prompt_id_offset = (self.prompt_id_offset + self.max_prefill_prompts) % 1048576
 
             metrics = (
                 batch_metrics
@@ -150,15 +148,13 @@ class SingleInferenceReplica:
     def prefill_step(
         self, input_tokens: Array, seq_lens: Array, params: PyTree, key: Array
     ) -> tuple[InferenceState, dict[str, float]]:
-        first_compile = self.prefill_fns.get(precompiled_length := input_tokens.shape[1]) is None
-        if first_compile:
+        if self.prefill_fns.get(precompiled_length := input_tokens.shape[1]) is None:
             self.prefill_fns[precompiled_length] = jax.jit(self.prefill)
 
         with Tracker(timer=True) as t:
-            with COMPILE_LOCK if first_compile else contextlib.nullcontext():
-                out: InferenceState = self.prefill_fns[precompiled_length](
-                    input_tokens, seq_lens, params, key, self.prompt_id_offset
-                )
+            out: InferenceState = self.prefill_fns[precompiled_length](
+                input_tokens, seq_lens, params, key, self.prompt_id_offset
+            )
             jax.tree.map(lambda x: x.block_until_ready(), out)
         return out, {"ttft": t.data["time"]}
 
@@ -180,11 +176,19 @@ class SingleInferenceReplica:
             _logits, out_cache = self.model.apply(
                 params, x=input_tokens[:, :-1], sequence_lens=seq_lens - 1, kv_cache=kv_cache
             )
-            out_tokens = jnp.ones((max_prefill_prompts, self.max_attention_length), dtype=jnp.int32) * self.pad_token
-            out_logprobs = jnp.zeros((max_prefill_prompts, self.max_attention_length), dtype=jnp.float32)
+            out_tokens = (
+                jnp.ones((max_prefill_prompts, self.max_attention_length), dtype=jnp.int32, out_sharding=self.sharding)
+                * self.pad_token
+            )
+            out_logprobs = jnp.zeros(
+                (max_prefill_prompts, self.max_attention_length), dtype=jnp.float32, out_sharding=self.sharding
+            )
             out_tokens = jax.lax.dynamic_update_slice_in_dim(out_tokens, input_tokens, 0, axis=1)
             out_logprobs = jax.lax.dynamic_update_slice_in_dim(
-                out_logprobs, -jnp.inf * jnp.ones_like(input_tokens, dtype=jnp.float32), 0, axis=1
+                out_logprobs,
+                -jnp.inf * jnp.ones(input_tokens.shape, dtype=jnp.float32, out_sharding=self.sharding),
+                0,
+                axis=1,
             )
 
         return InferenceState(
@@ -192,18 +196,17 @@ class SingleInferenceReplica:
             seq_lens=seq_lens,
             kv_cache=out_cache,
             key=key,
-            stop_mask=jnp.zeros((max_prefill_prompts, 1), dtype=bool),
-            end_of_think=jnp.zeros((max_prefill_prompts, 1), dtype=bool),
+            stop_mask=jnp.zeros((max_prefill_prompts, 1), dtype=bool, out_sharding=self.sharding),
+            end_of_think=jnp.zeros((max_prefill_prompts, 1), dtype=bool, out_sharding=self.sharding),
             out_tokens=out_tokens,
             out_logprobs=out_logprobs,
-            prompt_id=jnp.arange(input_tokens.shape[0])[:, None] + prompt_id_offset,
+            prompt_id=jnp.arange(input_tokens.shape[0], out_sharding=self.sharding)[:, None] + prompt_id_offset,
         )
 
     def continuous_batch(
         self, prefill_prompts: InferenceState, state: InferenceState | None
     ) -> tuple[InferenceState, dict[str, float]]:
-        first_compile = self.decode_fn is None
-        if first_compile:
+        if self.decode_fn is None:
             self.decode_fn = jax.jit(self._decode_single_loop, donate_argnums=(0,))
 
         global_ids = jax.device_get(prefill_prompts.prompt_id).flatten().tolist()
@@ -228,13 +231,9 @@ class SingleInferenceReplica:
             while len(prompt_queue) > 0:
                 next_index = prompt_queue.pop()
 
-                with COMPILE_LOCK if first_compile else contextlib.nullcontext():
-                    (state, tokens, logprobs, prompt_ids, n_steps) = self.decode_fn(
-                        state, self.params, prefill_prompts, next_index
-                    )
-                    if first_compile:
-                        jax.block_until_ready(state)
-                        first_compile = False
+                (state, tokens, logprobs, prompt_ids, n_steps) = self.decode_fn(
+                    state, self.params, prefill_prompts, next_index
+                )
 
                 finished["tokens"].append(tokens)
                 finished["logprobs"].append(logprobs)
@@ -275,10 +274,7 @@ class SingleInferenceReplica:
         stacked_state = f(prefill_prompts, initial_ids)
         stacked_state = stacked_state.replace(
             next_token=stacked_state.next_token[:, 0],
-            kv_cache=[
-                KVCache(k=k.k[:, 0], v=k.v[:, 0], length=jnp.asarray(k.length[0], dtype=jnp.int32))  # type: ignore
-                for k in stacked_state.kv_cache
-            ],
+            kv_cache=[KVCache(k=k.k[:, 0], v=k.v[:, 0], length=k.length[0]) for k in stacked_state.kv_cache],
             key=stacked_state.key[0],
             seq_lens=stacked_state.seq_lens[:, 0],
             stop_mask=stacked_state.stop_mask[:, 0],
@@ -292,7 +288,7 @@ class SingleInferenceReplica:
 
     def _decode_single_loop(
         self, state: InferenceState, params: PyTree, prefill_prompts: InferenceState, next_index: int
-    ) -> tuple[InferenceState, Array, Array, Array, int]:
+    ) -> tuple[InferenceState, Array, Array, Array, Array]:
         with jax.named_scope("single_decode_loop"):
             before_length = state.kv_cache[0].length
             state = jax.lax.while_loop(
@@ -524,25 +520,23 @@ class AsyncInferenceWorker(Worker):
         self.async_options = async_options
 
         self.model = Model(trainer_config.model_config)
+        self.validate_config()
 
         abstract_output = self.model.init_state(rng=jax.random.PRNGKey(0), tx=None, sharding=None, abstract=True)
         dummy_params = jax.tree.map(
             lambda x: jnp.zeros(x.shape, dtype=self.inference_config.params_dtype), abstract_output
         )
-        self.validate_config()
 
         self.mesh = jax.sharding.Mesh(
             np.array(jax.local_devices()), axis_names=(GLOBAL_AXIS,), axis_types=(jax.sharding.AxisType.Explicit,)
         )
-
         self.sharding = jax.NamedSharding(self.mesh, P())
+
         self.params = jax.device_put(dummy_params, self.sharding)
 
-        self.async_state = AsyncState(MRUparams=self.params)
-
         self.worker_rank = stax.get_rank() - self.async_options.train_workers
+        self.async_state = AsyncState(MRUparams=self.params)
         self.transfer_server = RDMATransferServer(train_workers=self.async_options.train_workers)
-
         self.monitor_thread = threading.Thread(
             target=self.monitor_weight_sync, args=(self.async_state, self.async_options), daemon=True
         )

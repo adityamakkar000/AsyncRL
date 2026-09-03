@@ -1,5 +1,3 @@
-from functools import partial
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -63,12 +61,12 @@ class Model(HFModelBase):
         return out_state
 
     def init_kv_cache(self, batch_size: int, length: int, sharding: KVCache, dtype: str = "bfloat16") -> list[KVCache]:
-        if length > self.sequence_len + 1024:
+        if length > self.sequence_len:
             raise ValueError(f"Requested KV cache length {length} exceeds maximum of {self.sequence_len + 1024}")
 
         n_layers, *kv_shape = self.model.kv_shape
 
-        @partial(jax.jit, out_shardings=sharding)
+        @jax.jit
         def _init():
             def zeros():
                 return jnp.zeros(
@@ -78,9 +76,10 @@ class Model(HFModelBase):
                         *kv_shape,
                     ),
                     dtype=convert_dtype(dtype),
+                    out_sharding=sharding.k,  # type: ignore
                 )
 
-            return KVCache(k=zeros(), v=zeros(), length=0)
+            return KVCache(k=zeros(), v=zeros(), length=jnp.zeros((), dtype=jnp.int32, out_sharding=sharding.length))  # type: ignore
 
         return [_init() for _ in range(n_layers)]
 

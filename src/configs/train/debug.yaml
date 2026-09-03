@@ -14,7 +14,7 @@ train_batch_size: 512
 eval_config:
   group_size: 8
   pass_k: [1, 4, 8]
-  eval_every_n_steps: 5
+  eval_every_n_steps: 25
   val_dataset_configs:
     - name: gsm8k_val
       verifier:
@@ -52,7 +52,7 @@ wandb_config:
 loss_config:
   inference_config:
     max_seq_len: 512
-    max_decode_batch_size: 64
+    max_decode_batch_size: 16
     group_size: 16
     temperature: 1.0
     reasoning_budget: null 
