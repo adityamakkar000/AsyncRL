@@ -98,10 +98,10 @@ class AsyncTrainerWorker(Worker):
                 f"Batch size must be divisible by group size for proper batching in inference, got {cfg.train_batch_size} batch size and {cfg.loss_config.inference_config.group_size} group size."
             )
         if cfg.model_config.fused_chunk_size is not None:
-            vocab_size = cfg.model_config.model_args.get("vocab_size", None)
-            if vocab_size is not None and vocab_size % cfg.model_config.fused_chunk_size != 0:
+            flat_tokens = (cfg.train_batch_size // cfg.grad_accum_steps) * cfg.loss_config.inference_config.max_seq_len
+            if flat_tokens % cfg.model_config.fused_chunk_size != 0:
                 raise ValueError(
-                    f"Fused chunk size {cfg.model_config.fused_chunk_size} must evenly divide vocab_size {vocab_size}."
+                    f"Fused chunk size {cfg.model_config.fused_chunk_size} must evenly divide B * T {flat_tokens}."
                 )
 
         n_hosts = jax.process_count()

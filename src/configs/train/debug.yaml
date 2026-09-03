@@ -63,7 +63,7 @@ loss_config:
     epsilon: 4
 
 model_config:
-  fused_chunk_size: 1187
+  fused_chunk_size: 8192
 
 sharding_config: 
   opt_state_offload: false

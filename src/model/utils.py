@@ -8,10 +8,16 @@ import jax
 import jax.numpy as jnp
 import torch
 from huggingface_hub import snapshot_download
+from jax.sharding import PartitionSpec as P
 from jax.tree_util import DictKey
 from jaxtyping import Array, PyTree
 from safetensors import safe_open
 from safetensors.torch import save_file
+from stax.sharding.main import AXIS_NAMES_ENUM
+
+DP = AXIS_NAMES_ENUM.DP.value
+FSDP = AXIS_NAMES_ENUM.FSDP.value
+CP_ULYSSES = AXIS_NAMES_ENUM.CP_ULYSSES.value
 
 
 def convert_dtype(dtype_str: str) -> jnp.dtype:
@@ -266,81 +272,86 @@ def save_to_hf(dir_path: str, params: PyTree, hf_model_name: str, reverse_hf_map
 def get_embedding_weights(params: PyTree) -> Array:
     return jnp.transpose(params["token_emb"]["embedding"])
 
-
-def make_chunks(V: int, chunk_size: int):
-    assert V % chunk_size == 0, "V must be divisible by chunk_size"
-    num_chunks = V // chunk_size
-    chunk_starts = jnp.arange(num_chunks) * chunk_size
-    return num_chunks, chunk_starts
-
+def make_chunks(B: int, chunk_size: int):
+    assert B % chunk_size == 0, "B must be divisible by chunk_size"
+    num_chunks = B // chunk_size
+    return num_chunks
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(3,))
 def fused_linear_selection(h, W, targets, chunk_size=1024) -> Array:
     return _fwd(h, W, targets, chunk_size)[0]
 
-
 def _fwd(h, W, targets, chunk_size):
-    B, D = h.shape  # where B = B * T
-    _, V = W.shape
-    chunk_size = min(chunk_size, V)
-    num_chunks, chunk_starts = make_chunks(V, chunk_size)
+    B, D = h.shape  
+    _, _V = W.shape
+    chunk_size = min(chunk_size, B)
 
-    weighted_chunks = W.reshape(D, num_chunks, chunk_size).transpose(1, 0, 2)  # num_chunks x D x chunk_size
+    num_chunks = make_chunks(B, chunk_size)
+    chunked_hidden_inputs = jax.lax.with_sharding_constraint(
+        h.reshape(num_chunks, chunk_size, D),  P(None, (DP, FSDP, CP_ULYSSES), None)
+    )  # num_chunks, chunk_size, D
+    chunked_targets = jax.lax.with_sharding_constraint(
+        targets.reshape(num_chunks, chunk_size), P(None, (DP, FSDP, CP_ULYSSES))
+    )  # num_chunks, chunk_size
 
-    max_logits = jnp.full((B,), -jnp.inf, dtype=jnp.float32)
-    sum_exp = jnp.zeros((B,), dtype=jnp.float32)
-    target_logits = jnp.zeros((B,), dtype=jnp.float32)
-    init_state = (max_logits, sum_exp, target_logits, h)
+    W_gather = jax.lax.with_sharding_constraint(W, P())
 
     def body_fn(carry, chunk):
-        max_logits, sum_exp, target_logits, h = carry
-        weighted_chunk, chunk_start = chunk
-        logits_chunked = h @ weighted_chunk  # B x chunk_size
+        hidden_chunk, target_chunk = chunk
+        logits_chunked = hidden_chunk @ W_gather  # chunk_size x V
 
-        chunk_max = jnp.max(logits_chunked, axis=-1)  # B
-        new_max_logits = jnp.maximum(max_logits, chunk_max)
+        chunk_max = jnp.max(logits_chunked, axis=-1)  # chunk_size
+        shifted_logits = logits_chunked - chunk_max[:, None] # chunk_size x V
 
-        sum_exp *= jnp.exp(max_logits - new_max_logits)
-        sum_exp += jnp.sum(jnp.exp(logits_chunked - new_max_logits[:, None]), axis=1)
+        exp_shifted = jnp.exp(shifted_logits)
+        sum_exp = jnp.sum(exp_shifted, -1)[:, None] # chunk_size x 1
+        log_softmax = shifted_logits - jnp.log(sum_exp) # chunk_size x V
 
-        chunk_indices = chunk_start + jnp.arange(chunk_size)
-        is_target = targets[:, None] == chunk_indices[None, :]
-        target_logits = target_logits + jnp.sum(jnp.where(is_target, logits_chunked, 0.0), axis=1)
+        target_log_probs = jnp.take_along_axis(
+            log_softmax, target_chunk[:, None], axis=-1
+        )[:, 0]  # chunk_size
 
-        return (new_max_logits, sum_exp, target_logits, h), None
+        return carry, target_log_probs
 
-    (max_logits, sum_exp, target_logits, _), _ = jax.lax.scan(body_fn, init_state, (weighted_chunks, chunk_starts))
+    _, chunked_output = jax.lax.scan(
+        body_fn, None, (chunked_hidden_inputs, chunked_targets)
+    )  # num_chunks x chunk_size
 
-    log_sum_exp = max_logits + jnp.log(sum_exp)
-    output = target_logits - log_sum_exp  # (B,)
+    output = chunked_output.reshape(B)  # (B,)
 
-    return output, (h, W, targets, max_logits, sum_exp)  # (B, )
+    return output, (chunked_hidden_inputs, W_gather, chunked_targets)
 
 
-def _bwd(chunk_size, res, dy):
-    h, W, targets, max_logits, sum_exp = res
-    D, V = W.shape
-    chunk_size = min(chunk_size, V)
-    num_chunks, chunk_starts = make_chunks(V, chunk_size)
-    w_chunked = W.reshape(D, num_chunks, chunk_size).transpose(1, 0, 2)
-    dy = dy.astype(jnp.float32)
+def _bwd(chunk_size, residuals, dy):
+    chunked_hidden_inputs, W_gather, chunked_targets = residuals
+    num_chunks, chunk_size, D = chunked_hidden_inputs.shape
+    _, V = W_gather.shape
 
-    def body(dh, xs):
-        Wk, start = xs
-        logits = h @ Wk
-        p = jnp.exp(logits - max_logits[:, None]) / sum_exp[:, None]
 
-        idx = start + jnp.arange(chunk_size)
-        onehot = (targets[:, None] == idx[None, :]).astype(p.dtype)
-        dz = dy[:, None] * (onehot - p)
+    chunked_dy = jax.lax.with_sharding_constraint(
+        dy.astype(jnp.float32).reshape(num_chunks, chunk_size), P(None, (DP, FSDP, CP_ULYSSES))
+    )
 
-        dh = dh + dz @ Wk.T
-        dW_slice = h.T @ dz
-        return dh, dW_slice
+    def body(dW, chunk):
+        hidden_chunk, target_chunk, dy_chunk = chunk
+        logits_chunked = hidden_chunk @ W_gather  # chunk_size x V
 
-    dh, dW_slices = jax.lax.scan(body, jnp.zeros_like(h), (w_chunked, chunk_starts))
-    dW = dW_slices.transpose(1, 0, 2).reshape(D, V)
-    d_targets = jnp.zeros(targets.shape, jax.dtypes.float0)
+        p = jax.nn.softmax(logits_chunked, axis=-1)  # chunk_size x V
+        onehot = jax.nn.one_hot(target_chunk, V, dtype=p.dtype)
+        dz = dy_chunk[:, None] * (onehot - p)  # chunk_size x V
+
+        dh_chunk = dz @ W_gather.T  # chunk_size x D
+        dW = dW + hidden_chunk.T @ dz  # D x V
+        return dW, dh_chunk
+
+    dW, chunked_dh = jax.lax.scan(
+        body,
+        jnp.zeros_like(W_gather, dtype=jnp.float32),
+        (chunked_hidden_inputs, chunked_targets, chunked_dy),
+    )
+
+    dh = chunked_dh.reshape(-1, D)  # (B, D)
+    d_targets = jnp.zeros((num_chunks * chunk_size), jax.dtypes.float0)
     return dh, dW, d_targets
 
 

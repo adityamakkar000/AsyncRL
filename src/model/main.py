@@ -164,19 +164,18 @@ class Model(HFModelBase):
             x_logprobs: Log probabilities of shape (B, T - 1).
         """
 
-        target_tokens = tokens[:, 1:]
-
         if self.config.fused_chunk_size is not None:
             logger.info(f"Using fused logprob path (chunk_size={self.config.fused_chunk_size})")
             x_logprobs, _ = self.fused_selection_call(
                 {"params": params},
                 x=tokens,
                 sequence_lens=seq_lens,
-                targets=target_tokens,
+                tokens=tokens,
                 kv_cache=None,
                 chunk_size=self.config.fused_chunk_size,
             )
         else:
+            target_tokens = tokens[:, 1:] # B, T-1
             x_logits, _ = self.apply(
                 {"params": params},
                 x=tokens,
@@ -195,7 +194,7 @@ class Model(HFModelBase):
         *,
         x: Array,
         sequence_lens: Array,
-        targets: Array,
+        tokens: Array,
         kv_cache: list[KVCache] | None = None,
         chunk_size: int = 1024,
     ) -> tuple[Array, list[KVCache]]:
@@ -217,11 +216,11 @@ class Model(HFModelBase):
         D = hidden_output.shape[-1]
         weights = get_embedding_weights(params["params"])  # D, V
 
-        flat_hidden = hidden_output[:, :-1, :].reshape(B * (T - 1), D)
-        flat_targets = targets.reshape(B * (T - 1))
-        logprobs = fused_linear_selection(flat_hidden, weights, flat_targets, chunk_size).reshape(B, -1)  # B, T-1
+        flat_hidden = hidden_output.reshape(B * T, D)
+        flat_targets = jnp.roll(tokens, -1, axis=-1).reshape(B * T)
+        logprobs = fused_linear_selection(flat_hidden, weights, flat_targets, chunk_size).reshape(B, -1)  # B, T
 
-        return logprobs, cache  # type: ignore
+        return logprobs[:, :-1], cache  # type: ignore
 
     def apply(
         self,
