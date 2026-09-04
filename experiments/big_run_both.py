@@ -1,6 +1,7 @@
 import src.scripts.premption_tooling as TPUJOB
 
 BASE_CONFIG = "big_run"
+version = 3
 
 COMMON_OVERRIDES = {
     "wandb_config.project": "big_run",
@@ -14,7 +15,7 @@ COMMON_OVERRIDES = {
 
 job_2048 = TPUJOB.LAUNCH_JOB(
     RUN=TPUJOB.Vals("loss_config.inference_config.max_seq_len", [2048]),
-    EXPERIMENT_PREFIX="llama_big_run_v1_2048",
+    EXPERIMENT_PREFIX=f"llama_big_run_v{version}_2048",
     FIXED_OVERRIDES={
         **COMMON_OVERRIDES,
         "async_config.train_workers": 1,
@@ -31,10 +32,10 @@ job_2048 = TPUJOB.LAUNCH_JOB(
 
 job_4096 = TPUJOB.LAUNCH_JOB(
     RUN=TPUJOB.Vals("loss_config.inference_config.max_seq_len", [4096]),
-    EXPERIMENT_PREFIX="llama_big_run_v1_4096",
+    EXPERIMENT_PREFIX=f"llama_big_run_v{version}_4096",
     FIXED_OVERRIDES={
         **COMMON_OVERRIDES,
-        "async_config.train_workers": 2,
+        "async_config.train_workers": 4,
         "loss_config.inference_config.max_decode_batch_size": 24,
         "grad_accum_steps": 8,
     },

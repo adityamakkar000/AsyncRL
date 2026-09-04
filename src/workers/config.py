@@ -21,9 +21,10 @@ class InferenceConfig:
     max_seq_len: int = MISSING
     max_decode_batch_size: int = MISSING
     prefill_multiplier: int = 2
+    warmup_seq_len: int | None = None
     tp: int = 1
     group_size: int = MISSING
-    initial_sequence_len: int = 64
+    min_prefill_length: int = 64
     kv_cache_dtype: str = "bfloat16"
     params_dtype: str = "bfloat16"
     reasoning_budget: int | None = None

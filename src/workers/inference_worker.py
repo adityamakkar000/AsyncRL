@@ -87,6 +87,8 @@ class SingleInferenceReplica:
     def start(self, key: Array):
         key = jax.device_put(key, self.sharding)
         prev_state = None
+        if self.config.warmup_seq_len is not None:
+            self.warmup()
 
         while True:
             with Tracker(timer=True) as t:
@@ -275,6 +277,26 @@ class SingleInferenceReplica:
         }
         return state, decode_metrics
 
+    def warmup(self):
+        with Tracker(timer=True) as t:
+            key = jax.device_put(jax.random.PRNGKey(0), self.sharding)
+            n = self.max_prefill_prompts
+            seq_len = self.config.min_prefill_length
+            while seq_len <= self.config.warmup_seq_len:
+                logger.info(f"Warming up prefill for sequence length {seq_len}", log_for_all=True)
+                tokens = jax.device_put(np.full((n, seq_len), self.pad_token, dtype=np.int32), self.sharding)
+                seq_lens = jax.device_put(np.full((n,), seq_len, dtype=np.int32), self.sharding)
+                prefill_state, key, _ = self.prefill_step(tokens, seq_lens, self.params, key)
+                seq_len *= 2
+
+            logger.info("Warming up decode", log_for_all=True)
+            state = self.create_initial_state(prefill_state, list(range(self.config.max_decode_batch_size)))
+            state = state.replace(seq_lens=jnp.full_like(state.seq_lens, self.max_attention_length - 1))
+            self.decode_fn = jax.jit(self._decode_single_loop, donate_argnums=(0,))
+            jax.block_until_ready(self.decode_fn(state, self.params, prefill_state, 0))
+
+        logger.info(f"Warmup finished in {t.data['time']:.1f}s", log_for_all=True)
+
     def create_initial_state(self, prefill_prompts: InferenceState, initial_ids: list[int]) -> InferenceState:
         if self.initial_state_fn is None:
             self.initial_state_fn = jax.jit(self._create_initial_state)
@@ -404,8 +426,6 @@ class SingleInferenceReplica:
         )
 
     def sub_batch(self, state: InferenceState, new_batch: InferenceState) -> InferenceState:
-        logger.info("compiling sub batch")
-
         index = jnp.argmax(state.stop_mask[:, 0], keepdims=True)
         new_batch = new_batch.roll(new_batch.seq_lens - 1)
         return state.sub(new_batch, index)
@@ -505,7 +525,7 @@ class SingleInferenceReplica:
         ]
 
         seq_lens = np.array([len(x) for x in inputs], dtype=np.int32)
-        padding_length = max(self.compute_max_padding_length(seq_lens), self.config.initial_sequence_len)
+        padding_length = max(self.compute_max_padding_length(seq_lens), self.config.min_prefill_length)
         inputs = [(padding_length - len(x)) * [self.pad_token] + x for x in inputs]
         tokens = np.array(inputs, dtype=np.int32)
 
@@ -606,8 +626,8 @@ class AsyncInferenceWorker(Worker):
         assert self.inference_config.max_seq_len & (self.inference_config.max_seq_len - 1) == 0, (
             f"max_seq_len must be a power of 2, got {self.inference_config.max_seq_len}"
         )
-        assert self.inference_config.initial_sequence_len & (self.inference_config.initial_sequence_len - 1) == 0, (
-            f"initial_sequence_len must be a power of 2, got {self.inference_config.initial_sequence_len}"
+        assert self.inference_config.min_prefill_length & (self.inference_config.min_prefill_length - 1) == 0, (
+            f"min_prefill_length must be a power of 2, got {self.inference_config.min_prefill_length}"
         )
 
         if self.inference_config.reasoning_budget is not None:
@@ -624,6 +644,15 @@ class AsyncInferenceWorker(Worker):
         assert self.inference_config.prefill_multiplier >= 1, (
             f"prefill_multiplier must be >= 1, got {self.inference_config.prefill_multiplier}"
         )
+
+        if self.inference_config.warmup_seq_len is not None:
+            warmup_seq_len = self.inference_config.warmup_seq_len
+            assert warmup_seq_len & (warmup_seq_len - 1) == 0, (
+                f"warmup_seq_len must be a power of 2, got {warmup_seq_len}"
+            )
+            assert self.inference_config.min_prefill_length <= warmup_seq_len <= self.inference_config.max_seq_len, (
+                f"warmup_seq_len {warmup_seq_len} must be between min_prefill_length and max_seq_len"
+            )
 
         if self.inference_config.top_k is not None:
             assert self.inference_config.top_k > 0, f"top_k must be positive, got {self.inference_config.top_k}"

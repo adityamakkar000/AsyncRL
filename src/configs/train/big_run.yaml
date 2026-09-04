@@ -57,6 +57,7 @@ loss_config:
     max_seq_len: 2048
     max_decode_batch_size: 36
     prefill_multiplier: 1
+    warmup_seq_len: 1024
     group_size: 16
     temperature: 1.0
     reasoning_budget: null 

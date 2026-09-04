@@ -9,6 +9,7 @@ ignore:
   - ".git/*"
   - ".venv/*"
   - "profile/*"
+  - "logs/*"
 
 prerun:
   - sudo rm /tmp/libtpu_lockfile || true

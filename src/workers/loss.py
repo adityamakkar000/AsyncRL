@@ -57,10 +57,7 @@ class LossFunction(abc.ABC):
         loss, aux_metrics = self.compute_loss(x_logprobs, advantages, batch, teacher_params)
         loss *= -1  # gradient descent
 
-        safe_reference_logprobs = jnp.where(
-            jnp.isfinite(batch.reference_model_logprobs), batch.reference_model_logprobs, 0.0
-        )
-        ratio = jnp.exp(x_logprobs - safe_reference_logprobs)
+        ratio = jnp.exp(x_logprobs - batch.reference_model_logprobs)
 
         # metrics will be reduced by compute_normalization function
         aux_metrics |= {
