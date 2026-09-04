@@ -151,9 +151,9 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: list[KVCache] | None = None,
-        fused_output: bool = False,
+        apply_lm_head: bool = True,
     ) -> tuple[Array, list[KVCache]]:
-        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, fused_output)
+        logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, apply_lm_head)
 
         return logits, cache  # type: ignore
 
@@ -215,7 +215,7 @@ class Model(HFModelBase):
         """
         B, T = x.shape
         hidden_output, cache = self.model.apply(
-            params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, fused_output=True
+            params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, apply_lm_head=False
         )  # B, T, D
         D = hidden_output.shape[-1]
         weights = get_embedding_weights(params["params"])  # D, V
@@ -233,7 +233,7 @@ class Model(HFModelBase):
         x: Array,
         sequence_lens: Array,
         kv_cache: list[KVCache] | None = None,
-        fused_output: bool = False,
+        apply_lm_head: bool = True,
     ) -> tuple[Array, list[KVCache]]:
         """
         Forward pass of the model
@@ -246,7 +246,7 @@ class Model(HFModelBase):
             logits: Output logits of shape (B, T, vocab_size)
             out_cache: Optional list of KVCache for each layer if kv_cache was provided.
         """
-        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, fused_output=fused_output)
+        return self(params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, apply_lm_head=apply_lm_head)
 
     @property
     def sequence_len(self) -> int:

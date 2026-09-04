@@ -19,6 +19,7 @@ cs.store(name="base", node=TrainerConfig)
 
 @hydra.main(version_base=None, config_path="./configs/train")
 def main(cfg: DictConfig) -> None:
+    jax.config.update("jax_cross_host_transfer_timeout_seconds", 600)
     stax.init_distributed_jax()
 
     train_workers = cfg.async_config.train_workers

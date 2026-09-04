@@ -184,7 +184,7 @@ class SingleInferenceReplica:
                 sharding=self.kv_cache_sharding,
             )
             _hidden, out_cache = self.model.apply(
-                params, x=input_tokens[:, :-1], sequence_lens=seq_lens - 1, kv_cache=kv_cache, fused_output=True
+                params, x=input_tokens[:, :-1], sequence_lens=seq_lens - 1, kv_cache=kv_cache, apply_lm_head=False
             )
             out_tokens = (
                 jnp.ones((max_prefill_prompts, self.max_attention_length), dtype=jnp.int32, out_sharding=self.sharding)
@@ -519,7 +519,7 @@ class SingleInferenceReplica:
 
     @property
     def max_prefill_prompts(self) -> int:
-        return 2 * self.config.max_decode_batch_size
+        return self.config.prefill_multiplier * self.config.max_decode_batch_size
 
     @property
     def max_attention_length(self) -> int:
@@ -620,6 +620,10 @@ class AsyncInferenceWorker(Worker):
             assert self.inference_config.reasoning_budget is None, (
                 "Reasoning budget should be None when think_mode is disabled"
             )
+
+        assert self.inference_config.prefill_multiplier >= 1, (
+            f"prefill_multiplier must be >= 1, got {self.inference_config.prefill_multiplier}"
+        )
 
         if self.inference_config.top_k is not None:
             assert self.inference_config.top_k > 0, f"top_k must be positive, got {self.inference_config.top_k}"

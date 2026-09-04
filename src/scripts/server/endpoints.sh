@@ -69,3 +69,28 @@ server_logs() {
   enc=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$node_id")
   curl -sS -N -f "${TPU_SERVER_URL%/}/logs/${enc}/stream"
 }
+
+server_ranks() {
+  local node_id="$1"
+  TPU_SERVER_URL="http://100.79.104.73:8000"
+  if [[ -z "$node_id" ]]; then
+    echo "usage: server_ranks <node_id>" >&2
+    return 1
+  fi
+  local enc
+  enc=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$node_id")
+  curl -sS -f "${TPU_SERVER_URL%/}/logs/${enc}/ranks"
+  echo
+}
+
+server_rank_logs() {
+  local node_id="$1" index="$2"
+  TPU_SERVER_URL="http://100.79.104.73:8000"
+  if [[ -z "$node_id" || -z "$index" ]]; then
+    echo "usage: server_rank_logs <node_id> <rank_index>" >&2
+    return 1
+  fi
+  local enc
+  enc=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$node_id")
+  curl -sS -N -f "${TPU_SERVER_URL%/}/logs/${enc}/ranks/${index}/stream"
+}

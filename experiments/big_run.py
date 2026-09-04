@@ -1,6 +1,6 @@
 import src.scripts.premption_tooling as TPUJOB
 
-max_seq_len = [2048]
+max_seq_len = [2048, 4096]
 # variance_filtering = [True, False]
 async_workers = [1, 2]
 
@@ -16,7 +16,7 @@ BASE_CONFIG = "big_run"
 
 job = TPUJOB.LAUNCH_JOB(
     RUN=RUN,
-    EXPERIMENT_PREFIX="llama_big_run_v2",
+    EXPERIMENT_PREFIX="llama_big_run_v3",
     FIXED_OVERRIDES={
         "wandb_config.project": "big_run_debug",
         "loss_config.inference_config.max_decode_batch_size": 32,

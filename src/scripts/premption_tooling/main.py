@@ -1,13 +1,14 @@
 import os
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import IO, Any
 
 from rich.console import Console
 
-from .config_utils import delete_mesh_config, update_mesh_config
+from .config_utils import DEFAULT_USER, IDENTITY_FILE, delete_mesh_config, update_mesh_config
 from .gcp_utils import tpu_create_queued, tpu_delete_queued, tpu_describe, tpu_get_ips
 
 UPDATE_TIME = 10
@@ -80,12 +81,14 @@ class TPUJob:
     cmd: str
     cwd: str
     process: subprocess.Popen | None = None
-    _log_file: IO[Any] | None = field(default=None, init=False, repr=False)
+    log_file: IO[Any] | None = field(default=None, init=False, repr=False)
     retries: int = 3
     launched_by: str = ""
     cleanup_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     cleanup_done: bool = field(default=False, init=False, repr=False)
-    keep_logs: bool = True  # log file will be kept unless keep_logs is False
+    host_ips: list[str] = field(default_factory=list, init=False, repr=False)
+    streamers: list[subprocess.Popen] = field(default_factory=list, init=False, repr=False)
+    streamer_stop: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
 
     def __post_init__(self):
         is_v5 = self.tpu_type in TPUType.all_v5()
@@ -133,8 +136,68 @@ class TPUJob:
     def command(self) -> str:
         return f'mesh run {self.node_id} "{self.cmd}"'
 
+    @property
+    def log_dir(self) -> str:
+        return f"{self.launch_dir}/logs/{self.node_id}"
+
+    @property
+    def log_path(self) -> str:
+        return f"{self.log_dir}/log.txt"
+
+    @property
+    def ranks_dir(self) -> str:
+        return f"{self.log_dir}/ranks"
+
+    def start_rank_streamers(self):
+        self.stop_rank_streamers()
+        self.streamer_stop.clear()
+        for i, ip in enumerate(self.host_ips):
+            threading.Thread(target=self.stream_rank, args=(i, ip), daemon=True).start()
+
+    def stream_rank(self, index: int, ip: str):
+        path = f"{self.ranks_dir}/w{index}.txt"
+        first = True
+        while not self.streamer_stop.is_set():
+            n = "+1" if first else "0"
+            first = False
+            with open(path, "a", buffering=1) as f:
+                proc = subprocess.Popen(
+                    [
+                        "ssh",
+                        "-o",
+                        "BatchMode=yes",
+                        "-o",
+                        "StrictHostKeyChecking=accept-new",
+                        "-o",
+                        "ConnectTimeout=15",
+                        "-o",
+                        "ServerAliveInterval=30",
+                        "-i",
+                        IDENTITY_FILE,
+                        f"{DEFAULT_USER}@{ip}",
+                        f"tail -n {n} -F ~/job/output.log",
+                    ],
+                    stdout=f,
+                    stderr=subprocess.DEVNULL,
+                )
+                self.streamers.append(proc)
+                while proc.poll() is None and not self.streamer_stop.is_set():
+                    time.sleep(1)
+                if proc.poll() is None:
+                    proc.terminate()
+            if not self.streamer_stop.is_set():
+                time.sleep(15)
+
+    def stop_rank_streamers(self):
+        self.streamer_stop.set()
+        for proc in self.streamers:
+            if proc.poll() is None:
+                proc.terminate()
+        self.streamers.clear()
+
     def setup_tpu(self) -> int:
         ips = tpu_get_ips(self.node_id, self.zone.value)
+        self.host_ips = ips
         update_mesh_config(self.node_id, ips)
         result = subprocess.run(["mesh", "setup", self.node_id], capture_output=True, cwd=self.launch_dir)
         return result.returncode
@@ -152,17 +215,17 @@ class TPUJob:
                 console.print(f"[yellow]mesh setup failed for {self.node_id}, will retry[/yellow]")
                 return
 
-            log_path = f"{self.home_dir}/logs/{self.node_id}.txt"
-
-            self._log_file = open(log_path, "a", buffering=1)
+            os.makedirs(self.ranks_dir, exist_ok=True)
+            self.log_file = open(self.log_path, "a", buffering=1)
             self.process = subprocess.Popen(
                 self.command,
                 shell=True,
-                stdout=self._log_file,
-                stderr=self._log_file,
+                stdout=self.log_file,
+                stderr=self.log_file,
                 text=True,
                 cwd=self.launch_dir,
             )
+            self.start_rank_streamers()
 
     def allocate_tpu(self):
         tpu_create_queued(
@@ -178,12 +241,13 @@ class TPUJob:
             if self.cleanup_done:
                 return
 
+            self.stop_rank_streamers()
             if self.process is not None and self.process.poll() is None:
                 self.process.terminate()
 
-            if self._log_file is not None:
-                self._log_file.close()
-                self._log_file = None
+            if self.log_file is not None:
+                self.log_file.close()
+                self.log_file = None
 
             if self.tpu_status in TPUStatus.allocated_states():
                 tpu_delete_queued(self.node_id, self.zone.value)

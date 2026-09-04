@@ -30,7 +30,7 @@ class Transformer(BaseModel):
         x: Array,
         sequence_lens: jax.Array,
         kv_cache: list[KVCache] | None = None,
-        fused_output: bool = False,
+        apply_lm_head: bool = True,
     ) -> tuple[Array, list[KVCache]]:
         B, T = x.shape
         embed_layer = nn.Embed(
@@ -80,7 +80,7 @@ class Transformer(BaseModel):
 
         x = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)
 
-        if not fused_output:
+        if apply_lm_head:
             if self.tie_weights:
                 x = embed_layer.attend(x)
             else:

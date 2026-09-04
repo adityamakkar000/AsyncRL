@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import glob
 import logging
 import os
 import re
-import shutil
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -32,7 +32,6 @@ class RunJobRequest(BaseModel):
     retries: int = 3
     launched_by: str = ""
     cwd: str = ""
-    keep_logs: bool = True
 
 
 class JobView(BaseModel):
@@ -108,7 +107,6 @@ class Server:
                 retries=body.retries,
                 cwd=body.cwd,
                 launched_by=body.launched_by,
-                keep_logs=body.keep_logs,
             )
             self.jobs.append(job)
 
@@ -146,13 +144,6 @@ class Server:
             with self.lock:
                 self.jobs.append(job)
             return False
-        try:
-            shutil.rmtree(f"{job.home_dir}/{job.cwd}")
-        except Exception:
-            logger.exception("rmtree failed for %s, skipping", job.cwd)
-        log_path = f"{job.home_dir}/logs/{job.node_id}.txt"
-        if os.path.exists(log_path) and not job.keep_logs:
-            os.remove(log_path)
         return True
 
 
@@ -203,10 +194,17 @@ def delete_job(job_id: str) -> dict[str, Any]:
     return {"ok": True, "deleted": job_id}
 
 
-def _log_path_for_node(node_id: str) -> str:
+def log_dir_for_node(node_id: str) -> str:
     if not _SAFE_NODE_ID.match(node_id):
         raise HTTPException(status_code=400, detail="invalid node_id")
-    return os.path.join(os.path.expanduser("~"), "logs", f"{node_id}.txt")
+    with get_state().lock:
+        job = next((j for j in get_state().jobs if j.node_id == node_id), None)
+    if job is not None:
+        return job.log_dir
+    matches = glob.glob(os.path.join(os.path.expanduser("~"), "jobs", "*", "logs", node_id))
+    if not matches:
+        raise HTTPException(status_code=404, detail=f"no logs for {node_id}")
+    return max(matches, key=os.path.getmtime)
 
 
 async def _wait_for_log_file(path: str, timeout_s: float = 120.0, poll_s: float = 0.25) -> None:
@@ -218,13 +216,7 @@ async def _wait_for_log_file(path: str, timeout_s: float = 120.0, poll_s: float 
     raise HTTPException(status_code=404, detail=f"log file not found: {path}")
 
 
-@app.get("/logs/{node_id}/stream")
-async def stream_job_log(node_id: str) -> StreamingResponse:
-    """Tail -f style stream of ~/logs/<node_id>.txt on the server host."""
-
-    path = _log_path_for_node(node_id)
-    await _wait_for_log_file(path)
-
+def stream_file(path: str) -> StreamingResponse:
     async def lines() -> AsyncIterator[bytes]:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             while True:
@@ -235,6 +227,34 @@ async def stream_job_log(node_id: str) -> StreamingResponse:
                     await asyncio.sleep(0.2)
 
     return StreamingResponse(lines(), media_type="text/plain; charset=utf-8")
+
+
+@app.get("/logs/{node_id}/stream")
+async def stream_job_log(node_id: str) -> StreamingResponse:
+    """Tail -f style stream of <run dir>/logs/<node_id>/log.txt (rank 0 / mesh run stdout)."""
+
+    path = os.path.join(log_dir_for_node(node_id), "log.txt")
+    await _wait_for_log_file(path)
+    return stream_file(path)
+
+
+@app.get("/logs/{node_id}/ranks")
+def list_rank_logs(node_id: str) -> list[str]:
+    """Per-host logs streamed from every TPU host into <run dir>/logs/<node_id>/ranks/w<i>.txt."""
+
+    ranks_dir = os.path.join(log_dir_for_node(node_id), "ranks")
+    if not os.path.isdir(ranks_dir):
+        return []
+    return sorted(os.listdir(ranks_dir), key=lambda f: int(f[1:-4]) if f[1:-4].isdigit() else -1)
+
+
+@app.get("/logs/{node_id}/ranks/{index}/stream")
+async def stream_rank_log(node_id: str, index: int) -> StreamingResponse:
+    """Tail -f style stream of <run dir>/logs/<node_id>/ranks/w<index>.txt."""
+
+    path = os.path.join(log_dir_for_node(node_id), "ranks", f"w{index}.txt")
+    await _wait_for_log_file(path)
+    return stream_file(path)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import os
 import random
 import subprocess
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -108,23 +109,20 @@ def run_tpu_jobs(
     TPU_TYPE: TPUType,
     RUNTIME: Runtime,
     RETRIES: int,
-    keep_logs: bool = True,
     debug: bool = False,
 ):
     # this get's current project assuming you used launch.py from the project root
     copy_dir = os.getcwd()
     user = getpass.getuser()
-    cwd_id = random.randint(0, 1000000)
-    server_dir = f"{user}_{EXPERIMENT_PREFIX}_{cwd_id}"
+    run_dir = f"jobs/{EXPERIMENT_PREFIX}_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
 
     # NOTE: this assumes the launch server is named "server" in cluster.yaml
-    subprocess.run(["mesh", "copy", "server", f"~/{server_dir}"], cwd=copy_dir)
+    subprocess.run(["mesh", "copy", "server", f"~/{run_dir}"], cwd=copy_dir)
 
-    for node_counter, combo in enumerate(combos):
-        rng_combo = random.randint(0, 1000000)
-        node_id = f"node_{node_counter}_{rng_combo}"
-
+    for combo in combos:
         name = make_name(combo, EXPERIMENT_PREFIX)
+        node_id = f"{name}_{random.randint(0, 1000000)}"
+
         overrides = {**FIXED_OVERRIDES, **combo}
         inner_parts = [
             "python",
@@ -133,7 +131,7 @@ def run_tpu_jobs(
             f"--config-name {BASE_CONFIG}",
         ]
         if JOB_TYPE == JOB_TYPES.TRAIN:
-            inner_parts.append(f"experiment_name={node_id}_{name}")
+            inner_parts.append(f"experiment_name={node_id}")
 
         for k, v in overrides.items():
             inner_parts.append(f"{k}={v}")
@@ -146,9 +144,8 @@ def run_tpu_jobs(
             "runtime": RUNTIME,
             "cmd": inner_cmd,
             "retries": RETRIES,
-            "cwd": server_dir,
+            "cwd": run_dir,
             "launched_by": user,
-            "keep_logs": keep_logs,  # to keep logs after run ends
         }
 
         if not debug:
@@ -178,6 +175,5 @@ def launch(job: LAUNCH_JOB) -> None:
         job.TPU_TYPE,
         job.RUNTIME,
         job.RETRIES,
-        keep_logs=True,
         debug=job.DEBUG,
     )

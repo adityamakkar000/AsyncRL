@@ -20,6 +20,7 @@ class InferenceConfig:
     top_p: float | None = MISSING
     max_seq_len: int = MISSING
     max_decode_batch_size: int = MISSING
+    prefill_multiplier: int = 2
     tp: int = 1
     group_size: int = MISSING
     initial_sequence_len: int = 64

@@ -70,6 +70,7 @@ def download_hf_weights(name: str):
             repo_id=name,
             local_dir=name,
             token=os.environ.get("HF_TOKEN", None),
+            ignore_patterns=["original/*"],
         )
 
 
