@@ -1,4 +1,3 @@
-from src.data.register import data
 import json
 import os
 import threading
