@@ -1,12 +1,10 @@
 import itertools
-import time
 from functools import cached_property
 
 import jax
 import jax.experimental.multihost_utils as mh
 import numpy as np
 from jaxtyping import PyTree
-from stax.logger import staxLogger as logger
 
 EXPLICIT = jax.sharding.AxisType.Explicit
 
@@ -57,32 +55,17 @@ class RDMATransferServer:
                 raise ValueError("only train workers should pass and init mesh")
             shardings[0] = self.get_zero_sharding(init_mesh)
 
-        t0 = time.perf_counter()
-        logger.info(f"[rdma] slot {self.slot} transfer start", log_for_all=True)
         if self.slot == 0:
             tree = jax.device_put(tree, shardings[0])
-            logger.info(
-                f"[rdma] slot {self.slot} local device_put done {time.perf_counter() - t0:.1f}s", log_for_all=True
-            )
 
         for i, (src, dest) in enumerate(itertools.pairwise(shardings)):
             buffer = tree if self.slot == i else allocate_buffer(shapes, src)
-            logger.info(
-                f"[rdma] slot {self.slot} hop {i} buffer ready {time.perf_counter() - t0:.1f}s", log_for_all=True
-            )
             out = jax.device_put(buffer, dest)
-            logger.info(
-                f"[rdma] slot {self.slot} hop {i} device_put issued {time.perf_counter() - t0:.1f}s", log_for_all=True
-            )
             if self.slot == i + 1:
                 tree = out
 
         tree = jax.tree.map(lambda x: x.block_until_ready(), tree)
-        logger.info(f"[rdma] slot {self.slot} block_until_ready done {time.perf_counter() - t0:.1f}s", log_for_all=True)
         mh.sync_global_devices("rdma_transfer_end")
-        logger.info(
-            f"[rdma] slot {self.slot} sync_global_devices done {time.perf_counter() - t0:.1f}s", log_for_all=True
-        )
         return tree
 
     def get_mesh(self, index: int = 0) -> jax.sharding.Mesh:

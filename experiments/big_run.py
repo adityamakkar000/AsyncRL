@@ -1,7 +1,7 @@
 import src.scripts.premption_tooling as TPUJOB
 
 BASE_CONFIG = "big_run"
-version = 5
+version = 6
 
 COMMON_OVERRIDES = {
     "wandb_config.project": "big_run",
