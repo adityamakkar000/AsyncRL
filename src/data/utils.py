@@ -42,7 +42,7 @@ def upload_local_file_to_gcs(local_path: str, gs_path: str):
 
 
 def compute_aux_metrics(batch: RLBatch) -> dict[str, float]:
-    token_mask = batch.reference_model_logprobs != -np.inf
+    token_mask = batch.token_mask
     return {
         "mean_reward": np.mean(batch.rewards).item(),
         "std_reward": np.std(batch.rewards).item(),

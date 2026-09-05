@@ -4,6 +4,7 @@ defaults:
   - loss_config: loss
   - datasets@train_dataset_config: troll-17k-train
   - override loss_config/inference_config: debug
+  - override loss_config/rl_config: miscispo
   - _self_
 
 train_batch_size: 512
@@ -32,7 +33,12 @@ seed: 123
 num_steps: 10000
 
 optimizer: "adamw"
-weight_decay: 0.01
+optimizer_kwargs: 
+  b1: 0.9
+  b2: 0.95
+  weight_decay: 0.01
+  eps: 1e-15
+  mu_dtype: float32
 grad_clip: 1.0
 
 learning_rate_init: 0.0
@@ -63,9 +69,6 @@ loss_config:
     reasoning_budget: null 
     think_mode: true
     system_prompt: false
-  rl_config:
-    _target_: src.workers.loss.CISPOLoss
-    epsilon: 4
 
 model_config:
   fused_chunk_size: 8192
@@ -83,7 +86,7 @@ sharding_config:
 
 async_config:
   train_workers: 2
-  max_lag: 8
+  max_lag: 4
 
 metrics_to_log:
   - "train/loss"

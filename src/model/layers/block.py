@@ -1,5 +1,3 @@
-from typing import Optional
-
 import jax.numpy as jnp
 from flax import linen as nn
 from jaxtyping import Array
@@ -24,9 +22,9 @@ class Block(nn.Module):
     def __call__(
         self,
         x: Array,
-        mask: Array,
+        masks: tuple[Array, Array],
         rope_matrix: tuple[Array, Array],
-        layer_cache: Optional[KVCache] = None,
+        layer_cache: KVCache | None = None,
     ):
         h = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)
         h, out_layer_cache = GroupedQueryAttention(
@@ -37,7 +35,7 @@ class Block(nn.Module):
             activation_dtype=self.activation_dtype,
             qk_norm=self.qk_norm,
             rms_eps=self.rms_eps,
-        )(h, mask, rope_matrix, layer_cache)
+        )(h, masks, rope_matrix, layer_cache)
         x = x + h
 
         h = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)

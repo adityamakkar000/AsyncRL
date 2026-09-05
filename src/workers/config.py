@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from threading import Lock
+from threading import Condition, Event, Lock
 from typing import Any
 
 import jax
@@ -21,10 +21,10 @@ class InferenceConfig:
     max_seq_len: int = MISSING
     max_decode_batch_size: int = MISSING
     prefill_multiplier: int = 2
-    warmup_seq_len: int | None = None
+    warmup_seq_len: int = 1024
     tp: int = 1
     group_size: int = MISSING
-    min_prefill_length: int = 64
+    min_prefill_length: int = 128
     kv_cache_dtype: str = "bfloat16"
     params_dtype: str = "bfloat16"
     reasoning_budget: int | None = None
@@ -104,6 +104,9 @@ class InferenceShardings:
 class AsyncState:
     MRUparams: jax.Array
     read_write_lock: Lock = field(default_factory=Lock)
+    pause: Event = field(default_factory=Event)
+    idle: int = 0
+    idle_cond: Condition = field(default_factory=Condition)
     weight_iteration: int = 0
 
 
@@ -178,7 +181,7 @@ class TrainerConfig:
     grad_accum_steps: int = 1
 
     optimizer: str = "adamw"  # "adamw", "adam", "sgd"
-    weight_decay: float | None = None
+    optimizer_kwargs: dict = field(default_factory=dict)
     grad_clip: float | None = None
 
     # cosine lr

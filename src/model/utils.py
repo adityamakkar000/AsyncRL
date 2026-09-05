@@ -52,31 +52,13 @@ def make_prompt_mask(kv_len: int, cache_len: Array, seq_lens: Array) -> Array:
     return left_padding_mask & valid_cache_mask  # [B, mask_seq]
 
 
-def make_tril_mask(query_length: int, key_length: int, t_start: Array) -> Array:
-    q = jnp.arange(query_length)[None, :, None] + t_start[:, None, None]  # [B, 1, 1]
-    k = jnp.arange(key_length)[None, None, :]  # [B, 1, 1]
-    return q >= k
-
-
-def make_attention_mask(query_length: int, key_length: int, t_start: Array, seq_lens: Array) -> Array:
-    prompt_mask = make_prompt_mask(key_length, t_start + query_length, seq_lens)  # B, key_shape
-    tril = make_tril_mask(query_length, key_length, t_start)[:, None, :, :]  # B, 1, query_shape, key_shape
-    return prompt_mask[:, None, None, :] * tril
-
-
-def download_hf_weights(name: str):
-    if not os.path.isdir(name):
-        snapshot_download(
-            repo_id=name,
-            local_dir=name,
-            token=os.environ.get("HF_TOKEN", None),
-            ignore_patterns=["original/*"],
-        )
-
-
-def delete_hf_weights(name: str):
-    if os.path.isdir(name):
-        shutil.rmtree(name)
+def download_hf_weights(name: str, path: str):
+    snapshot_download(
+        repo_id=name,
+        local_dir=path,
+        token=os.environ.get("HF_TOKEN", None),
+        ignore_patterns=["original/*"],
+    )
 
 
 def get_jax_key(main_key: str, hf_mapping) -> str | None:
@@ -96,10 +78,11 @@ def get_jax_key(main_key: str, hf_mapping) -> str | None:
 
 def get_torch_weights_to_jax(params: PyTree, name: str, hf_mapping) -> PyTree:
     """Load Hugging Face model weights into a JAX PyTree of parameters."""
-    download_hf_weights(name)
+    path = os.path.expanduser(f"~/model/{name}")
+    download_hf_weights(name, path)
     torch_hf_params = {}
 
-    files = list(glob.glob(name + "/*safetensors"))
+    files = list(glob.glob(path + "/*safetensors"))
     for file in files:
         with safe_open(file, framework="torch") as f:
             for hf_param_key in f.keys():
@@ -125,7 +108,6 @@ def get_torch_weights_to_jax(params: PyTree, name: str, hf_mapping) -> PyTree:
                 )
                 jax_param[param_ending] = new_param
 
-    delete_hf_weights(name)
     return params
 
 
@@ -181,13 +163,14 @@ def convert_pytree(params: PyTree, reverse_hf_mapping) -> dict[str, torch.Tensor
 
 
 def save_to_hf(dir_path: str, params: PyTree, hf_model_name: str, reverse_hf_mapping) -> None:
-    download_hf_weights(hf_model_name)
+    hf_path = os.path.expanduser(f"~/model/{hf_model_name}")
+    download_hf_weights(hf_model_name, hf_path)
 
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
 
-    for file in os.listdir(hf_model_name):
-        src_path = os.path.join(hf_model_name, file)
+    for file in os.listdir(hf_path):
+        src_path = os.path.join(hf_path, file)
         if os.path.isfile(src_path) and not file.endswith(".safetensors"):
             shutil.copy(src_path, dir_path)
 
@@ -195,8 +178,10 @@ def save_to_hf(dir_path: str, params: PyTree, hf_model_name: str, reverse_hf_map
     save_file(new_tensors, f"{dir_path}/model.safetensors")
 
 
-def get_embedding_weights(params: PyTree) -> Array:
-    return jnp.transpose(params["token_emb"]["embedding"])
+def get_lm_head_weights(params: PyTree, tie_weights: bool) -> Array:
+    if tie_weights:
+        return jnp.transpose(params["token_emb"]["embedding"])
+    return params["Dense_0"]["kernel"]
 
 
 def make_chunks(B: int, chunk_size: int):
@@ -225,17 +210,12 @@ def _fwd(h, W, targets, chunk_size):
 
     W_gather = jax.lax.with_sharding_constraint(W, P())
 
+    chunked_hidden_inputs, W_gather = jax.tree.map(lambda x: x.astype(jnp.float32), (chunked_hidden_inputs, W_gather))
+
     def body_fn(carry, chunk):
         hidden_chunk, target_chunk = chunk
         logits_chunked = hidden_chunk @ W_gather  # chunk_size x V
-
-        chunk_max = jnp.max(logits_chunked, axis=-1)  # chunk_size
-        shifted_logits = logits_chunked - chunk_max[:, None]  # chunk_size x V
-
-        exp_shifted = jnp.exp(shifted_logits)
-        sum_exp = jnp.sum(exp_shifted, -1)[:, None]  # chunk_size x 1
-        log_softmax = shifted_logits - jnp.log(sum_exp)  # chunk_size x V
-
+        log_softmax = jax.nn.log_softmax(logits_chunked, axis=-1)  # chunk_size x V
         target_log_probs = jnp.take_along_axis(log_softmax, target_chunk[:, None], axis=-1)[:, 0]  # chunk_size
 
         return carry, target_log_probs

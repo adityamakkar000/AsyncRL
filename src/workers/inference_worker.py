@@ -87,8 +87,7 @@ class SingleInferenceReplica:
     def start(self, key: Array):
         key = jax.device_put(key, self.sharding)
         prev_state = None
-        if self.config.warmup_seq_len is not None:
-            self.warmup()
+        self.warmup()
 
         while True:
             with Tracker(timer=True) as t:
@@ -122,8 +121,11 @@ class SingleInferenceReplica:
                     break
 
             n_eval = len(samples)
+            self.set_idle(1)
             while len(samples) < self.max_prefill_prompts:
                 samples.append((self.async_options.queues.prompt_queue.get(timeout=TIMEOUT), False))
+            self.set_idle(-1)
+            self.yield_for_sync()
 
         with Tracker(timer=True) as t2:
             for i, (sample, is_eval) in enumerate(samples):
@@ -242,6 +244,7 @@ class SingleInferenceReplica:
                     self.global_rollouts[local_to_global[i]].weight_iteration.append(self.weight_iteration)
 
             while len(prompt_queue) > 0:
+                self.yield_for_sync(state)
                 next_index = prompt_queue.pop()
 
                 (state, tokens, logprobs, prompt_ids, n_steps) = self.decode_fn(
@@ -282,7 +285,7 @@ class SingleInferenceReplica:
             key = jax.device_put(jax.random.PRNGKey(0), self.sharding)
             n = self.max_prefill_prompts
             seq_len = self.config.min_prefill_length
-            while seq_len <= self.config.warmup_seq_len:
+            while seq_len <= min(self.config.warmup_seq_len, self.max_attention_length):
                 logger.info(f"Warming up prefill for sequence length {seq_len}", log_for_all=True)
                 tokens = jax.device_put(np.full((n, seq_len), self.pad_token, dtype=np.int32), self.sharding)
                 seq_lens = jax.device_put(np.full((n,), seq_len, dtype=np.int32), self.sharding)
@@ -291,7 +294,7 @@ class SingleInferenceReplica:
 
             logger.info("Warming up decode", log_for_all=True)
             state = self.create_initial_state(prefill_state, list(range(self.config.max_decode_batch_size)))
-            state = state.replace(seq_lens=jnp.full_like(state.seq_lens, self.max_attention_length - 1))
+            state = state.replace(seq_lens=jnp.full_like(state.seq_lens, self.max_attention_length - 1))  # type: ignore
             self.decode_fn = jax.jit(self._decode_single_loop, donate_argnums=(0,))
             jax.block_until_ready(self.decode_fn(state, self.params, prefill_state, 0))
 
@@ -504,6 +507,21 @@ class SingleInferenceReplica:
                 logger.info(f"Params updated on inference worker {self.global_worker_id}", log_for_all=True)
                 self.weight_iteration = self.async_state.weight_iteration
 
+    def set_idle(self, delta: int):
+        with self.async_state.idle_cond:
+            self.async_state.idle += delta
+            self.async_state.idle_cond.notify_all()
+
+    def yield_for_sync(self, state: InferenceState | None = None):
+        if not self.async_state.pause.is_set():
+            return
+        if state is not None:
+            jax.block_until_ready(state)
+        self.set_idle(1)
+        while self.async_state.pause.is_set():
+            time.sleep(0.05)
+        self.set_idle(-1)
+
     def block_until_params_update(self):
         logger.info("Waiting for initial parameters from training workers...", log_for_all=True)
         current_id = self.weight_iteration
@@ -610,11 +628,23 @@ class AsyncInferenceWorker(Worker):
                 log_for_all=True,
             )
 
+            if async_state.weight_iteration > 0:
+                n_replicas = jax.local_device_count() // self.inference_config.tp
+                t0 = time.perf_counter()
+                async_state.pause.set()
+                with async_state.idle_cond:
+                    async_state.idle_cond.wait_for(lambda n=n_replicas: async_state.idle >= n, timeout=45)
+                    logger.info(
+                        f"[weight_sync] {async_state.idle}/{n_replicas} replicas idle after {time.perf_counter() - t0:.1f}s",
+                        log_for_all=True,
+                    )
+
             new_params = self.transfer_server.transfer(async_state.MRUparams)
 
             with async_state.read_write_lock:
                 async_state.MRUparams = new_params
                 async_state.weight_iteration += 1
+            async_state.pause.clear()
 
     def validate_config(self):
         assert jax.local_device_count() % self.inference_config.tp == 0, (
@@ -628,6 +658,9 @@ class AsyncInferenceWorker(Worker):
         )
         assert self.inference_config.min_prefill_length & (self.inference_config.min_prefill_length - 1) == 0, (
             f"min_prefill_length must be a power of 2, got {self.inference_config.min_prefill_length}"
+        )
+        assert self.inference_config.min_prefill_length >= 128, (
+            "Flash-attention prefill requires min prefill length of 128"
         )
 
         if self.inference_config.reasoning_budget is not None:
@@ -649,9 +682,6 @@ class AsyncInferenceWorker(Worker):
             warmup_seq_len = self.inference_config.warmup_seq_len
             assert warmup_seq_len & (warmup_seq_len - 1) == 0, (
                 f"warmup_seq_len must be a power of 2, got {warmup_seq_len}"
-            )
-            assert self.inference_config.min_prefill_length <= warmup_seq_len <= self.inference_config.max_seq_len, (
-                f"warmup_seq_len {warmup_seq_len} must be between min_prefill_length and max_seq_len"
             )
 
         if self.inference_config.top_k is not None:

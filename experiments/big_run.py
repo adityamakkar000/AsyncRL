@@ -1,31 +1,25 @@
 import src.scripts.premption_tooling as TPUJOB
 
-max_seq_len = [2048, 4096]
-# variance_filtering = [True, False]
-async_workers = [1, 2]
-
-RUN: TPUJOB.Cross | TPUJOB.Zip | TPUJOB.Vals = TPUJOB.Cross(
-    [
-        TPUJOB.Vals("loss_config.inference_config.max_seq_len", max_seq_len),
-        # TPUJOB.Vals("loss_config.filter_zero_variance", variance_filtering),
-        TPUJOB.Vals("async_config.train_workers", async_workers),
-    ]
-)
-
 BASE_CONFIG = "big_run"
+version = 5
 
-job = TPUJOB.LAUNCH_JOB(
-    RUN=RUN,
-    EXPERIMENT_PREFIX="llama_big_run_v3",
+COMMON_OVERRIDES = {
+    "wandb_config.project": "big_run",
+    "loss_config.inference_config.group_size": 16,
+    "train_dataset_config.filters.0.max_length": 1000,
+    "num_steps": 10000,
+    "checkpoint_interval": 50,
+    "keep_every": 100,
+    "max_checkpoints_to_keep": 1,
+}
+
+job_2048 = TPUJOB.LAUNCH_JOB(
+    RUN=TPUJOB.Vals("loss_config.inference_config.max_seq_len", [2048]),
+    EXPERIMENT_PREFIX=f"llama_big_run_v{version}_2048",
     FIXED_OVERRIDES={
-        "wandb_config.project": "big_run_debug",
-        "loss_config.inference_config.max_decode_batch_size": 32,
-        "loss_config.inference_config.group_size": 16,
-        "num_steps": 10000,
-        "checkpoint_interval": 50,
-        "keep_every": 100,
-        "max_checkpoints_to_keep": 1,
-        "model_config": "qwen_0.6b_base",
+        **COMMON_OVERRIDES,
+        "async_config.train_workers": 2,
+        "loss_config.inference_config.max_decode_batch_size": 48,
     },
     BASE_CONFIG=BASE_CONFIG,
     ZONE=TPUJOB.Zone.US_EAST5_A,
@@ -36,5 +30,29 @@ job = TPUJOB.LAUNCH_JOB(
     DEBUG=False,
 )
 
+job_4096 = TPUJOB.LAUNCH_JOB(
+    RUN=TPUJOB.Vals("loss_config.inference_config.max_seq_len", [4096]),
+    EXPERIMENT_PREFIX=f"llama_big_run_v{version}_4096",
+    FIXED_OVERRIDES={
+        **COMMON_OVERRIDES,
+        "async_config.train_workers": 4,
+        "loss_config.inference_config.max_decode_batch_size": 24,
+        "grad_accum_steps": 8,
+    },
+    BASE_CONFIG=BASE_CONFIG,
+    ZONE=TPUJOB.Zone.US_EAST5_A,
+    JOB_TYPE=TPUJOB.JOB_TYPES.TRAIN,
+    TPU_TYPE=TPUJOB.TPUType.V5P_64,
+    RUNTIME=TPUJOB.Runtime.V2_ALPHA_TPUV5,
+    RETRIES=5,
+    DEBUG=False,
+)
+
 if __name__ == "__main__":
-    TPUJOB.launch(job)
+    import sys
+
+    only = sys.argv[1] if len(sys.argv) > 1 else None
+    if only in (None, "2048"):
+        TPUJOB.launch(job_2048)
+    if only in (None, "4096"):
+        TPUJOB.launch(job_4096)

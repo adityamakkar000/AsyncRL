@@ -79,7 +79,6 @@ class AsyncTrainerWorker(Worker):
         self.log_info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds")
 
     def validate_config(self):
-        """Method to validate the TrainerConfig parameters."""
         # validate config here
         cfg = self.config
         if cfg.grad_accum_steps < 1:
@@ -186,7 +185,6 @@ class AsyncTrainerWorker(Worker):
 
     @partial(setup, component="train and val functions")
     def _setup_functions(self):
-        """Setup training and validation functions."""
         assert self.tx is not None, "self.tx is None"
         assert self.model is not None, "self.model is None"
 
@@ -293,7 +291,6 @@ class AsyncTrainerWorker(Worker):
 
     @partial(setup, component="optimizer")
     def _setup_optimizer(self):
-        """Setup the optimizer and learning rate scheduler."""
         lr_scheduler = optax.warmup_cosine_decay_schedule(
             init_value=self.config.learning_rate_init,
             peak_value=self.config.learning_rate_peak,
@@ -315,13 +312,7 @@ class AsyncTrainerWorker(Worker):
         clip = (
             optax.clip_by_global_norm(self.config.grad_clip) if self.config.grad_clip is not None else optax.identity()
         )
-
-        optimizer_args: dict = {"learning_rate": lr_scheduler}
-        if self.config.weight_decay is not None and self.config.optimizer == "adamw":
-            optimizer_args["weight_decay"] = self.config.weight_decay
-            optimizer_args["eps"] = 1e-15
-        if self.config.optimizer == "adam" or self.config.optimizer == "adamw":
-            optimizer_args["mu_dtype"] = "float32"
+        optimizer_args: dict = {"learning_rate": lr_scheduler, **self.config.optimizer_kwargs}
         self.tx = optax.chain(clip, optax.inject_hyperparams(optimizer)(**optimizer_args))
 
     @partial(setup, component="checkpointer")
@@ -639,7 +630,11 @@ class AsyncTrainerWorker(Worker):
                 metrics |= eval_metrics
                 tables.extend(eval_tables)
 
-            if self.global_step % self.config.log_generations_every_n_steps == 0:
+            if self.global_step % self.config.log_generations_every_n_steps == 0 or (
+                unstable := (metrics.get("train/is_ratio") and abs(1 - metrics["train/is_ratio"].item()) > 0.05)
+            ):
+                if unstable:
+                    logger.warning("unstable training detected, saving table for step {self.global_step}")
                 tables.append(
                     TableMetrics(
                         f"train/generations/{self.train_dataset.dataset_config.name}",
@@ -675,7 +670,6 @@ class AsyncTrainerWorker(Worker):
 
     @partial(setup, component="cleanup")
     def finish(self):
-        """Finalize training and clean up resources."""
         if self.checkpointer:
             self.log_info("Cleaning up checkpointer resources...")
             self.block_checkpointer()

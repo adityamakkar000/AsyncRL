@@ -31,7 +31,10 @@ seed: 0
 num_steps: 250
 
 optimizer: "adamw"
-weight_decay: 0.01
+optimizer_kwargs: 
+  weight_decay: 0.01
+  mu_dtype: float32
+  
 grad_clip: 1.0
 
 learning_rate_init: 1e-6

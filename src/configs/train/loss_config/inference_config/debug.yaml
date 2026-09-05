@@ -2,7 +2,7 @@ temperature: 0.8
 top_p: null
 top_k: null
 max_seq_len: 8192
-min_prefill_length: 64
+min_prefill_length: 128
 max_decode_batch_size: 64
 group_size: 8
 kv_cache_dtype: "bfloat16"

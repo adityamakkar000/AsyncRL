@@ -5,7 +5,7 @@ from jaxtyping import Array
 
 from .config import BaseModel, KVCache
 from .layers import RematBlock, RMSNorm, RopeCorrection, gather_rope, no_correction, rope_tables
-from .utils import dynamic_slice_rows, make_attention_mask, make_prompt_mask
+from .utils import dynamic_slice_rows, make_prompt_mask
 
 
 class Transformer(BaseModel):
@@ -45,23 +45,13 @@ class Transformer(BaseModel):
         attention_len = kv_cache[0].k.shape[1] if kv_cache else T
 
         prompt_mask = make_prompt_mask(attention_len, cache_len=t_start + T, seq_lens=sequence_lens)
+        masks = (dynamic_slice_rows(prompt_mask, t_start, T), prompt_mask)
         index_map = jnp.cumsum(prompt_mask, axis=-1)
         index_map = jnp.where(index_map > 0, index_map - 1, 0)
         index_map = dynamic_slice_rows(index_map, t_start, T)
 
         sin_table, cos_table = rope_tables(self.sequence_len, self.head_dim, self.rope_base, self.rope_correction)
         rope_matrix = gather_rope(sin_table, cos_table, index_map)
-
-        attention_mask = (
-            prompt_mask
-            if kv_cache is None
-            else make_attention_mask(
-                query_length=T,
-                key_length=attention_len,
-                t_start=t_start,
-                seq_lens=sequence_lens,
-            )
-        )
 
         out_cache: list[KVCache] = []
         for i in range(self.n_layers):
@@ -75,7 +65,7 @@ class Transformer(BaseModel):
                 qk_norm=self.qk_norm,
                 rms_eps=self.rms_eps,
                 name=f"Block_{i}",
-            )(x, attention_mask, rope_matrix, kv_cache[i] if kv_cache else None)
+            )(x, masks, rope_matrix, kv_cache[i] if kv_cache else None)
             out_cache.append(out_layer_cache)
 
         x = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)

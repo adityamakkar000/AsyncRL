@@ -13,7 +13,7 @@ from stax import HFModelBase
 from stax import staxLogger as logger
 
 from .config import BaseModel, KVCache, ModelConfig
-from .utils import convert_dtype, fused_linear_selection, get_embedding_weights
+from .utils import convert_dtype, fused_linear_selection, get_lm_head_weights
 
 shardingType = PyTree[Sharding] | None
 
@@ -218,7 +218,7 @@ class Model(HFModelBase):
             params, x=x, sequence_lens=sequence_lens, kv_cache=kv_cache, apply_lm_head=False
         )  # B, T, D
         D = hidden_output.shape[-1]
-        weights = get_embedding_weights(params["params"])  # D, V
+        weights = get_lm_head_weights(params["params"], self.model.tie_weights)  # D, V
 
         flat_hidden = hidden_output.reshape(B * T, D)
         flat_targets = jnp.roll(tokens, -1, axis=-1).reshape(B * T)
