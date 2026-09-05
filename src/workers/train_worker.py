@@ -1,3 +1,4 @@
+from src.data.register import data
 import json
 import os
 import threading
@@ -423,25 +424,34 @@ class AsyncTrainerWorker(Worker):
 
         with stax.Tracker(timer=True) as t:
             if self.worker_rank == 0:
+                total_eval_prompts = 0
                 for val_dataset in self.val_datasets:
                     name = val_dataset.dataset_config.name
                     samples = val_dataset.samples
+                    total_eval_prompts += len(samples)
+
                     for sample in samples:
+                        sample.dataset_name = name
                         self.async_options.queues.eval_prompt_queue.put(sample)
 
                     logger.info(f"[eval] {name}: waiting on {len(samples)} prompts", log_for_all=True)
-                    generations: list[InferenceRollout] = []
-                    while len(generations) < len(samples):
-                        generations.append(self.async_options.queues.eval_rollout_queue.get(timeout=TIMEOUT))
 
+                generations: dict[str, list[InferenceRollout]] = {}
+                while len(generations) < total_eval_prompts:
+                    generation = self.async_options.queues.eval_rollout_queue.get(timeout=TIMEOUT)
+                    dataset_name = generation.sample.dataset_name
+                    generations.setdefault(dataset_name, []).append(generation)
+
+                for val_dataset in self.val_datasets:
+                    val_generations = generations[val_dataset.dataset_config.name]
                     scores, rewards = val_dataset.score_rollouts(
-                        generations, self.config.eval_config.group_size, list(self.config.eval_config.pass_k)
+                        val_generations, self.config.eval_config.group_size, list(self.config.eval_config.pass_k)
                     )
-                    metrics |= {f"eval/{name}/{key}": v for key, v in scores.items()}
+                    metrics |= {f"eval/{val_dataset.dataset_config.name}/{key}": v for key, v in scores.items()}
 
                     if self.config.eval_config.log_traces_n_prompts != 0:
                         traces = val_dataset.build_trace_table(
-                            generations, rewards, self.config.eval_config.log_traces_n_prompts
+                            val_generations, rewards, self.config.eval_config.log_traces_n_prompts
                         )
                         tables.append(TableMetrics(f"eval/generations/{name}", traces))
 

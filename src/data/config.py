@@ -12,6 +12,7 @@ class Sample:
     prompt: str
     answer: str
     solution: str | None
+    dataset_name: str = ""
 
     @classmethod
     def from_dict(cls, data: dict):
