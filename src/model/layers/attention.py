@@ -85,7 +85,7 @@ class GroupedQueryAttention(nn.Module):
         elif train or T >= 128:
             out = flash_attention_naive(q, k, v, masks, sm_scale)
         else:
-            assert T == 1, "decode only should call gqa"
+            assert T == 1, f"gqa should only be called by decode got {T} shape, full shape{x.shape}"
             out = gqa_reference(q, k, v, None, SegmentIds(*masks), sm_scale=sm_scale)
 
         out = einops.rearrange(out, "b h t d -> b t (h d)").astype(self.activation_dtype)

@@ -82,11 +82,10 @@ class SingleInferenceReplica:
 
         self.eval_group_size = eval_group_size
 
-        self.block_until_params_update()
-
     def start(self, key: Array):
         key = jax.device_put(key, self.sharding)
         prev_state = None
+        self.block_until_params_update()
         self.warmup()
 
         while True:
@@ -121,11 +120,8 @@ class SingleInferenceReplica:
                     break
 
             n_eval = len(samples)
-            self.set_idle(1)
             while len(samples) < self.max_prefill_prompts:
                 samples.append((self.async_options.queues.prompt_queue.get(timeout=TIMEOUT), False))
-            self.set_idle(-1)
-            self.yield_for_sync()
 
         with Tracker(timer=True) as t2:
             for i, (sample, is_eval) in enumerate(samples):
@@ -188,7 +184,11 @@ class SingleInferenceReplica:
                 sharding=self.kv_cache_sharding,
             )
             _hidden, out_cache = self.model.apply(
-                params, x=input_tokens[:, :-1], sequence_lens=seq_lens - 1, kv_cache=kv_cache, apply_lm_head=False
+                params,
+                x=jnp.roll(input_tokens, 1, axis=-1),
+                sequence_lens=seq_lens - 1,
+                kv_cache=kv_cache,
+                apply_lm_head=False,
             )
             out_tokens = (
                 jnp.ones((max_prefill_prompts, self.max_attention_length), dtype=jnp.int32, out_sharding=self.sharding)
@@ -197,11 +197,11 @@ class SingleInferenceReplica:
             out_logprobs = jnp.zeros(
                 (max_prefill_prompts, self.max_attention_length), dtype=jnp.float32, out_sharding=self.sharding
             )
-            out_tokens = jax.lax.dynamic_update_slice_in_dim(out_tokens, input_tokens, 0, axis=1)
+            out_tokens = jax.lax.dynamic_update_slice_in_dim(out_tokens, input_tokens, 1, axis=1)
             out_logprobs = jax.lax.dynamic_update_slice_in_dim(
                 out_logprobs,
                 -jnp.inf * jnp.ones(input_tokens.shape, dtype=jnp.float32, out_sharding=self.sharding),
-                0,
+                1,
                 axis=1,
             )
 
@@ -244,7 +244,6 @@ class SingleInferenceReplica:
                     self.global_rollouts[local_to_global[i]].weight_iteration.append(self.weight_iteration)
 
             while len(prompt_queue) > 0:
-                self.yield_for_sync(state)
                 next_index = prompt_queue.pop()
 
                 (state, tokens, logprobs, prompt_ids, n_steps) = self.decode_fn(
@@ -255,9 +254,10 @@ class SingleInferenceReplica:
                 finished["logprobs"].append(logprobs)
                 finished["prompt_ids"].append(prompt_ids)
 
-                steps.append(n_steps)
-                self._maybe_update_params()
+                self._maybe_update_params(state)
+
                 self.global_rollouts[local_to_global[next_index]].weight_iteration.append(self.weight_iteration)
+                steps.append(n_steps)
 
             gathered = {k: np.concatenate([jax.device_get(x) for x in v], axis=0) for k, v in finished.items()}
 
@@ -307,8 +307,6 @@ class SingleInferenceReplica:
         return self.initial_state_fn(prefill_prompts, ids)
 
     def _create_initial_state(self, prefill_prompts: InferenceState, initial_ids: Array) -> InferenceState:
-        logger.info("Compiling initial decode state", log_for_all=True)
-
         def create(prompts, i):
             state = self.create_batch(prompts, i)
             return state.roll(state.seq_lens - 1)
@@ -497,39 +495,39 @@ class SingleInferenceReplica:
             rollout_strs = self.tokenizer.batch_decode(rollout_tokens, skip_special_tokens=False)
             self.global_rollouts[pid].rollout_strs = rollout_strs
 
-    def _maybe_update_params(self):
-        with self.async_state.read_write_lock:
-            if self.weight_iteration != self.async_state.weight_iteration:
-                self.params = jax.tree.map(
-                    lambda x: jax.device_put(x.addressable_shards[self.worker_id * self.tp].data, self.sharding),
-                    self.async_state.MRUparams,
-                )
-                logger.info(f"Params updated on inference worker {self.global_worker_id}", log_for_all=True)
-                self.weight_iteration = self.async_state.weight_iteration
-
-    def set_idle(self, delta: int):
-        with self.async_state.idle_cond:
-            self.async_state.idle += delta
-            self.async_state.idle_cond.notify_all()
-
-    def yield_for_sync(self, state: InferenceState | None = None):
-        if not self.async_state.pause.is_set():
-            return
+    def _maybe_update_params(self, state: InferenceState | None = None):
         if state is not None:
             jax.block_until_ready(state)
-        self.set_idle(1)
-        while self.async_state.pause.is_set():
-            time.sleep(0.05)
-        self.set_idle(-1)
+
+        if not self.async_state.ready_to_sync.is_set():
+            return
+
+        with self.async_state.worker_signal:
+            self.async_state.ready_workers += 1
+            self.async_state.worker_signal.notify_all()
+
+        while self.async_state.ready_to_sync.is_set():
+            time.sleep(0.1)
+
+        with self.async_state.read_write_lock:
+            self.params = jax.tree.map(
+                lambda x: jax.make_array_from_single_device_arrays(
+                    x.shape,
+                    self.sharding,
+                    arrays=[s.data for s in x.addressable_shards if s.device in self.devices],
+                    dtype=x.dtype,
+                ),
+                self.async_state.MRUparams,
+            )
+            self.weight_iteration = self.async_state.weight_iteration
+
+        logger.info(f"Params updated on inference worker {self.global_worker_id}", log_for_all=True)
 
     def block_until_params_update(self):
         logger.info("Waiting for initial parameters from training workers...", log_for_all=True)
-        current_id = self.weight_iteration
-        while True:
-            self._maybe_update_params()
-            if current_id < self.weight_iteration:
-                break
+        while not self.async_state.ready_to_sync.is_set():
             time.sleep(0.2)
+        self._maybe_update_params()
 
     def tokenize(self, texts: list[str]) -> tuple[np.ndarray, np.ndarray]:
         inputs: list[list[int]] = [
@@ -595,6 +593,7 @@ class AsyncInferenceWorker(Worker):
         self.monitor_thread.start()
 
         device_groups = np.array(jax.local_devices()).reshape(-1, self.inference_config.tp)
+        self.n_replicas = device_groups.shape[0]
 
         workers = [
             SingleInferenceReplica(
@@ -607,7 +606,7 @@ class AsyncInferenceWorker(Worker):
                 device_groups[i],
                 eval_group_size=self.eval_config.group_size,
             )
-            for i in range(device_groups.shape[0])
+            for i in range(self.n_replicas)
         ]
 
         init_keys = jax.random.split(jax.random.PRNGKey(1024), len(workers))
@@ -628,23 +627,19 @@ class AsyncInferenceWorker(Worker):
                 log_for_all=True,
             )
 
-            if async_state.weight_iteration > 0:
-                n_replicas = jax.local_device_count() // self.inference_config.tp
-                t0 = time.perf_counter()
-                async_state.pause.set()
-                with async_state.idle_cond:
-                    async_state.idle_cond.wait_for(lambda n=n_replicas: async_state.idle >= n, timeout=45)
-                    logger.info(
-                        f"[weight_sync] {async_state.idle}/{n_replicas} replicas idle after {time.perf_counter() - t0:.1f}s",
-                        log_for_all=True,
-                    )
-
+            with async_state.worker_signal:
+                async_state.ready_workers = 0
+                async_state.ready_to_sync.set()
+                async_state.worker_signal.wait_for(lambda: async_state.ready_workers >= self.n_replicas, timeout=60)
+                if async_state.ready_workers < self.n_replicas:
+                    logger.warning(f"Got {async_state.ready_workers} signals, expected {self.n_replicas}")
             new_params = self.transfer_server.transfer(async_state.MRUparams)
 
             with async_state.read_write_lock:
                 async_state.MRUparams = new_params
                 async_state.weight_iteration += 1
-            async_state.pause.clear()
+
+            async_state.ready_to_sync.clear()
 
     def validate_config(self):
         assert jax.local_device_count() % self.inference_config.tp == 0, (

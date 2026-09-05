@@ -104,9 +104,9 @@ class InferenceShardings:
 class AsyncState:
     MRUparams: jax.Array
     read_write_lock: Lock = field(default_factory=Lock)
-    pause: Event = field(default_factory=Event)
-    idle: int = 0
-    idle_cond: Condition = field(default_factory=Condition)
+    ready_to_sync: Event = field(default_factory=Event)
+    ready_workers: int = 0
+    worker_signal: Condition = field(default_factory=Condition)
     weight_iteration: int = 0
 
 

@@ -27,8 +27,8 @@ class Transformer(BaseModel):
     @nn.compact
     def __call__(
         self,
-        x: Array,
-        sequence_lens: jax.Array,
+        x: Array,  # [B, T]
+        sequence_lens: jax.Array,  # [B, ]
         kv_cache: list[KVCache] | None = None,
         apply_lm_head: bool = True,
     ) -> tuple[Array, list[KVCache]]:
@@ -45,10 +45,8 @@ class Transformer(BaseModel):
         attention_len = kv_cache[0].k.shape[1] if kv_cache else T
 
         prompt_mask = make_prompt_mask(attention_len, cache_len=t_start + T, seq_lens=sequence_lens)
-        masks = (dynamic_slice_rows(prompt_mask, t_start, T), prompt_mask)
-        index_map = jnp.cumsum(prompt_mask, axis=-1)
-        index_map = jnp.where(index_map > 0, index_map - 1, 0)
-        index_map = dynamic_slice_rows(index_map, t_start, T)
+        masks = (dynamic_slice_rows(prompt_mask, t_start, T), prompt_mask)  # [q_mask, kv_mask]
+        index_map = jnp.maximum(jnp.arange(T)[None, :] - T + sequence_lens[:, None], 0)
 
         sin_table, cos_table = rope_tables(self.sequence_len, self.head_dim, self.rope_base, self.rope_correction)
         rope_matrix = gather_rope(sin_table, cos_table, index_map)

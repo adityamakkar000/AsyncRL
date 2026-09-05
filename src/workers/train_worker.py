@@ -21,13 +21,14 @@ from stax import staxLogger as logger
 from stax import sync_over_mesh
 from stax.utils import metrics_all_reduce
 from stax.writer import TableMetrics
+from tqdm import tqdm
 
 from src.constants import CHECKPOINTS, GS_BUCKET, PROFILE
 from src.data import DataLoader, InferenceRollout, RLBatch
 from src.model import Model
 
 from .config import AsyncOptions, TrainerConfig
-from .constants import TIMEOUT
+from .constants import EVAL_TIMEOUT, TIMEOUT
 from .rdma_transfer import RDMATransferServer
 from .utils import Key, reduce_inference_metric, setup, write_to_gcs
 from .worker import Worker
@@ -73,7 +74,6 @@ class AsyncTrainerWorker(Worker):
                 config_path = f"{self.gs_path}/config.json"
                 write_to_gcs(config_path, dict_config)
 
-            self.train_sync_weights()
             self.sync_train_workers("Trainer initialization")
 
         self.log_info(f"Trainer initialization complete in {tracker.data['time']:.2f} seconds")
@@ -427,10 +427,11 @@ class AsyncTrainerWorker(Worker):
                     logger.info(f"[eval] {name}: waiting on {len(samples)} prompts", log_for_all=True)
 
                 generations: dict[str, list[InferenceRollout]] = {}
-                while len(generations) < total_eval_prompts:
-                    generation = self.async_options.queues.eval_rollout_queue.get(timeout=TIMEOUT)
-                    dataset_name = generation.sample.dataset_name
-                    generations.setdefault(dataset_name, []).append(generation)
+                with tqdm(total=total_eval_prompts, desc="[eval] rollouts", unit="prompt", mininterval=10) as bar:
+                    for _ in range(total_eval_prompts):
+                        generation = self.async_options.queues.eval_rollout_queue.get(timeout=EVAL_TIMEOUT)
+                        generations.setdefault(generation.sample.dataset_name, []).append(generation)
+                        bar.update(1)
 
                 for val_dataset in self.val_datasets:
                     val_generations = generations[val_dataset.dataset_config.name]
@@ -448,7 +449,7 @@ class AsyncTrainerWorker(Worker):
                 for _ in range(self.async_options.train_workers - 1):
                     self.async_options.queues.eval_done_queue.put("done")
             else:
-                self.async_options.queues.eval_done_queue.get(timeout=TIMEOUT)
+                self.async_options.queues.eval_done_queue.get(timeout=EVAL_TIMEOUT)
 
         metrics["eval/time"] = t.data["time"]
         logger.info(f"[eval] complete in {t.data['time']:.2f}s", log_for_all=True)
@@ -581,6 +582,7 @@ class AsyncTrainerWorker(Worker):
         assert self.writer is not None, "Writer not set up."
         assert self.checkpointer is not None, "Checkpointer not set up."
 
+        self.train_sync_weights()
         self.log_info("Precompiling test batch")
 
         # Profile first step to overlap compile with intial inference queue filling
@@ -630,9 +632,8 @@ class AsyncTrainerWorker(Worker):
                 metrics |= eval_metrics
                 tables.extend(eval_tables)
 
-            if self.global_step % self.config.log_generations_every_n_steps == 0 or (
-                unstable := (metrics.get("train/is_ratio") and abs(1 - metrics["train/is_ratio"].item()) > 0.05)
-            ):
+            unstable = metrics.get("train/is_ratio") and abs(1 - metrics["train/is_ratio"].item()) > 0.05
+            if self.global_step % self.config.log_generations_every_n_steps == 0 or unstable:
                 if unstable:
                     logger.warning("unstable training detected, saving table for step {self.global_step}")
                 tables.append(

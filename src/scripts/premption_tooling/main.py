@@ -167,7 +167,11 @@ class TPUJob:
                         "-o",
                         "BatchMode=yes",
                         "-o",
-                        "StrictHostKeyChecking=accept-new",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "UserKnownHostsFile=/dev/null",
+                        "-o",
+                        "LogLevel=ERROR",
                         "-o",
                         "ConnectTimeout=15",
                         "-o",
@@ -178,7 +182,7 @@ class TPUJob:
                         f"tail -n {n} -F ~/job/output.log",
                     ],
                     stdout=f,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.STDOUT,
                 )
                 self.streamers.append(proc)
                 while proc.poll() is None and not self.streamer_stop.is_set():

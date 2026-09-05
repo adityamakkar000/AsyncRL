@@ -48,6 +48,7 @@ class RDMATransferServer:
         return get_default_sharding(mesh)
 
     def transfer(self, tree: PyTree, init_mesh: jax.sharding.Mesh | None = None) -> PyTree:
+        mh.sync_global_devices("rdma_transfer_start")
         shapes = jax.tree.map(lambda leaf: jax.ShapeDtypeStruct(leaf.shape, leaf.dtype), tree)
         shardings = list(map(get_default_sharding, self.meshes))
 
@@ -78,7 +79,7 @@ class RDMATransferServer:
 
         tree = jax.tree.map(lambda x: x.block_until_ready(), tree)
         logger.info(f"[rdma] slot {self.slot} block_until_ready done {time.perf_counter() - t0:.1f}s", log_for_all=True)
-        mh.sync_global_devices("rdma_transfer")
+        mh.sync_global_devices("rdma_transfer_end")
         logger.info(
             f"[rdma] slot {self.slot} sync_global_devices done {time.perf_counter() - t0:.1f}s", log_for_all=True
         )

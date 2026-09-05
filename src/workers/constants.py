@@ -7,3 +7,4 @@ KEY = b"aaa"
 VM_IP = socket.gethostbyname(socket.gethostname())
 GLOBAL_IP = GceTpuCluster.get_coordinator_address(60).split(":")[0]
 TIMEOUT = 60 * 30  # 30 min
+EVAL_TIMEOUT = 2 * 60 * 60  # 2 hours
