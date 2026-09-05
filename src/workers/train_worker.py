@@ -635,7 +635,7 @@ class AsyncTrainerWorker(Worker):
             unstable = metrics.get("train/is_ratio") and abs(1 - metrics["train/is_ratio"].item()) > 0.05
             if self.global_step % self.config.log_generations_every_n_steps == 0 or unstable:
                 if unstable:
-                    logger.warning("unstable training detected, saving table for step {self.global_step}")
+                    logger.warning(f"unstable training detected, saving table for step {self.global_step}")
                 tables.append(
                     TableMetrics(
                         f"train/generations/{self.train_dataset.dataset_config.name}",

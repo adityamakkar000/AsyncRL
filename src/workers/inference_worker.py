@@ -254,7 +254,8 @@ class SingleInferenceReplica:
                 finished["logprobs"].append(logprobs)
                 finished["prompt_ids"].append(prompt_ids)
 
-                self._maybe_update_params(state)
+                jax.block_until_ready(state)
+                self._maybe_update_params()
 
                 self.global_rollouts[local_to_global[next_index]].weight_iteration.append(self.weight_iteration)
                 steps.append(n_steps)
@@ -270,13 +271,13 @@ class SingleInferenceReplica:
         subbed_steps = len(steps)
 
         tokens_per_second = queued_steps * self.config.max_decode_batch_size / t.data["time"]
-        sequences_per_second = queued_steps / t.data["time"]
+        steps_per_second = queued_steps / t.data["time"]
         decode_metrics = {
             "decode_steps": queued_steps,
             "decode_steps_subbed": subbed_steps,
             "decode_time": t.data["time"],
             "decode_tps": tokens_per_second,
-            "decode_sps": sequences_per_second,
+            "decode_sps": steps_per_second,
         }
         return state, decode_metrics
 
@@ -495,21 +496,21 @@ class SingleInferenceReplica:
             rollout_strs = self.tokenizer.batch_decode(rollout_tokens, skip_special_tokens=False)
             self.global_rollouts[pid].rollout_strs = rollout_strs
 
-    def _maybe_update_params(self, state: InferenceState | None = None):
-        if state is not None:
-            jax.block_until_ready(state)
-
-        if not self.async_state.ready_to_sync.is_set():
+    def _maybe_update_params(self):
+        if not self.async_state.weight_sync_event.is_set():
             return
 
-        with self.async_state.worker_signal:
-            self.async_state.ready_workers += 1
-            self.async_state.worker_signal.notify_all()
+        with self.async_state.n_workers_condition:
+            self.async_state.n_workers_ready += 1
+            self.async_state.n_workers_condition.notify_all()
 
-        while self.async_state.ready_to_sync.is_set():
+        while self.async_state.weight_sync_event.is_set():
             time.sleep(0.1)
 
         with self.async_state.read_write_lock:
+            assert self.weight_iteration < self.async_state.weight_iteration, (
+                "expected new weight iteration to be greater than current weight iteration"
+            )
             self.params = jax.tree.map(
                 lambda x: jax.make_array_from_single_device_arrays(
                     x.shape,
@@ -525,7 +526,7 @@ class SingleInferenceReplica:
 
     def block_until_params_update(self):
         logger.info("Waiting for initial parameters from training workers...", log_for_all=True)
-        while not self.async_state.ready_to_sync.is_set():
+        while not self.async_state.weight_sync_event.is_set():
             time.sleep(0.2)
         self._maybe_update_params()
 
@@ -627,19 +628,21 @@ class AsyncInferenceWorker(Worker):
                 log_for_all=True,
             )
 
-            with async_state.worker_signal:
-                async_state.ready_workers = 0
-                async_state.ready_to_sync.set()
-                async_state.worker_signal.wait_for(lambda: async_state.ready_workers >= self.n_replicas, timeout=60)
-                if async_state.ready_workers < self.n_replicas:
-                    logger.warning(f"Got {async_state.ready_workers} signals, expected {self.n_replicas}")
+            with async_state.n_workers_condition:
+                async_state.n_workers_ready = 0
+                async_state.weight_sync_event.set()
+                async_state.n_workers_condition.wait_for(
+                    lambda: async_state.n_workers_ready >= self.n_replicas, timeout=60
+                )
+                if async_state.n_workers_ready < self.n_replicas:
+                    logger.warning(f"Got {async_state.n_workers_ready} signals, expected {self.n_replicas}")
             new_params = self.transfer_server.transfer(async_state.MRUparams)
 
             with async_state.read_write_lock:
                 async_state.MRUparams = new_params
                 async_state.weight_iteration += 1
 
-            async_state.ready_to_sync.clear()
+            async_state.weight_sync_event.clear()
 
     def validate_config(self):
         assert jax.local_device_count() % self.inference_config.tp == 0, (
