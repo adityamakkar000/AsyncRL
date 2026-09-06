@@ -33,6 +33,7 @@ class Sample:
 class DatasetConfig:
     name: str = MISSING
     verifier: dict[str, Any] = MISSING
+    transforms: list[dict[str, Any]] = field(default_factory=list)
     filters: list[dict[str, Any]] = field(default_factory=list)
 
 

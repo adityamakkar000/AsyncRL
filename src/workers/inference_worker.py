@@ -556,7 +556,7 @@ class SingleInferenceReplica:
 
     @property
     def max_prefill_prompts(self) -> int:
-        return self.config.prefill_multiplier * self.config.max_decode_batch_size
+        return max(1, int(self.config.prefill_multiplier * self.config.max_decode_batch_size))
 
     @property
     def max_attention_length(self) -> int:
@@ -672,8 +672,15 @@ class AsyncInferenceWorker(Worker):
                 "Reasoning budget should be None when think_mode is disabled"
             )
 
-        assert self.inference_config.prefill_multiplier >= 1, (
-            f"prefill_multiplier must be >= 1, got {self.inference_config.prefill_multiplier}"
+        assert self.inference_config.prefill_multiplier > 0, (
+            f"prefill_multiplier must be positive, got {self.inference_config.prefill_multiplier}"
+        )
+        prefill_prompts = max(
+            1, int(self.inference_config.prefill_multiplier * self.inference_config.max_decode_batch_size)
+        )
+        assert prefill_prompts * self.inference_config.group_size >= self.inference_config.max_decode_batch_size, (
+            f"prefill batch of {prefill_prompts} prompts x group size {self.inference_config.group_size} cannot fill "
+            f"max_decode_batch_size {self.inference_config.max_decode_batch_size}"
         )
 
         if self.inference_config.warmup_seq_len is not None:

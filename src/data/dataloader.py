@@ -9,6 +9,7 @@ from stax.logger import staxLogger as logger
 from .config import DatasetConfig, InferenceRollout, RLBatch, Sample
 from .filters import Filter
 from .register import GLOBAL_DICT
+from .transforms import Transform
 from .utils import compute_aux_metrics, decode_tokens, load_tokenizer, pass_at_k, resolve_pad_eos
 from .verifier import Verifier
 
@@ -28,31 +29,39 @@ class DataLoader:
         self.pad_token, self.eos_token = resolve_pad_eos(self.tokenizer)
 
         self.verifier: Verifier = instantiate(dataset_config.verifier)
+        self.transforms: list[Transform] = [instantiate(t) for t in dataset_config.transforms]
         self.filters: list[Filter] = [instantiate(f) for f in dataset_config.filters]
         for data_filter in self.filters:
             data_filter.bind(self.tokenizer, self.use_system_prompt)
 
         self._current_idx = 0
-        self.samples = self._load_samples()
+        self.samples = self.load_samples()
         self.total_samples = len(self.samples)
 
-    def _load_samples(self) -> list[Sample]:
+    def load_samples(self) -> list[Sample]:
         name = self.dataset_config.name
         if name not in GLOBAL_DICT:
-            raise ValueError(f"Unknown dataset {name!r}. Registered datasets: {sorted(GLOBAL_DICT)}")
+            raise ValueError(f"Unknown dataset {name}. Registered datasets: {sorted(GLOBAL_DICT)}")
 
         samples = GLOBAL_DICT[name]()
         if not samples:
-            raise ValueError(f"Dataset {name!r} returned no samples")
-        return self.filter_samples(samples)
+            raise ValueError(f"Dataset {name} returned no samples")
+        return self.process_samples(samples)
 
-    def filter_samples(self, samples: list[Sample]) -> list[Sample]:
+    def process_samples(self, samples: list[Sample]) -> list[Sample]:
         kept = samples
         for data_filter in self.filters:
+            before = len(kept)
             kept = data_filter.select(kept)
+            logger.info(
+                f"[dataset] {self.dataset_config.name}: {type(data_filter).__name__} dropped {before - len(kept)}"
+            )
+        for transform in self.transforms:
+            kept, n = transform(kept)
+            logger.info(f"[dataset] {self.dataset_config.name}: {type(transform).__name__} reported {n}")
         logger.info(
             f"[dataset] {self.dataset_config.name}: kept {len(kept)}/{len(samples)} samples "
-            f"after {len(self.filters)} filter(s)"
+            f"after {len(self.filters)} filter(s) and {len(self.transforms)} transform(s)"
         )
         return kept
 

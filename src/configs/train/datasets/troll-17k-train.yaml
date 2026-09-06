@@ -4,3 +4,12 @@ defaults:
 
 name: troll-17k-train
 
+filters:
+  - _target_: src.data.filters.PromptLengthFilter
+    max_length: 1024
+  - _target_: src.data.filters.EnglishFilter
+  - _target_: src.data.filters.FigureFilter
+
+transforms:
+  - _target_: src.data.transforms.Dedupe
+  - _target_: src.data.transforms.FixEscapedLatex

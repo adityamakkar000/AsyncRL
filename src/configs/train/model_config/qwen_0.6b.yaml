@@ -10,5 +10,5 @@ model_args:
   head_dim: 128
   rope_base: 1000000
   activation_dtype: "bfloat16"
-  tie_weights: false
+  tie_weights: true
 hf_model_name: "Qwen/Qwen3-0.6B"

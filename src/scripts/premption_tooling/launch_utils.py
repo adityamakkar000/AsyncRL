@@ -94,7 +94,7 @@ def make_combos(RUN: Cross | Zip | Vals) -> list[dict[str, Any]]:
 def make_name(combo: dict[str, Any], EXPERIMENT_PREFIX: str) -> str:
     parts = [EXPERIMENT_PREFIX]
     for path, val in combo.items():
-        short = path.split(".")[-1][:10]
+        short = path.replace("/", ".").split(".")[-1][:10]
         parts.append(f"{short}{val:g}" if isinstance(val, float) else f"{short}{val}")
     return "_".join(parts)
 

@@ -8,5 +8,7 @@ filters:
   - _target_: src.data.filters.PromptLengthFilter
     max_length: 1024
   - _target_: src.data.filters.EnglishFilter
-  - _target_: src.data.filters.RandomSampleFilter
+
+transforms:
+  - _target_: src.data.transforms.RandomSample
     n: 1000

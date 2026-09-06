@@ -1,5 +1,4 @@
 import abc
-import random
 import re
 
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
@@ -8,6 +7,7 @@ from .config import Sample
 from .utils import apply_chat_template
 
 CHINESE_CHARACTERS = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
+FIGURE_WORDS = re.compile(r"figure|diagram|shown below", re.IGNORECASE)
 
 
 class Filter(abc.ABC):
@@ -51,15 +51,6 @@ class EnglishFilter(Filter):
         return not any(CHINESE_CHARACTERS.search(field) for field in fields if field)
 
 
-class RandomSampleFilter(Filter):
-    def __init__(self, n: int, seed: int = 0):
-        self.n = n
-        self.seed = seed
-
+class FigureFilter(Filter):
     def __call__(self, sample: Sample) -> bool:
-        return True
-
-    def select(self, samples: list[Sample]) -> list[Sample]:
-        if len(samples) <= self.n:
-            return samples
-        return random.Random(self.seed).sample(samples, self.n)
+        return not FIGURE_WORDS.search(sample.prompt)

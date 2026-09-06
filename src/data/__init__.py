@@ -1,8 +1,9 @@
 from .config import DatasetConfig, InferenceRollout, RLBatch, Sample
 from .dataloader import DataLoader
-from .filters import EnglishFilter, Filter, PromptLengthFilter, RandomSampleFilter, SolutionLengthFilter
+from .filters import EnglishFilter, FigureFilter, Filter, PromptLengthFilter, SolutionLengthFilter
 from .math_utils import grade_answer_verl
 from .register import GLOBAL_DICT
+from .transforms import Dedupe, FixEscapedLatex, RandomSample, Transform
 from .utils import (
     apply_chat_template,
     decode_tokens,
@@ -18,15 +19,19 @@ __all__ = [
     "GLOBAL_DICT",
     "DataLoader",
     "DatasetConfig",
+    "Dedupe",
     "EnglishFilter",
+    "FigureFilter",
     "Filter",
+    "FixEscapedLatex",
     "InferenceRollout",
     "MathVerifier",
     "PromptLengthFilter",
     "RLBatch",
-    "RandomSampleFilter",
+    "RandomSample",
     "Sample",
     "SolutionLengthFilter",
+    "Transform",
     "Verifier",
     "apply_chat_template",
     "decode_tokens",
