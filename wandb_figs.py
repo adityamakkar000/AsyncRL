@@ -3,7 +3,6 @@
 # ///
 import argparse
 import os
-import re
 from pathlib import Path
 
 import matplotlib
@@ -11,6 +10,18 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import wandb
+
+TRAIN_FIGURES = {
+    "mean_reward": "train/mean_reward",
+    "is_ratio": "train/is_ratio",
+    "seq_len": "train/mean_length",
+    "weight_sync_time": "train/weight_sync_time",
+    "total_step_time": "train/step_time",
+    "rollout_wait_time": "train/rollout_queue_wait_time",
+    "tps": "inference/worker_0/decode_tps",
+}
+EVAL_DATASETS = ["aime_2025", "aime_2026", "amc_25", "math_500"]
+EVAL_METRICS = {"avg_at_8": "avg@8", "pass_at_32": "pass@k=32"}
 
 WANDB_COLORS = [
     "#5387DD",
@@ -39,18 +50,6 @@ plt.rcParams.update(
     }
 )
 
-FIGURES = {
-    "mean_reward": ["train/mean_reward"],
-    "avg_at_8": ["eval/{ds}/avg@8"],
-    "pass_at_32": ["eval/{ds}/pass@k=32"],
-    "is_ratio": ["train/is_ratio"],
-    "seq_len": ["train/mean_length", "train/median_length"],
-    "weight_sync_time": ["train/weight_sync_time"],
-    "total_step_time": ["train/step_time"],
-    "rollout_wait_time": ["train/rollout_queue_wait_time"],
-    "tps": ["inference/worker_0/decode_tps"],
-}
-
 
 def load_env(path=".env"):
     if not os.path.exists(path):
@@ -77,73 +76,77 @@ def find_run(api, entity, project, name):
     return runs[0]
 
 
-def expand_keys(patterns, available):
-    keys = []
-    for p in patterns:
-        if "{ds}" in p:
-            rx = re.compile("^" + re.escape(p).replace(re.escape("{ds}"), "([^/]+)") + "$")
-            keys += sorted(k for k in available if rx.match(k))
-        elif p in available:
-            keys.append(p)
-    return keys
+def fetch(run, key):
+    if key not in run.summary.keys():
+        return None
+    df = run.history(keys=[key], samples=100000, pandas=True)
+    if key not in df.columns:
+        return None
+    return df[["_step", key]].dropna().sort_values("_step")
 
 
-def plot(df, keys, title, out, window):
-    fig, ax = plt.subplots(figsize=(9, 5), facecolor="white")
+def plot(series, key, title, out, window):
+    fig, ax = plt.subplots(figsize=(10, 5.5), facecolor="white")
     ax.set_facecolor("white")
-    for i, k in enumerate(keys):
+    for i, (label, df) in enumerate(series):
         c = WANDB_COLORS[i % len(WANDB_COLORS)]
-        sub = df[["_step", k]].dropna().sort_values("_step")
-        if sub.empty:
-            continue
-        x, y = sub["_step"].to_numpy(), sub[k].to_numpy()
-        if len(sub) >= 2 * window:
-            ax.plot(x, y, color=c, lw=1, alpha=0.2)
-            ax.plot(x, sub[k].rolling(window, min_periods=1).mean().to_numpy(), color=c, lw=1.6, label=k)
+        x, y = df["_step"].to_numpy(), df[key]
+        if len(df) >= 2 * window:
+            ax.plot(x, y.to_numpy(), color=c, lw=1, alpha=0.2)
+            ax.plot(x, y.rolling(window, min_periods=1).mean().to_numpy(), color=c, lw=1.6, label=label)
         else:
-            ax.plot(x, y, color=c, lw=1.6, marker="o", ms=4, label=k)
-    ax.set_title(title, loc="center", fontsize=12, fontweight="semibold", color=TEXT, pad=12)
+            ax.plot(x, y.to_numpy(), color=c, lw=1.6, marker="o", ms=4, label=label)
+    ax.set_title(title, fontsize=12, fontweight="semibold", color=TEXT, pad=12)
     ax.set_xlabel("Step", fontsize=9)
     for side in ("top", "right", "left"):
         ax.spines[side].set_visible(False)
-    ax.grid(axis="y", color=GRID, lw=0.8)
-    ax.grid(axis="x", color=GRID, lw=0.8)
+    ax.grid(color=GRID, lw=0.8)
     ax.set_axisbelow(True)
     ax.tick_params(length=0, labelsize=9)
     ax.margins(x=0.01)
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=min(len(keys), 4), frameon=False, fontsize=9)
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.12),
+        ncol=1 if len(series) > 3 else len(series),
+        frameon=False,
+        fontsize=9,
+    )
     fig.tight_layout()
-    fig.savefig(out, dpi=180, facecolor="white")
+    fig.savefig(out, dpi=180, facecolor="white", bbox_inches="tight")
     plt.close(fig)
+
+
+def make(runs, key, title, out, window):
+    series = [(r.name, df) for r in runs if (df := fetch(r, key)) is not None and not df.empty]
+    if not series:
+        print(f"skip {title}: no data")
+        return
+    plot(series, key, title, out, window)
+    print(f"wrote {out}")
 
 
 def main():
     load_env()
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
-    ap.add_argument("run")
+    ap.add_argument("runs", nargs="+")
     ap.add_argument("--entity", default=os.environ.get("WANDB_ENTITY"))
-    ap.add_argument("--out", default=str(Path.home() / "Desktop"))
+    ap.add_argument("--out", default=str(Path.home() / "Desktop" / "results"))
     ap.add_argument("--smooth", type=int, default=25)
     args = ap.parse_args()
 
     api = wandb.Api()
-    run = find_run(api, args.entity, args.project, args.run)
-    print(f"run {run.name} ({run.id}) state={run.state}")
+    runs = [find_run(api, args.entity, args.project, n) for n in args.runs]
+    for r in runs:
+        print(f"run {r.name} ({r.id}) state={r.state}")
 
-    available = set(run.summary.keys())
-    out_dir = Path(args.out) / run.name
+    out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    for name, pats in FIGURES.items():
-        keys = expand_keys(pats, available)
-        if not keys:
-            print(f"skip {name}: no matching keys")
-            continue
-        df = run.history(keys=keys, samples=100000, pandas=True)
-        keys = [k for k in keys if k in df.columns]
-        path = out_dir / f"{name}.png"
-        plot(df, keys, name, path, args.smooth)
-        print(f"wrote {path}")
+    for name, key in TRAIN_FIGURES.items():
+        make(runs, key, name, out_dir / f"{name}.png", args.smooth)
+    for ds in EVAL_DATASETS:
+        for mname, metric in EVAL_METRICS.items():
+            make(runs, f"eval/{ds}/{metric}", f"{ds} {metric}", out_dir / f"{ds}_{mname}.png", args.smooth)
 
 
 if __name__ == "__main__":

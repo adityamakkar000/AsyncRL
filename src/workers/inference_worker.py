@@ -583,10 +583,8 @@ class AsyncInferenceWorker(Worker):
         )
         self.sharding = jax.NamedSharding(self.mesh, P())
 
-        self.params = jax.device_put(dummy_params, self.sharding)
-
         self.worker_rank = stax.get_rank() - self.async_options.train_workers
-        self.async_state = AsyncState(MRUparams=self.params)
+        self.async_state = AsyncState(MRUparams=jax.device_put(dummy_params, self.sharding))
         self.transfer_server = RDMATransferServer(train_workers=self.async_options.train_workers)
         self.monitor_thread = threading.Thread(
             target=self.monitor_weight_sync, args=(self.async_state, self.async_options), daemon=True
@@ -636,10 +634,11 @@ class AsyncInferenceWorker(Worker):
                 )
                 if async_state.n_workers_ready < self.n_replicas:
                     logger.warning(f"Got {async_state.n_workers_ready} signals, expected {self.n_replicas}")
-            new_params = self.transfer_server.transfer(async_state.MRUparams)
 
+            shapes = jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype), async_state.MRUparams)
             with async_state.read_write_lock:
-                async_state.MRUparams = new_params
+                jax.tree.map(lambda x: x.delete(), async_state.MRUparams)
+                async_state.MRUparams = self.transfer_server.transfer(shapes)
                 async_state.weight_iteration += 1
 
             async_state.weight_sync_event.clear()
