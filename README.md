@@ -1,4 +1,4 @@
-# annealedRL
+# asyncRL
 
 ## Setup
 
