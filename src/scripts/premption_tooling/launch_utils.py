@@ -85,6 +85,7 @@ class LAUNCH_JOB:
     RUNTIME: Runtime
     RETRIES: int = 3
     DEBUG: bool = False
+    NODE_ID: str | None = None
 
 
 def make_combos(RUN: Cross | Zip | Vals) -> list[dict[str, Any]]:
@@ -110,7 +111,9 @@ def run_tpu_jobs(
     RUNTIME: Runtime,
     RETRIES: int,
     debug: bool = False,
+    node_id: str | None = None,
 ):
+    assert node_id is None or len(combos) == 1, "NODE_ID can only be used with a single run"
     # this get's current project assuming you used launch.py from the project root
     copy_dir = os.getcwd()
     user = getpass.getuser()
@@ -121,7 +124,7 @@ def run_tpu_jobs(
 
     for combo in combos:
         name = make_name(combo, EXPERIMENT_PREFIX)
-        node_id = f"{name}_{random.randint(0, 1000000)}"
+        node_id = node_id or f"{name}_{random.randint(0, 1000000)}"
 
         overrides = {**FIXED_OVERRIDES, **combo}
         inner_parts = [
@@ -176,4 +179,5 @@ def launch(job: LAUNCH_JOB) -> None:
         job.RUNTIME,
         job.RETRIES,
         debug=job.DEBUG,
+        node_id=job.NODE_ID,
     )
