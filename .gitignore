@@ -29,4 +29,5 @@ wandb/
 src/data/README.md
 **/hf_params/*
 profile/*
+profiles/
 experiments/*
