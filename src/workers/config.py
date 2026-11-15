@@ -44,47 +44,56 @@ class InferenceState:
     out_logprobs: Array
     prompt_id: Array
 
-    def sub(self, new_batch: "InferenceState", index: Array | int) -> "InferenceState":
-        return self.replace(  # type: ignore
-            next_token=self.next_token.at[index].set(new_batch.next_token),
-            kv_cache=[
-                KVCache(
-                    k=self.kv_cache[i].k.at[index].set(new_batch.kv_cache[i].k),
-                    v=self.kv_cache[i].v.at[index].set(new_batch.kv_cache[i].v),
-                    length=self.kv_cache[i].length.at[index].set(new_batch.kv_cache[i].length),
-                )
-                for i in range(len(self.kv_cache))
-            ],
+    def slice(self, index: Array | int) -> "InferenceState":
+        def slice_arg(arr: Array):
+            return jax.lax.dynamic_slice_in_dim(arr, start_index=index, slice_size=1, axis=0)
+
+        return InferenceState(
+            next_token=slice_arg(self.next_token),
+            kv_cache=[jax.tree.map(slice_arg, kv) for kv in self.kv_cache],
             key=self.key,
-            seq_lens=self.seq_lens.at[index].set(new_batch.seq_lens),
-            stop_mask=self.stop_mask.at[index].set(new_batch.stop_mask),
-            end_of_think=self.end_of_think.at[index].set(new_batch.end_of_think),
-            out_tokens=self.out_tokens.at[index].set(new_batch.out_tokens),
-            out_logprobs=self.out_logprobs.at[index].set(new_batch.out_logprobs),
-            prompt_id=self.prompt_id.at[index].set(new_batch.prompt_id),
+            seq_lens=slice_arg(self.seq_lens),
+            stop_mask=slice_arg(self.stop_mask),
+            end_of_think=slice_arg(self.end_of_think),
+            out_tokens=slice_arg(self.out_tokens),
+            out_logprobs=slice_arg(self.out_logprobs),
+            prompt_id=slice_arg(self.prompt_id),
         )
 
-    def roll(self, index: Array) -> "InferenceState":
-        """
-        Roll a single-row state so its content starts at column 0.
-        Args:
-            index (Array): The cache length the row should have after rolling.
-        Returns:
-            InferenceState: The rolled state.
-        """
+    def sub(self, batch: "InferenceState", replace_index: Array | int) -> "InferenceState":
+        new_batch = batch.slice(replace_index)
+        index = jnp.argmax(self.stop_mask[:, 0])
 
-        diff = jnp.reshape(index - self.kv_cache[0].length, ())
-        return self.replace(  # type: ignore
-            out_tokens=jnp.roll(self.out_tokens, diff, axis=1),
-            out_logprobs=jnp.roll(self.out_logprobs, diff, axis=1),
-            kv_cache=[
-                KVCache(
-                    k=jnp.roll(kv.k, diff, axis=1),
-                    v=jnp.roll(kv.v, diff, axis=1),
-                    length=jnp.reshape(index, (1,)),
-                )
-                for kv in self.kv_cache
-            ],
+        def replace(arr: Array, new_arr: Array) -> Array:
+            start_index = (index,) + (0,) * (arr.ndim - 1)
+            return jax.lax.dynamic_update_slice(arr, new_arr.astype(arr.dtype), start_index)
+
+        return InferenceState(
+            next_token=replace(self.next_token, new_batch.next_token),
+            kv_cache=[jax.tree.map(replace, kv, new_kv) for kv, new_kv in zip(self.kv_cache, new_batch.kv_cache)],
+            key=self.key,
+            seq_lens=replace(self.seq_lens, new_batch.seq_lens),
+            stop_mask=replace(self.stop_mask, new_batch.stop_mask),
+            end_of_think=replace(self.end_of_think, new_batch.end_of_think),
+            out_tokens=replace(self.out_tokens, new_batch.out_tokens),
+            out_logprobs=replace(self.out_logprobs, new_batch.out_logprobs),
+            prompt_id=replace(self.prompt_id, new_batch.prompt_id),
+        )
+
+    @classmethod
+    def get_default(
+        cls, batch_size: int, seq_len: int, key: Array, kv_cache: list[KVCache], sharding: jax.NamedSharding
+    ) -> "InferenceState":
+        return cls(
+            next_token=jnp.zeros((batch_size, 1), dtype=jnp.int32, out_sharding=sharding),
+            kv_cache=kv_cache,
+            key=key,
+            seq_lens=jnp.zeros((batch_size,), dtype=jnp.int32, out_sharding=sharding),
+            stop_mask=jnp.ones((batch_size, 1), dtype=jnp.bool, out_sharding=sharding),
+            end_of_think=jnp.zeros((batch_size, 1), dtype=jnp.bool, out_sharding=sharding),
+            out_tokens=jnp.zeros((batch_size, seq_len), dtype=jnp.int32, out_sharding=sharding),
+            out_logprobs=jnp.zeros((batch_size, seq_len), dtype=jnp.float32, out_sharding=sharding),
+            prompt_id=jnp.zeros((batch_size, 1), dtype=jnp.int32, out_sharding=sharding),
         )
 
 

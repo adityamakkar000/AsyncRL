@@ -26,9 +26,8 @@ class vLLMEngine:
         self.rejection_semaphore = asyncio.Semaphore(max_workers)
 
     def check_config(self):
-        if isinstance(self.config.max_batched_tokens, str):
-            if self.config.max_batched_tokens != "auto":
-                raise ValueError("If max_batched_tokens is a string, it must be 'auto'.")
+        if isinstance(self.config.max_batched_tokens, str) and self.config.max_batched_tokens != "auto":
+            raise ValueError("If max_batched_tokens is a string, it must be 'auto'.")
 
     def launch_vllm(self, model_path: str):
         """Launch the vLLM server with the specified model path. The model path should be a local path when used with evals and model name when used with Rejection Sampling."""

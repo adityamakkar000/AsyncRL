@@ -64,7 +64,7 @@ class Model(HFModelBase):
         if length > self.sequence_len:
             raise ValueError(f"Requested KV cache length {length} exceeds maximum of {self.sequence_len + 1024}")
 
-        n_layers, *kv_shape = self.model.kv_shape
+        n_layers, n_kv_heads, head_dim = self.model.kv_shape
 
         @jax.jit
         def _init():
@@ -72,8 +72,9 @@ class Model(HFModelBase):
                 return jnp.zeros(
                     (
                         batch_size,
+                        n_kv_heads,
                         length,
-                        *kv_shape,
+                        head_dim,
                     ),
                     dtype=convert_dtype(dtype),
                     out_sharding=out_sharding,

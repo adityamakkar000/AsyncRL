@@ -30,7 +30,7 @@ from src.model import Model
 from .config import AsyncOptions, TrainerConfig
 from .constants import EVAL_TIMEOUT, TIMEOUT
 from .rdma_transfer import RDMATransferServer
-from .utils import Key, reduce_inference_metric, setup, write_to_gcs
+from .utils import PER_WORKER_SUMS, Key, memory_metrics, reduce_inference_metric, setup, write_to_gcs
 from .worker import Worker
 
 load_dotenv()
@@ -520,7 +520,7 @@ class AsyncTrainerWorker(Worker):
 
         for worker_id, records in by_worker.items():
             for k in {k for r in records for k in r} - {"worker_id"}:
-                mean = fmean([r[k] for r in records if k in r])
+                mean = (sum if k in PER_WORKER_SUMS else fmean)([r[k] for r in records if k in r])
                 metrics[f"inference/worker_{worker_id}/{k}"] = mean
                 per_key[k].append(mean)
 
@@ -606,10 +606,8 @@ class AsyncTrainerWorker(Worker):
                 )
                 weight_sync_time = self.train_sync_weights()
 
-            min_mem, max_mem = stax.get_memory()
             other_metrics = {
-                "devices/memory_min": min_mem,
-                "devices/memory_max": max_mem,
+                **{f"devices/{k}": v for k, v in memory_metrics(jax.local_devices()).items()},
                 "train/lr": self.opt_state[1].hyperparams["learning_rate"],
                 "train/weight_sync_time": weight_sync_time["train/weight_sync_time"],
                 "train/step_time": t.data["time"],

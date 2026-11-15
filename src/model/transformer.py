@@ -5,7 +5,6 @@ from jaxtyping import Array
 
 from .config import BaseModel, KVCache
 from .layers import RematBlock, RMSNorm, RopeCorrection, gather_rope, no_correction, rope_tables
-from .utils import dynamic_slice_rows, make_prompt_mask
 
 
 class Transformer(BaseModel):
@@ -33,6 +32,7 @@ class Transformer(BaseModel):
         apply_lm_head: bool = True,
     ) -> tuple[Array, list[KVCache]]:
         B, T = x.shape
+
         embed_layer = nn.Embed(
             num_embeddings=self.vocab_size,
             features=self.model_dim,
@@ -42,14 +42,17 @@ class Transformer(BaseModel):
         x = embed_layer(x)
 
         t_start = kv_cache[0].length if kv_cache else jnp.zeros((B,), dtype=jnp.int32)
-        attention_len = kv_cache[0].k.shape[1] if kv_cache else T
 
-        prompt_mask = make_prompt_mask(attention_len, cache_len=t_start + T, seq_lens=sequence_lens)
-        masks = (dynamic_slice_rows(prompt_mask, t_start, T), prompt_mask)  # [q_mask, kv_mask]
-        index_map = jnp.maximum(jnp.arange(T)[None, :] - T + sequence_lens[:, None], 0)
+        pos = jnp.arange(T)[None, :]
+        shifted_pos = pos + t_start[:, None]
+        q_segment_ids = shifted_pos < sequence_lens[:, None]
+        kv_segment_ids = pos < sequence_lens[:, None]
+        masks = (q_segment_ids, kv_segment_ids)
 
-        sin_table, cos_table = rope_tables(self.sequence_len, self.head_dim, self.rope_base, self.rope_correction)
-        rope_matrix = gather_rope(sin_table, cos_table, index_map)
+        sin_table, cos_table = rope_tables(
+            self.sequence_len, self.head_dim, self.rope_base, self.rope_correction, dtype=self.activation_dtype
+        )
+        rope_matrix = gather_rope(sin_table, cos_table, shifted_pos)
 
         out_cache: list[KVCache] = []
         for i in range(self.n_layers):
@@ -63,7 +66,7 @@ class Transformer(BaseModel):
                 qk_norm=self.qk_norm,
                 rms_eps=self.rms_eps,
                 name=f"Block_{i}",
-            )(x, masks, rope_matrix, kv_cache[i] if kv_cache else None)
+            )(x, sequence_lens, masks, rope_matrix, kv_cache[i] if kv_cache else None)
             out_cache.append(out_layer_cache)
 
         x = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)

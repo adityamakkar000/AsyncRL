@@ -23,7 +23,22 @@ INFERENCE_REDUCTIONS: dict[str, Callable[[list[float]], float]] = {
     "decode_steps": sum,
     "decode_steps_subbed": sum,
     "ready_rollouts": sum,
+    "memory_in_use_gb": max,
+    "memory_peak_gb": max,
+    "memory_limit_gb": max,
 }
+
+
+PER_WORKER_SUMS = {"ready_rollouts", "decode_steps", "decode_steps_subbed"}
+
+
+def memory_metrics(devices) -> dict[str, float]:
+    stats = [d.memory_stats() or {} for d in devices]
+    return {
+        "memory_in_use_gb": max(s.get("bytes_in_use", 0) for s in stats) / 2**30,
+        "memory_peak_gb": max(s.get("peak_bytes_in_use", 0) for s in stats) / 2**30,
+        "memory_limit_gb": max(s.get("bytes_limit", 0) for s in stats) / 2**30,
+    }
 
 
 def reduce_inference_metric(name: str, values: list[float]) -> float:

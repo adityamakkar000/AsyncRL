@@ -177,7 +177,7 @@ class DataLoader:
                     [
                         np.pad(
                             np.array(field),
-                            (self.max_seq_length - field.shape[0], 0),
+                            (0, self.max_seq_length - field.shape[0]),
                             mode="constant",
                             constant_values=constant_val,
                         )

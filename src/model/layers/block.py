@@ -22,6 +22,7 @@ class Block(nn.Module):
     def __call__(
         self,
         x: Array,
+        seq_lens: Array,
         masks: tuple[Array, Array],
         rope_matrix: tuple[Array, Array],
         layer_cache: KVCache | None = None,
@@ -35,7 +36,7 @@ class Block(nn.Module):
             activation_dtype=self.activation_dtype,
             qk_norm=self.qk_norm,
             rms_eps=self.rms_eps,
-        )(h, masks, rope_matrix, layer_cache)
+        )(h, seq_lens, masks, rope_matrix, layer_cache)
         x = x + h
 
         h = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)

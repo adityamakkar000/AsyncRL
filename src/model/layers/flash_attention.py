@@ -29,9 +29,12 @@ from jax import lax
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 
+from src.model import KVCache
+
 DEFAULT_MASK_VALUE = -0.7 * float(jnp.finfo(jnp.dtype("float32")).max)
 NUM_LANES = 128
 NUM_SUBLANES = 8
+VMEM_LIMIT_BYTES = 64 * 1024 * 1024
 
 
 class SegmentIds(NamedTuple):
@@ -103,21 +106,28 @@ class BlockSizes:
 
     @classmethod
     def get_default(cls, batch_size, num_heads, q_seq_len, kv_len, d_model):
-        # TODO(apaszke,sharadmv): Select better parameters based on a heuristic.
-        del batch_size, num_heads, q_seq_len, kv_len, d_model  # Unused.
+        del num_heads, d_model
+        q_fit = functools.partial(fit_block, dim=q_seq_len)
+        k_fit = functools.partial(fit_block, dim=kv_len)
         return BlockSizes(
-            block_q=128,
-            block_k_major=128,
+            block_q=q_fit(1024),
+            block_k_major=k_fit(1024),
             block_k=128,
-            block_b=1,
-            block_q_major_dkv=128,
-            block_k_major_dkv=128,
+            block_b=min(2, batch_size),
+            block_q_major_dkv=q_fit(2048),
+            block_k_major_dkv=k_fit(2048),
             block_k_dkv=128,
             block_q_dkv=128,
-            block_k_major_dq=128,
+            block_k_major_dq=k_fit(1024),
             block_k_dq=128,
-            block_q_dq=128,
+            block_q_dq=q_fit(2048),
         )
+
+
+def fit_block(block: int, dim: int) -> int:
+    while block > NUM_LANES and (block > dim or dim % block != 0):
+        block //= 2
+    return block
 
 
 @functools.partial(
@@ -691,6 +701,7 @@ def _gqa_flash_attention_impl(
         out_shape=out_shape,
         debug=debug,
         compiler_params=pltpu.CompilerParams(
+            vmem_limit_bytes=VMEM_LIMIT_BYTES,
             dimension_semantics=(
                 "parallel",
                 "parallel",
@@ -1019,6 +1030,7 @@ def _gqa_flash_attention_bwd_dkv(
             out_shape=out_shapes,
             debug=debug,
             compiler_params=pltpu.CompilerParams(
+                vmem_limit_bytes=VMEM_LIMIT_BYTES,
                 dimension_semantics=(
                     "parallel",
                     "parallel",
@@ -1321,6 +1333,7 @@ def _gqa_flash_attention_bwd_dq(
             out_shape=out_shapes,
             debug=debug,
             compiler_params=pltpu.CompilerParams(
+                vmem_limit_bytes=VMEM_LIMIT_BYTES,
                 dimension_semantics=(
                     "parallel",
                     "parallel",
@@ -1408,6 +1421,277 @@ def gqa_reference(
         save_residuals=False,
     )
 
+
+def check_div(n: int, bs: int):
+    if n % bs != 0:
+        raise ValueError(f"size of {n} could not be divided by {bs}")
+
+def ragged_decode_kernel(
+    # prefetch refs
+    kv_lengths: jax.ArrayRef,  #[b,]
+    # input ref
+    q_ref: jax.ArrayRef,
+    k_ref: jax.ArrayRef,
+    v_ref: jax.ArrayRef,
+    k_cache_ref: jax.ArrayRef,
+    v_cache_ref: jax.ArrayRef,
+    # output ref
+    o_ref: jax.ArrayRef,
+    k_cache_hbm: jax.ArrayRef,
+    v_cache_hbm: jax.ArrayRef,
+    # scratch memory
+    o_scratch_ref: jax.ArrayRef,
+    running_sum_scratch_ref: jax.ArrayRef,
+    max_logit_scratch_ref: jax.ArrayRef,
+    k_chunk_ref: jax.ArrayRef,
+    v_chunk_ref: jax.ArrayRef,
+    sems: jax.ArrayRef,  # DMA sems [read/write, k/v, block_b]
+    # params,
+    kv_seq_len: int,
+    block_b: int,
+    block_kv: int,
+    align: int,
+):
+
+    # q_ref [block_b_size, kv_heads, grousp, head_dim]
+    # k_ref [block_b_size, kv_heads, head_dim]
+    # v_ref [block_b_size, kv_heads, head_dim]
+    # k_cache_ref [block_b_size, kv_heads, kv_seq_len, head_dim]
+    # v_cache_ref [block_b_size, kv_heads, kv_seq_len, head_dim]
+
+    min_val = jnp.finfo(q_ref.dtype).min
+    b, i = pl.program_id(0), pl.program_id(1)
+
+    seq_start = i * block_kv
+    pos = seq_start + jax.lax.broadcasted_iota(jnp.int32, (1, 1, block_kv), 2)
+    max_blocks = (kv_seq_len // block_kv - 1)
+    is_last_block = (i == max_blocks)
+
+
+    def create_kv_read_write_dmas(batch_idx, kv_len): 
+        
+        global_batch_idx = b * block_b + batch_idx
+        start = pl.multiple_of((kv_len // align) * align, align)
+
+        for scratch_chunk_ref, hbm_ref, sem_read, sem_write in (
+            (k_chunk_ref, k_cache_hbm, sems.at[0, 0, batch_idx], sems.at[1, 0, batch_idx]),
+            (v_chunk_ref, v_cache_hbm, sems.at[0, 1, batch_idx], sems.at[1, 1, batch_idx]),
+        ):
+
+            vmem_chunk = scratch_chunk_ref.at[batch_idx] # [kv_heads, block_kv, d]
+            hbm_chunk = hbm_ref.at[global_batch_idx, :, pl.ds(start, align), :]
+
+            read_dma = pltpu.make_async_copy(
+                hbm_chunk, 
+                vmem_chunk, 
+                sem_read
+            )
+            write_dma = pltpu.make_async_copy(
+                vmem_chunk, 
+                hbm_chunk,
+                sem_write
+            )
+
+            yield read_dma, write_dma
+
+    @pl.when(i == 0)
+    def _():
+        
+        q = q_ref[...].astype(jnp.float32)
+        k = k_ref[...].astype(jnp.float32)
+        v = v_ref[...]
+
+        scores = jnp.sum(q * k[:, :, None, :], axis=-1)
+        max_logit_scratch_ref[...] = jnp.broadcast_to(scores[..., None], max_logit_scratch_ref.shape) # (b, h, 1)
+        running_sum_scratch_ref[...] = jnp.ones_like(running_sum_scratch_ref) # one since jnp.exp(scores - max_logit) = 1 so sum is 1
+        o_scratch_ref[...] = jnp.broadcast_to(v[..., None, :], o_scratch_ref.shape).astype(o_scratch_ref.dtype)
+
+    def loop_fn(idx, _):
+
+
+        batch_idx = b * block_b + idx
+        kv_len =  kv_lengths[batch_idx]
+        should_compute =  seq_start <  kv_len
+
+        dmas = list(create_kv_read_write_dmas(idx, kv_len))
+
+        @pl.when(i == 0)
+        def _():
+
+            for read_dma, _write_dma in dmas:
+                read_dma.start()
+
+        @pl.when(i == max_blocks // 2)
+        def _():
+
+            start_idx = kv_len // align * align
+            row = jax.lax.broadcasted_iota(jnp.int32, k_chunk_ref.shape[1:], dimension=1) == (kv_len - start_idx)
+
+            for (read_dma, write_dma), (new_ref, scratch_chunk_ref)  in zip(
+                dmas, 
+                (
+                    (k_ref, k_chunk_ref),
+                    (v_ref, v_chunk_ref),
+                )
+            ):
+                read_dma.wait() 
+
+                # TODO: quantize here if needed 
+                chunk = scratch_chunk_ref.at[idx]
+                new = new_ref[idx][:, None, :].astype(chunk.dtype) # [kv_heads, 1, d]
+                chunk[...] = jnp.where(row, new, chunk[...])
+
+                write_dma.start()
+
+        @pl.when(should_compute)
+        def _():
+
+            q = q_ref[idx]  # [kv_heads, groups, head_dim]
+            k = k_cache_ref[idx].astype(q.dtype)  # [heads, block_kv_size, head_dim]
+            v = v_cache_ref[idx].astype(q.dtype)  # [heads, block_kv_size, head_dim]
+
+            scores = jnp.einsum(
+                "hgd,htd->hgt", q, k, preferred_element_type=jnp.float32
+            )  # [kv_heads, heads, block_kv_size]
+
+            scores = jnp.where(
+                pos < kv_len, scores, min_val
+            )
+
+            prev_max_scores = max_logit_scratch_ref[idx][..., :1] # [heads, groups, 1]
+            max_scores = jnp.maximum(jnp.max(scores, axis=-1, keepdims=True), prev_max_scores)  # [heads, group, 1]
+
+            adjustment_factor = jnp.exp(prev_max_scores - max_scores)
+            shifted_scores = jnp.exp(scores - max_scores)
+
+            running_sum_scratch_ref[idx] = adjustment_factor * running_sum_scratch_ref[idx] + jnp.sum(
+                shifted_scores, axis=-1, keepdims=True
+            )
+            o_scratch_ref[idx] = adjustment_factor * o_scratch_ref[idx] + jnp.einsum(
+                "hgt,htd->hgd", shifted_scores.astype(v.dtype), v, preferred_element_type=jnp.float32
+            )
+
+            max_logit_scratch_ref[idx] = jnp.broadcast_to(max_scores, max_logit_scratch_ref.shape[1:])
+
+        @pl.when(is_last_block)
+        def _():
+
+            for _read_dma, write_dma in dmas:
+                write_dma.wait()
+
+
+    # loop over every batch to only compute tiles that matter
+    jax.lax.fori_loop(0, block_b, loop_fn, init_val=None)
+
+    @pl.when(is_last_block)
+    def _():
+        running_sum = running_sum_scratch_ref[..., :1]
+        out = jnp.where(running_sum == 0, 0.0, o_scratch_ref[...] / running_sum)
+        o_ref[...] = out.astype(o_ref.dtype)
+
+
+@functools.partial(jax.jit, static_argnames=["block_kv", "block_b"], donate_argnums=(3,))
+def _decode_ragged_attention(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    kv_cache: KVCache,
+    sm_scale: float,
+    block_kv: int = 1024,
+    block_b: int = 1,
+):
+
+    b, h, _, d = q.shape
+    b, h_kv, _, d = k.shape
+
+    kv_seq_len = kv_cache.max_len
+
+    check_div(kv_seq_len, block_kv)
+    check_div(b, block_b)
+    check_div(d, NUM_LANES)
+
+    kv_lengths = kv_cache.length.astype(jnp.int32)
+
+    q = rearrange(q * sm_scale, "b (h g) 1 d -> b h g d", h=h_kv)
+    k = k[..., 0, :] # (b, h, d)
+    v = v[..., 0, :] # (b, h, d)
+    align = 8 * (4 // jnp.dtype(kv_cache.k.dtype).itemsize)
+
+    assert block_kv % align == 0, "kv block size should be align tile size"
+
+    def kv_block(b, i, kv_lengths):
+        last_end = kv_lengths[b * block_b]
+        for j in range(1, block_b):
+            last_end = jnp.maximum(last_end, kv_lengths[b*block_b + j])
+        return jnp.minimum(i, last_end // block_kv)
+
+    grid_spec = pltpu.PrefetchScalarGridSpec(
+        num_scalar_prefetch=1,
+        grid=(b // block_b, kv_seq_len // block_kv),
+        in_specs=[
+            pl.BlockSpec((block_b, h_kv, h // h_kv, d), lambda b, i, *_: (b, 0, 0, 0)),  # q
+            pl.BlockSpec((block_b, h_kv, d), lambda b, i, *p: (b, 0, 0)),  # k
+            pl.BlockSpec((block_b, h_kv, d), lambda b, i, *p: (b, 0, 0)),  # v
+            pl.BlockSpec((block_b, h_kv, block_kv, d), lambda b, i, *p: (b, 0, kv_block(b, i, *p), 0)),
+            pl.BlockSpec((block_b, h_kv, block_kv, d), lambda b, i, *p: (b, 0, kv_block(b, i, *p), 0)),
+        ],
+        out_specs=[
+            pl.BlockSpec((block_b, h_kv, h // h_kv, d), lambda b, i, *_: (b, 0, 0, 0)),
+            pl.BlockSpec(memory_space=pl.MemorySpace.ANY),
+            pl.BlockSpec(memory_space=pl.MemorySpace.ANY)
+        ],
+        scratch_shapes=[
+            pltpu.VMEM((block_b, h_kv, h // h_kv, d), dtype=jnp.float32), # output accum
+            # for max and runnig sum use NUM_LANES since we have to have that as a min length
+            # but we will only use the 0th index
+            pltpu.VMEM((block_b, h_kv, h // h_kv, NUM_LANES), dtype=jnp.float32), # running sum
+            pltpu.VMEM((block_b, h_kv, h // h_kv, NUM_LANES), dtype=jnp.float32), # max logit
+            pltpu.VMEM((block_b, h_kv, align, d), dtype=kv_cache.k.dtype),
+            pltpu.VMEM((block_b, h_kv, align, d), dtype=kv_cache.v.dtype),
+            pltpu.SemaphoreType.DMA((2, 2, block_b)),
+        ],
+    )
+
+    attn_fn = functools.partial(
+        ragged_decode_kernel, kv_seq_len=kv_seq_len, block_b=block_b, block_kv=block_kv, align=align
+    )
+
+    out, k_cache, v_cache = pl.pallas_call(
+        attn_fn,
+        out_shape=[
+            jax.ShapeDtypeStruct(q.shape, q.dtype),
+            jax.ShapeDtypeStruct(kv_cache.k.shape, kv_cache.k.dtype),
+            jax.ShapeDtypeStruct(kv_cache.v.shape, kv_cache.v.dtype),
+        ],
+        grid_spec=grid_spec,
+        compiler_params=pltpu.CompilerParams(dimension_semantics=("parallel", "arbitrary")),
+        input_output_aliases={4: 1, 5: 2}
+    )(kv_lengths, q, k, v, kv_cache.k, kv_cache.v)
+
+    kv_cache = kv_cache.replace( # type: ignore
+        k=k_cache, 
+        v=v_cache, 
+        length=kv_cache.length + 1
+    )
+
+    out = rearrange(out, "b h g d -> b (h g) 1 d")
+
+    return out, kv_cache 
+
+
+def decode_ragged_attention(
+    q, # [b, hq, 1, d]
+    k, # [b, hkv, 1, d]
+    v, # [b, hkv, 1, d]
+    kv_cache: KVCache,
+    sm_scale=1.0,
+):
+    assert k.shape == v.shape, "kv shapes should match"
+    assert q.shape[1] % k.shape[1] == 0, "kv heads should divide heads"
+    assert q.shape[2] == 1, "should get 1 query for decode"
+
+    block_kv = fit_block(1024, kv_cache.max_len)
+    return _decode_ragged_attention(q, k, v, kv_cache, sm_scale, block_kv=block_kv)
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(5, 6, 7, 8))
 def _gqa_reference(

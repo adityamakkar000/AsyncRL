@@ -32,26 +32,6 @@ def convert_dtype(dtype_str: str) -> jnp.dtype:
             raise ValueError(f"Unsupported dtype string: {dtype_str}")
 
 
-def dynamic_slice_rows(x: Array, start: Array, size: int) -> Array:
-    rows = jnp.arange(x.shape[0])[:, None]
-    cols = start[:, None] + jnp.arange(size)[None, :]
-    return x[rows, cols]
-
-
-def dynamic_update_rows(x: Array, update: Array, start: Array) -> Array:
-    rows = jnp.arange(x.shape[0])[:, None]
-    cols = start[:, None] + jnp.arange(update.shape[1])[None, :]
-    return x.at[rows, cols].set(update)
-
-
-def make_prompt_mask(kv_len: int, cache_len: Array, seq_lens: Array) -> Array:
-    raw_length = jnp.arange(kv_len)[None, :]  # [1, max_seq]
-    cache_len = cache_len[:, None]  # [B, 1]
-    left_padding_mask = raw_length >= (cache_len - seq_lens[:, None])  # [B, max_seq]
-    valid_cache_mask = raw_length < cache_len
-    return left_padding_mask & valid_cache_mask  # [B, mask_seq]
-
-
 def download_hf_weights(name: str, path: str):
     snapshot_download(
         repo_id=name,
@@ -85,7 +65,7 @@ def get_torch_weights_to_jax(params: PyTree, name: str, hf_mapping) -> PyTree:
     files = list(glob.glob(path + "/*safetensors"))
     for file in files:
         with safe_open(file, framework="torch") as f:
-            for hf_param_key in f.keys():
+            for hf_param_key in f.keys():  # noqa: SIM118
                 torch_hf_params[hf_param_key] = f.get_tensor(hf_param_key)
                 jax_param_key = get_jax_key(hf_param_key, hf_mapping)
 

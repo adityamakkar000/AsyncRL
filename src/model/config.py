@@ -16,6 +16,10 @@ class KVCache:
     v: Array
     length: Array
 
+    @property
+    def max_len(self) -> int:
+        return self.k.shape[2]
+
 
 @dataclass
 class ModelConfig:

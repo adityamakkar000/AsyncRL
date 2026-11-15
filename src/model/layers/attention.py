@@ -7,8 +7,7 @@ from jaxtyping import Array
 from stax.sharding.main import AXIS_NAMES_ENUM
 
 from ..config import KVCache
-from ..utils import dynamic_update_rows
-from .flash_attention import SegmentIds, gqa_flash_attention, gqa_reference
+from .flash_attention import SegmentIds, decode_ragged_attention, gqa_flash_attention
 from .norm import RMSNorm
 from .rope import apply_rope
 
@@ -46,6 +45,7 @@ class GroupedQueryAttention(nn.Module):
     def __call__(
         self,
         x: Array,
+        seq_lens: Array,
         masks: tuple[Array, Array],
         rope_matrix: tuple[Array, Array],
         kv_cache: KVCache | None = None,
@@ -56,27 +56,16 @@ class GroupedQueryAttention(nn.Module):
         q = nn.Dense(features=self.n_heads * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
         k = nn.Dense(features=self.n_kv_heads * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
         v = nn.Dense(features=self.n_kv_heads * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
-        q, k, v = jax.tree.map(lambda t: einops.rearrange(t, "b t (h d) -> b t h d", d=self.head_dim), (q, k, v))
+        q, k, v = jax.tree.map(lambda t: einops.rearrange(t, "b t (h d) -> b h t d", d=self.head_dim), (q, k, v))
 
         if self.qk_norm:
             q = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(q)
             k = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(k)
 
         q, k = jax.tree.map(lambda t: apply_rope(t, *rope_matrix), (q, k))
-        q, k, v = jax.tree.map(lambda t: t.astype(jnp.float32), (q, k, v))
 
+        T = q.shape[2]
         train = kv_cache is None
-        T = q.shape[1]
-        if not train:
-            t_start = kv_cache.length
-            k, v = jax.tree.map(
-                lambda cache, val: dynamic_update_rows(cache, val.astype(cache.dtype), t_start),
-                (kv_cache.k, kv_cache.v),
-                (k, v),
-            )
-            kv_cache = KVCache(k=k, v=v, length=t_start + T)
-
-        q, k, v = jax.tree.map(lambda t: einops.rearrange(t, "b t h d -> b h t d"), (q, k, v))
         sm_scale = self.head_dim**-0.5
 
         if train and not self.is_mutable_collection("params"):
@@ -84,9 +73,16 @@ class GroupedQueryAttention(nn.Module):
             out = jax.lax.with_sharding_constraint(flash_attention_sharded(q, k, v, masks, sm_scale), OUT_SPEC)
         elif train or T >= 128:
             out = flash_attention_naive(q, k, v, masks, sm_scale)
+            if not train:
+                k_cache, v_cache = jax.tree.map(
+                    lambda cache, val: jax.lax.dynamic_update_slice(cache, val.astype(cache.dtype), (0, 0, 0, 0)),
+                    (kv_cache.k, kv_cache.v),
+                    (k, v),
+                )
+                kv_cache = KVCache(k=k_cache, v=v_cache, length=seq_lens)
         else:
             assert T == 1, f"gqa should only be called by decode got {T} shape, full shape{x.shape}"
-            out = gqa_reference(q, k, v, None, SegmentIds(*masks), sm_scale=sm_scale)
+            out, kv_cache = decode_ragged_attention(q, k, v, kv_cache, sm_scale=sm_scale)
 
         out = einops.rearrange(out, "b h t d -> b t (h d)").astype(self.activation_dtype)
         out = nn.Dense(features=self.model_dim, use_bias=False, dtype=self.activation_dtype)(out)

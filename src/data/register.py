@@ -4,7 +4,6 @@ from datasets import load_dataset
 
 from src.data.config import Sample
 
-# Registry: name -> function that returns list[Sample] and takes no inputs
 GLOBAL_DICT: dict[str, Callable[[], list[Sample]]] = {}
 
 
@@ -206,4 +205,4 @@ if __name__ == "__main__":
         if data is None:
             continue
         data = data()
-    breakpoint()
+    breakpoint()  # noqa: T100
