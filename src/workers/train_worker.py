@@ -272,6 +272,8 @@ class AsyncTrainerWorker(Worker):
             _teacher_step, teacher_params, _teacher_metadata = self.model.load_from_ckpt_old(
                 self.config.teacher_config.teacher_checkpoint, self.config.teacher_config.teacher_step
             )
+            kernel_dict = {"kernel": np.zeros((self.model.model.model_dim, 1), np.float32)}
+            teacher_params["value_head"] = kernel_dict
             self.teacher_params = jax.tree.map(lambda x, s: jax.device_put(x, s), teacher_params, self.params_sharding)
 
         if self.resumed:

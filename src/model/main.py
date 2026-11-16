@@ -47,6 +47,10 @@ class Model(HFModelBase):
         out_state = init_state(rng, x_init, seq_lens)
         out_state["params"] = self.load_from_hf(out_state["params"], self.config.hf_model_name)
 
+        if self.model.apply_value_head:
+            kernel = out_state["params"]["value_head"]["kernel"]
+            out_state["params"]["value_head"]["kernel"] = np.zeros(kernel.shape, dtype=kernel.dtype)
+
         if sharding is None:
             single_sharding = SingleDeviceSharding(jax.local_devices()[0])
             sharding = jax.tree.map(lambda _: single_sharding, out_state)
@@ -143,6 +147,7 @@ class Model(HFModelBase):
         return self.model.load_from_hf(params, model_name)
 
     def save_hf(self, path: str, params: PyTree) -> None:
+        params = {k: v for k, v in params.items() if k != "value_head"}
         self.model.save_to_hf(path, params, self.config.hf_model_name)
 
     def __call__(
@@ -192,6 +197,43 @@ class Model(HFModelBase):
             x_logprobs = jnp.take_along_axis(x_logprobs, target_tokens[..., None], axis=-1)[..., 0]
 
         return x_logprobs
+
+    def get_logprobs_and_values(self, params: PyTree, tokens: Array, seq_lens: Array) -> tuple[Array, Array]:
+        """
+        Log probability of each target token and the value estimate of the state it was sampled from,
+        computed from a single forward pass.
+        Args:
+            params: Model parameters.
+            tokens: Input tokens of shape (B, T).
+            seq_lens: Sequence lengths of shape (B,).
+        Returns:
+            x_logprobs: Log probabilities of shape (B, T - 1)
+            values: Value estimates of shape (B, T - 1)
+        """
+        if not self.model.apply_value_head:
+            raise ValueError("Requires model_args.apply_value_head=true ")
+
+        B, T = tokens.shape
+        hidden_output, _ = self.model.apply(
+            {"params": params}, x=tokens, sequence_lens=seq_lens, kv_cache=None, apply_lm_head=False
+        )  # B, T, D
+        D = hidden_output.shape[-1]
+
+        values = hidden_output @ params["value_head"]["kernel"][..., 0]  # B, T
+
+        weights = get_lm_head_weights(params, self.model.tie_weights)  # D, V
+
+        flat_hidden = hidden_output.reshape(B * T, D)
+        flat_targets = jnp.roll(tokens, -1, axis=-1).reshape(B * T)
+
+        if self.config.fused_chunk_size is not None:
+            logprobs = fused_linear_selection(flat_hidden, weights, flat_targets, self.config.fused_chunk_size)
+        else:
+            log_softmax = jax.nn.log_softmax(flat_hidden.astype(jnp.float32) @ weights.astype(jnp.float32), axis=-1)
+            logprobs = jnp.take_along_axis(log_softmax, flat_targets[:, None], axis=-1)[:, 0]
+        logprobs = logprobs.reshape(B, T)
+
+        return logprobs[:, :-1], values[:, :-1]
 
     def fused_selection_call(
         self,

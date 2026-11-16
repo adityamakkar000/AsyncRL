@@ -19,6 +19,7 @@ class Transformer(BaseModel):
     rope_base: int
     activation_dtype: jnp.dtype = jnp.float32
     tie_weights: bool = False
+    apply_value_head: bool = False
     qk_norm: bool = False
     rms_eps: float = 1e-6
     rope_correction: RopeCorrection = no_correction
@@ -70,6 +71,9 @@ class Transformer(BaseModel):
             out_cache.append(out_layer_cache)
 
         x = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)
+
+        if self.apply_value_head:
+            nn.Dense(features=1, use_bias=False, dtype=jnp.float32, name="value_head")(x)
 
         if apply_lm_head:
             if self.tie_weights:
