@@ -30,6 +30,7 @@ dependencies = [
     "optax==0.2.8",
     "wandb==0.27.0",
     "rich<14.0.0",
+    "docker>=7.2.0",
 ]
 
 [project.optional-dependencies]
