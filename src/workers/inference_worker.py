@@ -504,6 +504,8 @@ class AsyncInferenceWorker(Worker):
         self.async_options = async_options
 
         self.model = Model(trainer_config.model_config)
+        if getattr(self.model.model, "apply_value_head", False):
+            self.model.model = self.model.model.clone(apply_value_head=False)
         self.validate_config()
 
         abstract_output = self.model.init_state(rng=jax.random.PRNGKey(0), tx=None, sharding=None, abstract=True)

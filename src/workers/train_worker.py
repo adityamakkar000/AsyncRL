@@ -272,8 +272,10 @@ class AsyncTrainerWorker(Worker):
             _teacher_step, teacher_params, _teacher_metadata = self.model.load_from_ckpt_old(
                 self.config.teacher_config.teacher_checkpoint, self.config.teacher_config.teacher_step
             )
-            kernel_dict = {"kernel": np.zeros((self.model.model.model_dim, 1), np.float32)}
-            teacher_params["value_head"] = kernel_dict
+
+            if self.model.model.apply_value_head and "value_head" not in teacher_params:
+                kernel_dict = {"kernel": np.zeros((self.model.model.model_dim, 1), np.float32)}
+                teacher_params["value_head"] = kernel_dict
             self.teacher_params = jax.tree.map(lambda x, s: jax.device_put(x, s), teacher_params, self.params_sharding)
 
         if self.resumed:
@@ -395,8 +397,9 @@ class AsyncTrainerWorker(Worker):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
 
         with stax.Tracker(timer=True) as t:
+            inference_params = {k: v for k, v in self.params.items() if k != "value_head"}
             params_cast = jax.tree.map(
-                lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), self.params
+                lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), inference_params
             )
             if self.worker_rank == 0:
                 for _ in range(self.async_options.inference_workers):
