@@ -76,9 +76,7 @@ class Model(HFModelBase):
                 if cache_dtype == jnp.int8:
                     return Int8Array(
                         value=zeros(out_sharding),
-                        scale=zeros(
-                            out_sharding, dtype=jnp.bfloat16, shape=(n_layers, batch_size, n_kv_heads, length)
-                        ),
+                        scale=zeros(out_sharding, dtype=jnp.bfloat16, shape=(n_layers, batch_size, n_kv_heads, length)),
                     )
                 return zeros(out_sharding)
 
