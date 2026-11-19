@@ -3,6 +3,7 @@ import glob
 import os
 import re
 import shutil
+from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
@@ -156,6 +157,17 @@ def save_to_hf(dir_path: str, params: PyTree, hf_model_name: str, reverse_hf_map
 
     new_tensors = convert_pytree(params, reverse_hf_mapping)
     save_file(new_tensors, f"{dir_path}/model.safetensors")
+
+
+def make_weight_shard_fn(weight_shard_dim: int = 0) -> Callable[[str, Array], int | None]:
+    def weight_shard_fn(path: str, param: Array) -> int | None:
+        if param.ndim < 2:
+            return None
+        if re.search(r"\['Block'\]", path):
+            return weight_shard_dim + 1 if param.ndim >= 3 else None
+        return weight_shard_dim
+
+    return weight_shard_fn
 
 
 def get_lm_head_weights(params: PyTree, tie_weights: bool) -> Array:

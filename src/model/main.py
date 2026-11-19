@@ -60,7 +60,7 @@ class Model(HFModelBase):
 
         return out_state
 
-    def init_kv_cache(self, batch_size: int, length: int, sharding: KVCache, dtype: str = "bfloat16") -> list[KVCache]:
+    def init_kv_cache(self, batch_size: int, length: int, sharding: KVCache, dtype: str = "bfloat16") -> KVCache:
         if length > self.sequence_len:
             raise ValueError(f"Requested KV cache length {length} exceeds maximum of {self.sequence_len + 1024}")
 
@@ -71,6 +71,7 @@ class Model(HFModelBase):
             def zeros(out_sharding):
                 return jnp.zeros(
                     (
+                        n_layers,
                         batch_size,
                         n_kv_heads,
                         length,
@@ -86,7 +87,7 @@ class Model(HFModelBase):
                 length=jnp.zeros((batch_size,), dtype=jnp.int32, out_sharding=sharding.length),  # type: ignore
             )
 
-        return [_init() for _ in range(n_layers)]
+        return _init()
 
     def load_from_ckpt(
         self, path: str, step_number: int | None = None, use_best=False

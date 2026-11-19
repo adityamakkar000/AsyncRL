@@ -25,7 +25,7 @@ from tqdm import tqdm
 
 from src.constants import CHECKPOINTS, GS_BUCKET, PROFILE
 from src.data import DataLoader, InferenceRollout, RLBatch
-from src.model import Model
+from src.model import Model, make_weight_shard_fn
 
 from .config import AsyncOptions, TrainerConfig
 from .constants import EVAL_TIMEOUT, TIMEOUT
@@ -216,7 +216,7 @@ class AsyncTrainerWorker(Worker):
                 min_bytes_for_fsdp=self.config.sharding_config.min_bytes_for_fsdp,
                 data_shard_dim=self.config.sharding_config.data_shard_dim,
                 cp_shard_dim=self.config.sharding_config.cp_shard_dim,
-                weight_shard_dim=self.config.sharding_config.weight_shard_dim,
+                weight_shard_fn=make_weight_shard_fn(self.config.sharding_config.weight_shard_dim),
             ),
             # only use devices on the train worker's mesh
             devices=self.async_options.train_mesh.devices.reshape(-1),

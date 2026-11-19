@@ -28,9 +28,9 @@ class Transformer(BaseModel):
         self,
         x: Array,  # [B, T]
         sequence_lens: jax.Array,  # [B, ]
-        kv_cache: list[KVCache] | None = None,
+        kv_cache: KVCache | None = None,
         apply_lm_head: bool = True,
-    ) -> tuple[Array, list[KVCache]]:
+    ) -> tuple[Array, KVCache | None]:
         B, T = x.shape
 
         embed_layer = nn.Embed(
@@ -41,7 +41,7 @@ class Transformer(BaseModel):
         )
         x = embed_layer(x)
 
-        t_start = kv_cache[0].length if kv_cache else jnp.zeros((B,), dtype=jnp.int32)
+        t_start = kv_cache.length if kv_cache else jnp.zeros((B,), dtype=jnp.int32)
 
         pos = jnp.arange(T)[None, :]
         shifted_pos = pos + t_start[:, None]
@@ -54,20 +54,31 @@ class Transformer(BaseModel):
         )
         rope_matrix = gather_rope(sin_table, cos_table, shifted_pos)
 
-        out_cache: list[KVCache] = []
-        for i in range(self.n_layers):
-            x, out_layer_cache = RematBlock(
-                model_dim=self.model_dim,
-                d_ff=self.d_ff,
-                n_heads=self.n_heads,
-                n_kv_heads=self.n_kv_heads,
-                head_dim=self.head_dim,
-                activation_dtype=self.activation_dtype,
-                qk_norm=self.qk_norm,
-                rms_eps=self.rms_eps,
-                name=f"Block_{i}",
-            )(x, sequence_lens, masks, rope_matrix, kv_cache[i] if kv_cache else None)
-            out_cache.append(out_layer_cache)
+        layer_cache = None
+        if kv_cache is not None:
+            layer_cache = kv_cache.replace(length=jnp.broadcast_to(kv_cache.length, (self.n_layers, B)))
+
+        ScanBlock = nn.scan(
+            RematBlock,
+            variable_axes={"params": 0},
+            split_rngs={"params": True},
+            in_axes=(nn.broadcast, nn.broadcast, nn.broadcast, 0),
+            length=self.n_layers,
+        )
+        x, out_cache = ScanBlock(
+            model_dim=self.model_dim,
+            d_ff=self.d_ff,
+            n_heads=self.n_heads,
+            n_kv_heads=self.n_kv_heads,
+            head_dim=self.head_dim,
+            activation_dtype=self.activation_dtype,
+            qk_norm=self.qk_norm,
+            rms_eps=self.rms_eps,
+            name="Block",
+        )(x, sequence_lens, masks, rope_matrix, layer_cache)
+
+        if out_cache is not None:
+            out_cache = out_cache.replace(length=out_cache.length[0])
 
         x = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)
 

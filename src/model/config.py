@@ -2,6 +2,8 @@ import abc
 from dataclasses import dataclass
 from typing import Any
 
+import jax
+import numpy as np
 from flax import linen as nn
 from flax import struct
 from jaxtyping import Array, PyTree
@@ -18,7 +20,7 @@ class KVCache:
 
     @property
     def max_len(self) -> int:
-        return self.k.shape[2]
+        return self.k.shape[-2]
 
 
 @dataclass
@@ -55,13 +57,27 @@ class BaseModel(abc.ABC, nn.Module):
         pass
 
     def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
-        return get_torch_weights_to_jax(params, model_name, self.hf_mapping)
+        params = dict(params)
+        stacked = params.pop("Block")
+        n_layers = jax.tree.leaves(stacked)[0].shape[0]
+        for i in range(n_layers):
+            params[f"Block_{i}"] = jax.tree.map(lambda p: jax.ShapeDtypeStruct(p.shape[1:], p.dtype), stacked)
+
+        params = get_torch_weights_to_jax(params, model_name, self.hf_mapping)
+
+        layers = [params.pop(f"Block_{i}") for i in range(n_layers)]
+        params["Block"] = jax.tree.map(lambda *xs: np.stack(xs), *layers)
+        return params
 
     def save_to_hf(self, path: str, params: PyTree, model_name: str) -> None:
+        params = dict(params)
+        stacked = params.pop("Block")
+        n_layers = jax.tree.leaves(stacked)[0].shape[0]
+        for i in range(n_layers):
+            params[f"Block_{i}"] = jax.tree.map(lambda p, i=i: p[i], stacked)
+
         save_to_hf(path, params, model_name, self.reverse_hf_mapping)
 
     @abc.abstractmethod
-    def __call__(
-        self, x: Array, sequence_lens: Array, kv_cache: list[KVCache] | None = None
-    ) -> tuple[Array, list[KVCache]]:
+    def __call__(self, x: Array, sequence_lens: Array, kv_cache: KVCache | None = None) -> tuple[Array, KVCache | None]:
         pass
