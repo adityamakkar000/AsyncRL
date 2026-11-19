@@ -33,10 +33,11 @@ def act_constrain(x: PyTree[Array], shard: bool = True, spec: P = ACT_SPEC) -> P
 
 
 def quantize(x: Array) -> tuple[Array, Array]:
+    x = x.astype(jnp.float32)
     amax = jnp.max(jnp.abs(x), axis=-1, keepdims=True)
     scale = (amax / 127.0 + jnp.finfo(x.dtype).tiny).astype(jnp.bfloat16)
     q = jnp.clip(jnp.round(x / scale), -127, 127).astype(jnp.int8)
-    return q, scale.squeeze(axis=-1)
+    return q, scale[..., 0]  # [x.shape, x.shape[:-1]]
 
 
 def dequantize(q: Array, scale: Array, dtype: jnp.dtype = jnp.bfloat16) -> Array:

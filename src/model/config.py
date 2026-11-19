@@ -12,8 +12,7 @@ from omegaconf import MISSING
 from .utils import dequantize, get_torch_weights_to_jax, quantize, save_to_hf
 
 
-@struct.dataclass
-class Int8Array:
+class Int8Array(struct.PyTreeNode):
     value: jax.Array
     scale: jax.Array
 
@@ -35,16 +34,6 @@ class Int8Array:
     @property
     def shape_and_dtype(self) -> PyTree[jax.ShapeDtypeStruct]:
         return jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype), (self))
-
-
-class AttentionMask(NamedTuple):
-    q_segment_ids: Array
-    k_segment_ids: Array
-
-
-class RopeMatrix(NamedTuple):
-    sin: Array
-    cos: Array
 
 
 class KVCache(struct.PyTreeNode):
@@ -80,6 +69,16 @@ class KVCache(struct.PyTreeNode):
             )
 
         return self.replace(k=_update_cache(self.k, k), v=_update_cache(self.v, v))
+
+
+class AttentionMask(NamedTuple):
+    q_segment_ids: Array
+    k_segment_ids: Array
+
+
+class RopeMatrix(NamedTuple):
+    sin: Array
+    cos: Array
 
 
 @dataclass

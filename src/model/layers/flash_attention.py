@@ -16,6 +16,7 @@
 """Flash Attention TPU kernel, modified to support gqa"""
 
 from __future__ import annotations
+from src.model.utils import quantize
 
 import dataclasses
 import functools
@@ -24,6 +25,7 @@ from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
+from jaxtyping import Array
 from einops import rearrange
 from jax import lax
 from jax.experimental import pallas as pl
@@ -1445,8 +1447,8 @@ def ragged_decode_kernel(
     o_scratch_ref: jax.ArrayRef,
     running_sum_scratch_ref: jax.ArrayRef,
     max_logit_scratch_ref: jax.ArrayRef,
-    k_chunk_ref: jax.ArrayRef,
-    v_chunk_ref: jax.ArrayRef,
+    k_scratch_ref: jax.ArrayRef,
+    v_scratch_ref: jax.ArrayRef,
     sems: jax.ArrayRef,  # DMA sems [read/write, k/v, block_b]
     # params,
     kv_seq_len: int,
@@ -1472,50 +1474,27 @@ def ragged_decode_kernel(
     is_last_block = (i == max_blocks)
 
 
-    def create_kv_read_write_dmas(batch_idx, kv_len) -> list[tuple[tuple[Any], tuple[Any]]]:
-        
+    def create_kv_read_write_dmas(batch_idx, kv_len) -> list[tuple[Any, Any]]:
         global_batch_idx = b * block_b + batch_idx
-        start = pl.multiple_of((kv_len // align) * align, align)
+        rows = pl.ds(pl.multiple_of(kv_len // align * align, align), align)
+        lanes = pl.ds(pl.multiple_of(kv_len // NUM_LANES * NUM_LANES, NUM_LANES), NUM_LANES)
+        ds = Int8Array(rows, lanes) if is_quantized else rows # type : ignore
+
+        def copy(scratch_ref, hbm_ref, kv, rw):
+            def f(sc, hbm, sem, d):
+                vmem = sc.at[batch_idx]
+                hbm = hbm.at[layer_ref[0], global_batch_idx, :, d]
+                src, dst = (hbm, vmem) if rw == 0 else (vmem, hbm)
+                return pltpu.make_async_copy(src, dst, sem.at[kv, rw, batch_idx])
+
+            return jax.tree.map(f, scratch_ref, hbm_ref, sems, ds)
+
         dmas = []
-
-        for scratch_chunk_ref, hbm_ref, sem_ref in (
-            (k_chunk_ref, k_cache_hbm, sems.at[0] ),
-            (v_chunk_ref, v_cache_hbm, sems.at[1] ),
-        ):
-
-            def slice(sc, hbm, sem):
-
-                vmem_chunk = sc.at[batch_idx]
-                hbm_chunk = hbm.at[layer_ref[0], global_batch_idx, :, pl.ds(start, align)]
-
-                read_dma = pltpu.make_async_copy(
-                    vmem_chunk, 
-                    hbm_chunk, 
-                    sem.at[0, batch_idx]
-                )
-
-                write_dma = pltpu.make_async_copy(
-                    hbm_chunk, 
-                    vmem_chunk, 
-                    sem.at[1, batch_idx]
-                )
-
-                return (read_dma, write_dma)
-
-            out = jax.tree.map(slice, scratch_chunk_ref, hbm_ref, sem_ref)
-
-            read = [] 
-            write = [] 
-
-            for r,w in out:
-                read.append(r)
-                write.append(w)
-
-            dmas.append(
-                (tuple(read), tuple(write))
-            )
-
-        return dmas 
+        for kv, (scratch_ref, hbm_ref) in enumerate(zip((k_scratch_ref, v_scratch_ref), (k_cache_hbm, v_cache_hbm))):
+            read_dma = copy(scratch_ref, hbm_ref, kv, 0)
+            write_dma = copy(scratch_ref, hbm_ref, kv, 1)
+            dmas.append((read_dma, write_dma))
+        return dmas
 
     @pl.when(i == 0)
     def _():
@@ -1539,31 +1518,37 @@ def ragged_decode_kernel(
 
         @pl.when(i == 0)
         def _():
-
             for read_dma, _write_dma in dmas:
                 jax.tree.map(lambda x: x.start(),read_dma)
 
         @pl.when(i == max_blocks // 2)
         def _():
 
-            start_idx = kv_len // align * align
-            row = jax.lax.broadcasted_iota(jnp.int32, k_chunk_ref.shape[1:], dimension=1) == (kv_len - start_idx)
+            align_row = jax.lax.broadcasted_iota(jnp.int32, k_scratch_ref.shape[1:], dimension=1) == (kv_len % align)
+            lanes_row = jax.lax.broadcasted_iota(jnp.int32, (k_scratch_ref.shape[1], NUM_LANES), dimension=1) == (kv_len % NUM_LANES)
 
-            for (read_dma, write_dma), (new_ref, scratch_chunk_ref)  in zip(
+            for (read_dma, write_dma), (new_ref, scratch_ref)  in zip(
                 dmas, 
                 (
-                    (k_ref, k_chunk_ref),
-                    (v_ref, v_chunk_ref),
+                    (k_ref, k_scratch_ref),
+                    (v_ref, v_scratch_ref),
                 )
             ):
 
-
                 jax.tree.map(lambda x: x.wait(),read_dma)
 
-                # TODO: quantize here if needed 
-                chunk = scratch_chunk_ref.at[idx]
-                new = new_ref[idx][:, None, :].astype(chunk.dtype) # [kv_heads, 1, d]
-                chunk[...] = jnp.where(row, new, chunk[...])
+
+                new = new_ref[idx][:, None, :] #[ kv_heads, 1, d]
+
+                def f(mask, new, old):
+                    old.at[idx][...] = jnp.where(mask, new.astype(old.dtype), old.at[idx][...])
+
+                if is_quantized:
+                    masks, new = Int8Array(align_row, lanes_row), Int8Array.quantize(new)
+                else:
+                    masks = align_row
+
+                jax.tree.map(f, masks, new, scratch_ref)
 
                 jax.tree.map(lambda x: x.start(),write_dma)
 
@@ -1573,14 +1558,23 @@ def ragged_decode_kernel(
 
             q = q_ref[idx]  # [kv_heads, groups, head_dim]
 
-            #TODO: de quantize here if needed
+            if isinstance(k_cache_ref, Int8Array):
+                assert isinstance(v_cache_ref, Int8Array)
+                k, k_scale = k_cache_ref.value[idx], k_cache_ref.scale[idx] # [h, block_kv]
+                v, v_scale = v_cache_ref.value[idx], v_cache_ref.scale[idx] # [h, block_kv]
+            else:
+                k = k_cache_ref[idx]
+                v = v_cache_ref[idx]
 
-            k = k_cache_ref[idx].astype(q.dtype)  # [heads, block_kv_size, head_dim]
-            v = v_cache_ref[idx].astype(q.dtype)  # [heads, block_kv_size, head_dim]
+            k = k.astype(q.dtype)  # [heads, block_kv_size, head_dim]
+            v = v.astype(q.dtype)  # [heads, block_kv_size, head_dim]
 
             scores = jnp.einsum(
                 "hgd,htd->hgt", q, k, preferred_element_type=jnp.float32
-            )  # [kv_heads, heads, block_kv_size]
+            ) # [kv_heads, heads, block_kv_size]
+
+            if is_quantized: 
+                scores *= k_scale[:, None, :]
 
             scores = jnp.where(
                 pos < kv_len, scores, min_val
@@ -1595,8 +1589,12 @@ def ragged_decode_kernel(
             running_sum_scratch_ref[idx] = adjustment_factor * running_sum_scratch_ref[idx] + jnp.sum(
                 shifted_scores, axis=-1, keepdims=True
             )
+
+            if is_quantized:
+                shifted_scores *= v_scale[:, None, :]
+
             o_scratch_ref[idx] = adjustment_factor * o_scratch_ref[idx] + jnp.einsum(
-                "hgt,htd->hgd", shifted_scores.astype(v.dtype), v, preferred_element_type=jnp.float32
+                "hgt,htd->hgd", shifted_scores,  v, preferred_element_type=jnp.float32
             )
 
             max_logit_scratch_ref[idx] = jnp.broadcast_to(max_scores, max_logit_scratch_ref.shape[1:])
@@ -1628,7 +1626,7 @@ def _decode_ragged_attention(
     sm_scale: float,
     block_kv: int = 1024,
     block_b: int = 1,
-):
+) -> tuple[Array, KVCache]:
 
     b, h, _, d = q.shape
     b, h_kv, _, d = k.shape
@@ -1736,7 +1734,7 @@ def decode_ragged_attention(
     v, # [b, hkv, 1, d]
     kv_cache: tuple[jax.Array, KVCache],
     sm_scale=1.0,
-):
+) -> tuple[Array, KVCache]:
     layer, cache = kv_cache
     assert k.shape == v.shape, "kv shapes should match"
     assert q.shape[1] % k.shape[1] == 0, "kv heads should divide heads"
