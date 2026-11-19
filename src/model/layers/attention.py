@@ -1,3 +1,5 @@
+from functools import partial
+
 import einops
 import jax
 import jax.numpy as jnp
@@ -12,17 +14,19 @@ from .norm import RMSNorm
 from .rope import apply_rope
 
 
-def flash_attention_naive(q, k, v, masks: AttentionMask, sm_scale):
+def flash_attention_naive(q: Array, k: Array, v: Array, masks: AttentionMask, sm_scale: float) -> Array:
     segment_ids = SegmentIds(masks.q_segment_ids, masks.k_segment_ids)
     return gqa_flash_attention(q, k, v, sm_scale=sm_scale, segment_ids=segment_ids, causal=True)
 
 
-flash_attention_sharded = jax.shard_map(
-    flash_attention_naive,
+@partial(
+    jax.shard_map,
     in_specs=(QKV_SPEC, QKV_SPEC, QKV_SPEC, P((DP, FSDP), None), None),
     out_specs=QKV_SPEC,
     check_vma=False,
 )
+def flash_attention_sharded(q: Array, k: Array, v: Array, masks: AttentionMask, sm_scale: float) -> Array:
+    return flash_attention_naive(q, k, v, masks, sm_scale)
 
 
 class GroupedQueryAttention(nn.Module):
@@ -63,7 +67,8 @@ class GroupedQueryAttention(nn.Module):
 
         if train and not self.is_mutable_collection("params"):
             q, k, v = act_constrain((q, k, v), spec=QKV_SPEC)
-            out = act_constrain(flash_attention_sharded(q, k, v, masks, sm_scale), spec=OUT_SPEC)
+            out: Array = flash_attention_sharded(q, k, v, masks, sm_scale)
+            out = act_constrain(out, spec=OUT_SPEC)
         elif train or T >= 128:
             out = flash_attention_naive(q, k, v, masks, sm_scale)
             if not train:

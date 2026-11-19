@@ -26,7 +26,7 @@ QKV_SPEC = P((DP, FSDP), CP_ULYSSES, None, None)
 OUT_SPEC = P((DP, FSDP), None, CP_ULYSSES, None)
 
 
-def act_constrain(x: PyTree, shard: bool = True, spec: P = ACT_SPEC) -> PyTree:
+def act_constrain(x: PyTree[Array], shard: bool = True, spec: P = ACT_SPEC) -> PyTree[Array]:
     return jax.lax.with_sharding_constraint(x, spec) if shard else x
 
 
@@ -214,14 +214,14 @@ def _fwd(h, W, targets, chunk_size):
     chunk_size = min(chunk_size, B)
 
     num_chunks = make_chunks(B, chunk_size)
-    chunked_hidden_inputs = jax.lax.with_sharding_constraint(
-        h.reshape(num_chunks, chunk_size, D), P(None, (DP, FSDP, CP_ULYSSES), None)
+    chunked_hidden_inputs = act_constrain(
+        h.reshape(num_chunks, chunk_size, D), spec=P(None, (DP, FSDP, CP_ULYSSES), None)
     )  # num_chunks, chunk_size, D
-    chunked_targets = jax.lax.with_sharding_constraint(
-        targets.reshape(num_chunks, chunk_size), P(None, (DP, FSDP, CP_ULYSSES))
+    chunked_targets = act_constrain(
+        targets.reshape(num_chunks, chunk_size), spec=P(None, (DP, FSDP, CP_ULYSSES))
     )  # num_chunks, chunk_size
 
-    W_gather = jax.lax.with_sharding_constraint(W, P())
+    W_gather = act_constrain(W, spec=P())
 
     chunked_hidden_inputs, W_gather = jax.tree.map(lambda x: x.astype(jnp.float32), (chunked_hidden_inputs, W_gather))
 
@@ -245,8 +245,8 @@ def _bwd(chunk_size, residuals, dy):
     num_chunks, chunk_size, D = chunked_hidden_inputs.shape
     _, V = W_gather.shape
 
-    chunked_dy = jax.lax.with_sharding_constraint(
-        dy.astype(jnp.float32).reshape(num_chunks, chunk_size), P(None, (DP, FSDP, CP_ULYSSES))
+    chunked_dy = act_constrain(
+        dy.astype(jnp.float32).reshape(num_chunks, chunk_size), spec=P(None, (DP, FSDP, CP_ULYSSES))
     )
 
     def body(dW, chunk):

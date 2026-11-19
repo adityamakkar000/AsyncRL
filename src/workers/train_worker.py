@@ -229,6 +229,11 @@ class AsyncTrainerWorker(Worker):
         )
 
         self.train_mesh = shardings.mesh
+        dtype = self.config.loss_config.inference_config.params_dtype
+        self.replicate_params_fn = jax.jit(
+            lambda params: jax.tree.map(lambda p: p.astype(dtype), params),
+            out_shardings=jax.NamedSharding(self.train_mesh, jax.P()),
+        )
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
@@ -393,9 +398,7 @@ class AsyncTrainerWorker(Worker):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
 
         with stax.Tracker(timer=True) as t:
-            params_cast = jax.tree.map(
-                lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), self.params
-            )
+            params_cast = self.replicate_params_fn(self.params)
             if self.worker_rank == 0:
                 for _ in range(self.async_options.inference_workers):
                     self.async_options.queues.weight_sync_queue.put("sync")
