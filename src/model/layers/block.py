@@ -2,7 +2,8 @@ import jax.numpy as jnp
 from flax import linen as nn
 from jaxtyping import Array
 
-from ..config import KVCache
+from ..config import AttentionMask, KVCache, RopeMatrix
+from ..utils import act_constrain
 from .attention import GroupedQueryAttention
 from .mlp import FeedForward
 from .norm import RMSNorm
@@ -21,12 +22,16 @@ class Block(nn.Module):
     @nn.compact
     def __call__(
         self,
-        x: Array,
+        carry: tuple[Array, KVCache | None],
         seq_lens: Array,
-        masks: tuple[Array, Array],
-        rope_matrix: tuple[Array, Array],
-        layer_cache: KVCache | None = None,
+        masks: AttentionMask,
+        rope_matrix: RopeMatrix,
+        layer: Array,
     ):
+        x, layer_cache = carry
+        shard = layer_cache is None and not self.is_initializing()
+
+        x = act_constrain(x, shard)
         h = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)
         h, out_layer_cache = GroupedQueryAttention(
             model_dim=self.model_dim,
@@ -36,13 +41,13 @@ class Block(nn.Module):
             activation_dtype=self.activation_dtype,
             qk_norm=self.qk_norm,
             rms_eps=self.rms_eps,
-        )(h, seq_lens, masks, rope_matrix, layer_cache)
-        x = x + h
+        )(h, masks, rope_matrix, None if layer_cache is None else (layer, layer_cache))
+        x = act_constrain(x + h, shard)
 
         h = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)
-        x = x + FeedForward(model_dim=self.model_dim, d_ff=self.d_ff, activation_dtype=self.activation_dtype)(h)
+        x = x + FeedForward(model_dim=self.model_dim, d_ff=self.d_ff, activation_dtype=self.activation_dtype)(h, shard)
 
-        return x, out_layer_cache
+        return (act_constrain(x, shard), out_layer_cache), None
 
 
 RematBlock = nn.remat(Block)

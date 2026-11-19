@@ -32,8 +32,7 @@ class InferenceConfig:
     system_prompt: bool = False
 
 
-@struct.dataclass
-class InferenceState:
+class InferenceState(struct.PyTreeNode):
     next_token: Array
     kv_cache: KVCache
     key: Array

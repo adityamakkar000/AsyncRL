@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import torch
 from huggingface_hub import snapshot_download
 from jax.sharding import PartitionSpec as P
@@ -19,6 +20,14 @@ from stax.sharding.main import AXIS_NAMES_ENUM
 DP = AXIS_NAMES_ENUM.DP.value
 FSDP = AXIS_NAMES_ENUM.FSDP.value
 CP_ULYSSES = AXIS_NAMES_ENUM.CP_ULYSSES.value
+
+ACT_SPEC = P((DP, FSDP), CP_ULYSSES, None)
+QKV_SPEC = P((DP, FSDP), CP_ULYSSES, None, None)
+OUT_SPEC = P((DP, FSDP), None, CP_ULYSSES, None)
+
+
+def act_constrain(x: PyTree, shard: bool = True, spec: P = ACT_SPEC) -> PyTree:
+    return jax.lax.with_sharding_constraint(x, spec) if shard else x
 
 
 def convert_dtype(dtype_str: str) -> jnp.dtype:
@@ -76,18 +85,30 @@ def get_torch_weights_to_jax(params: PyTree, name: str, hf_mapping) -> PyTree:
                 param_ending = jax_param_key.split(".")[-1]
                 jax_path = jax_param_key.split(".")[0].split("/")
 
+                layer = re.fullmatch(r"Block_([0-9]+)", jax_path[0])
+                if layer:
+                    jax_path[0] = "Block"
+
                 jax_param = params
 
                 for node in jax_path:
                     jax_param = jax_param[node]
 
-                new_param = torch_hf_params[hf_param_key].float()
+                new_param = torch_hf_params.pop(hf_param_key).float()
                 new_param = new_param.T.numpy() if "kernel" in param_ending else new_param.numpy()
 
-                assert new_param.shape == jax_param[param_ending].shape, (
-                    f"Shape mismatch for {jax_param_key}: expected {jax_param[param_ending].shape}, got {new_param.shape}"
+                target = jax_param[param_ending]
+                expected = target.shape[1:] if layer else target.shape
+                assert new_param.shape == expected, (
+                    f"Shape mismatch for {jax_param_key}: expected {expected}, got {new_param.shape}"
                 )
-                jax_param[param_ending] = new_param
+
+                if layer:
+                    if not isinstance(target, np.ndarray):
+                        target = jax_param[param_ending] = np.empty(target.shape, dtype=new_param.dtype)
+                    target[int(layer.group(1))] = new_param
+                else:
+                    jax_param[param_ending] = new_param
 
     return params
 

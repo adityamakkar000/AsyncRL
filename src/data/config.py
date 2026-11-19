@@ -37,8 +37,7 @@ class DatasetConfig:
     filters: list[dict[str, Any]] = field(default_factory=list)
 
 
-@struct.dataclass
-class RLBatch:
+class RLBatch(struct.PyTreeNode):
     tokens: jax.Array  # [B, max_seq_len] where B = P * G, P = num prompts, G = group size
     reference_model_logprobs: jax.Array  # [B, max_seq_len] logprobs of sampled token
     seq_lens: jax.Array  # [B] length of sequences (excluding padding)

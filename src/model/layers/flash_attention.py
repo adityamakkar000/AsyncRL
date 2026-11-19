@@ -1429,6 +1429,7 @@ def check_div(n: int, bs: int):
 def ragged_decode_kernel(
     # prefetch refs
     kv_lengths: jax.ArrayRef,  #[b,]
+    layer_ref: jax.ArrayRef,  #[1,]
     # input ref
     q_ref: jax.ArrayRef,
     k_ref: jax.ArrayRef,
@@ -1479,7 +1480,7 @@ def ragged_decode_kernel(
         ):
 
             vmem_chunk = scratch_chunk_ref.at[batch_idx] # [kv_heads, block_kv, d]
-            hbm_chunk = hbm_ref.at[global_batch_idx, :, pl.ds(start, align), :]
+            hbm_chunk = hbm_ref.at[layer_ref[0], global_batch_idx, :, pl.ds(start, align), :]
 
             read_dma = pltpu.make_async_copy(
                 hbm_chunk, 
@@ -1596,6 +1597,7 @@ def _decode_ragged_attention(
     k: jax.Array,
     v: jax.Array,
     kv_cache: KVCache,
+    layer: jax.Array,
     sm_scale: float,
     block_kv: int = 1024,
     block_b: int = 1,
@@ -1625,15 +1627,18 @@ def _decode_ragged_attention(
             last_end = jnp.maximum(last_end, kv_lengths[b*block_b + j])
         return jnp.minimum(i, last_end // block_kv)
 
+    def kv_cache_index(b, i, kv_lengths, layer):
+        return (layer[0], b, 0, kv_block(b, i, kv_lengths), 0)
+
     grid_spec = pltpu.PrefetchScalarGridSpec(
-        num_scalar_prefetch=1,
+        num_scalar_prefetch=2,
         grid=(b // block_b, kv_seq_len // block_kv),
         in_specs=[
             pl.BlockSpec((block_b, h_kv, h // h_kv, d), lambda b, i, *_: (b, 0, 0, 0)),  # q
-            pl.BlockSpec((block_b, h_kv, d), lambda b, i, *p: (b, 0, 0)),  # k
-            pl.BlockSpec((block_b, h_kv, d), lambda b, i, *p: (b, 0, 0)),  # v
-            pl.BlockSpec((block_b, h_kv, block_kv, d), lambda b, i, *p: (b, 0, kv_block(b, i, *p), 0)),
-            pl.BlockSpec((block_b, h_kv, block_kv, d), lambda b, i, *p: (b, 0, kv_block(b, i, *p), 0)),
+            pl.BlockSpec((block_b, h_kv, d), lambda b, i, *_: (b, 0, 0)),  # k
+            pl.BlockSpec((block_b, h_kv, d), lambda b, i, *_: (b, 0, 0)),  # v
+            pl.BlockSpec((None, block_b, h_kv, block_kv, d), kv_cache_index),
+            pl.BlockSpec((None, block_b, h_kv, block_kv, d), kv_cache_index),
         ],
         out_specs=[
             pl.BlockSpec((block_b, h_kv, h // h_kv, d), lambda b, i, *_: (b, 0, 0, 0)),
@@ -1665,33 +1670,30 @@ def _decode_ragged_attention(
         ],
         grid_spec=grid_spec,
         compiler_params=pltpu.CompilerParams(dimension_semantics=("parallel", "arbitrary")),
-        input_output_aliases={4: 1, 5: 2}
-    )(kv_lengths, q, k, v, kv_cache.k, kv_cache.v)
+        input_output_aliases={5: 1, 6: 2}
+    )(kv_lengths, layer[None], q, k, v, kv_cache.k, kv_cache.v)
 
-    kv_cache = kv_cache.replace( # type: ignore
-        k=k_cache, 
-        v=v_cache, 
-        length=kv_cache.length + 1
-    )
+    out_cache = kv_cache.replace(k=k_cache, v=v_cache)
 
     out = rearrange(out, "b h g d -> b (h g) 1 d")
 
-    return out, kv_cache 
+    return out, out_cache 
 
 
 def decode_ragged_attention(
     q, # [b, hq, 1, d]
     k, # [b, hkv, 1, d]
     v, # [b, hkv, 1, d]
-    kv_cache: KVCache,
+    kv_cache: tuple[jax.Array, KVCache],
     sm_scale=1.0,
 ):
+    layer, cache = kv_cache
     assert k.shape == v.shape, "kv shapes should match"
     assert q.shape[1] % k.shape[1] == 0, "kv heads should divide heads"
     assert q.shape[2] == 1, "should get 1 query for decode"
 
-    block_kv = fit_block(1024, kv_cache.max_len)
-    return _decode_ragged_attention(q, k, v, kv_cache, sm_scale, block_kv=block_kv)
+    block_kv = fit_block(1024, cache.max_len)
+    return _decode_ragged_attention(q, k, v, cache, layer, sm_scale, block_kv=block_kv)
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(5, 6, 7, 8))
 def _gqa_reference(

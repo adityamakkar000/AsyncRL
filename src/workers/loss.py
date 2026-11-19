@@ -47,7 +47,7 @@ class LossFunction(abc.ABC):
     ) -> tuple[Array, PyTree]:
         x_logprobs = model.get_logprobs(params, batch.tokens, batch.seq_lens)
 
-        batch = batch.replace(  # type: ignore
+        batch = batch.replace(
             tokens=batch.tokens[:, 1:],
             reference_model_logprobs=batch.reference_model_logprobs[:, 1:],
             token_mask=batch.token_mask[:, 1:],

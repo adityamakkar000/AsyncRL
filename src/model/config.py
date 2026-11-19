@@ -1,9 +1,8 @@
 import abc
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
 import jax
-import numpy as np
 from flax import linen as nn
 from flax import struct
 from jaxtyping import Array, PyTree
@@ -12,8 +11,17 @@ from omegaconf import MISSING
 from .utils import get_torch_weights_to_jax, save_to_hf
 
 
-@struct.dataclass
-class KVCache:
+class AttentionMask(NamedTuple):
+    q_segment_ids: Array
+    k_segment_ids: Array
+
+
+class RopeMatrix(NamedTuple):
+    sin: Array
+    cos: Array
+
+
+class KVCache(struct.PyTreeNode):
     k: Array
     v: Array
     length: Array
@@ -57,17 +65,7 @@ class BaseModel(abc.ABC, nn.Module):
         pass
 
     def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
-        params = dict(params)
-        stacked = params.pop("Block")
-        n_layers = jax.tree.leaves(stacked)[0].shape[0]
-        for i in range(n_layers):
-            params[f"Block_{i}"] = jax.tree.map(lambda p: jax.ShapeDtypeStruct(p.shape[1:], p.dtype), stacked)
-
-        params = get_torch_weights_to_jax(params, model_name, self.hf_mapping)
-
-        layers = [params.pop(f"Block_{i}") for i in range(n_layers)]
-        params["Block"] = jax.tree.map(lambda *xs: np.stack(xs), *layers)
-        return params
+        return get_torch_weights_to_jax(params, model_name, self.hf_mapping)
 
     def save_to_hf(self, path: str, params: PyTree, model_name: str) -> None:
         params = dict(params)

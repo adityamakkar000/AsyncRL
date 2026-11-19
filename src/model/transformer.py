@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from flax import linen as nn
 from jaxtyping import Array
 
-from .config import BaseModel, KVCache
+from .config import AttentionMask, BaseModel, KVCache, RopeMatrix
 from .layers import RematBlock, RMSNorm, RopeCorrection, gather_rope, no_correction, rope_tables
 
 
@@ -45,18 +45,16 @@ class Transformer(BaseModel):
 
         pos = jnp.arange(T)[None, :]
         shifted_pos = pos + t_start[:, None]
-        q_segment_ids = shifted_pos < sequence_lens[:, None]
-        kv_segment_ids = pos < sequence_lens[:, None]
-        masks = (q_segment_ids, kv_segment_ids)
+        masks = AttentionMask(
+            q_segment_ids=shifted_pos < sequence_lens[:, None],
+            k_segment_ids=pos < sequence_lens[:, None],
+        )
 
         sin_table, cos_table = rope_tables(
             self.sequence_len, self.head_dim, self.rope_base, self.rope_correction, dtype=self.activation_dtype
         )
-        rope_matrix = gather_rope(sin_table, cos_table, shifted_pos)
-
-        layer_cache = None
-        if kv_cache is not None:
-            layer_cache = kv_cache.replace(length=jnp.broadcast_to(kv_cache.length, (self.n_layers, B)))
+        sin, cos = gather_rope(sin_table, cos_table, shifted_pos)
+        rope_matrix = RopeMatrix(sin=sin, cos=cos)
 
         ScanBlock = nn.scan(
             RematBlock,
@@ -64,8 +62,9 @@ class Transformer(BaseModel):
             split_rngs={"params": True},
             in_axes=(nn.broadcast, nn.broadcast, nn.broadcast, 0),
             length=self.n_layers,
+            unroll=self.n_layers if kv_cache is not None else 1,
         )
-        x, out_cache = ScanBlock(
+        (x, out_cache), _ = ScanBlock(
             model_dim=self.model_dim,
             d_ff=self.d_ff,
             n_heads=self.n_heads,
@@ -75,10 +74,10 @@ class Transformer(BaseModel):
             qk_norm=self.qk_norm,
             rms_eps=self.rms_eps,
             name="Block",
-        )(x, sequence_lens, masks, rope_matrix, layer_cache)
+        )((x, kv_cache), sequence_lens, masks, rope_matrix, jnp.arange(self.n_layers, dtype=jnp.int32))
 
         if out_cache is not None:
-            out_cache = out_cache.replace(length=out_cache.length[0])
+            out_cache = out_cache.replace(length=kv_cache.length + 1 if T == 1 else sequence_lens)
 
         x = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)
 
