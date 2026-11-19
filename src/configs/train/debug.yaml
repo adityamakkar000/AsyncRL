@@ -21,11 +21,17 @@ eval_config:
         _target_: src.data.verifier.MathVerifier
       filters:
         - _target_: src.data.filters.PromptLengthFilter
-          max_length: 1024
+          max_length: 256
         - _target_: src.data.filters.EnglishFilter
       transforms:
         - _target_: src.data.transforms.RandomSample
           n: 16
+
+train_dataset_config:
+  filters:
+    - _target_: src.data.filters.PromptLengthFilter
+      max_length: 256
+    - _target_: src.data.filters.EnglishFilter
 
 grad_accum_steps: 1
 seed: 0
@@ -56,6 +62,7 @@ wandb_config:
 loss_config:
   inference_config:
     max_seq_len: 512
+    warmup_seq_len: 256
     max_decode_batch_size: 16
     group_size: 16
     temperature: 1.0
