@@ -73,12 +73,7 @@ class GroupedQueryAttention(nn.Module):
             out = flash_attention_naive(q, k, v, masks, sm_scale)
             if not train:
                 layer, cache = kv_cache
-                k_cache, v_cache = jax.tree.map(
-                    lambda c, val: jax.lax.dynamic_update_slice(c, val[None].astype(c.dtype), (layer, 0, 0, 0, 0)),
-                    (cache.k, cache.v),
-                    (k, v),
-                )
-                out_cache = cache.replace(k=k_cache, v=v_cache)
+                out_cache = cache.prefill(layer, k, v)
         else:
             assert T == 1, f"gqa should only be called by decode got {T} shape, full shape{x.shape}"
             out, out_cache = decode_ragged_attention(q, k, v, kv_cache, sm_scale=sm_scale)

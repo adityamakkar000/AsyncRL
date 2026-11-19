@@ -32,6 +32,17 @@ def act_constrain(x: PyTree[Array], shard: bool = True, spec: P = ACT_SPEC) -> P
     return jax.lax.with_sharding_constraint(x, spec) if shard else x
 
 
+def quantize(x: Array) -> tuple[Array, Array]:
+    amax = jnp.max(jnp.abs(x), axis=-1, keepdims=True)
+    scale = (amax / 127.0 + jnp.finfo(x.dtype).tiny).astype(jnp.bfloat16)
+    q = jnp.clip(jnp.round(x / scale), -127, 127).astype(jnp.int8)
+    return q, scale.squeeze(axis=-1)
+
+
+def dequantize(q: Array, scale: Array, dtype: jnp.dtype = jnp.bfloat16) -> Array:
+    return q.astype(dtype) * scale[..., None].astype(dtype)
+
+
 def convert_dtype(dtype_str: str) -> jnp.dtype:
     match dtype_str:
         case "float32":
@@ -40,6 +51,8 @@ def convert_dtype(dtype_str: str) -> jnp.dtype:
             return jnp.bfloat16
         case "float16":
             return jnp.float16
+        case "int8":
+            return jnp.int8
         case _:
             raise ValueError(f"Unsupported dtype string: {dtype_str}")
 

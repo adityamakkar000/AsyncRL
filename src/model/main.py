@@ -12,7 +12,7 @@ from optax import GradientTransformation
 from stax import HFModelBase
 from stax import staxLogger as logger
 
-from .config import BaseModel, KVCache, ModelConfig
+from .config import BaseModel, Int8Array, KVCache, ModelConfig
 from .utils import convert_dtype, fused_linear_selection, get_lm_head_weights
 
 shardingType = PyTree[Sharding] | None
@@ -65,25 +65,26 @@ class Model(HFModelBase):
             raise ValueError(f"Requested KV cache length {length} exceeds maximum of {self.sequence_len + 1024}")
 
         n_layers, n_kv_heads, head_dim = self.model.kv_shape
+        cache_dtype = convert_dtype(dtype)
 
         @jax.jit
         def _init():
-            def zeros(out_sharding):
-                return jnp.zeros(
-                    (
-                        n_layers,
-                        batch_size,
-                        n_kv_heads,
-                        length,
-                        head_dim,
-                    ),
-                    dtype=convert_dtype(dtype),
-                    out_sharding=out_sharding,
-                )
+            def zeros(out_sharding, dtype=cache_dtype, shape=(n_layers, batch_size, n_kv_heads, length, head_dim)):
+                return jnp.zeros(shape, dtype=dtype, out_sharding=out_sharding)
+
+            def cache(out_sharding):
+                if cache_dtype == jnp.int8:
+                    return Int8Array(
+                        value=zeros(out_sharding),
+                        scale=zeros(
+                            out_sharding, dtype=jnp.bfloat16, shape=(n_layers, batch_size, n_kv_heads, length)
+                        ),
+                    )
+                return zeros(out_sharding)
 
             return KVCache(
-                k=zeros(sharding.k),
-                v=zeros(sharding.v),
+                k=cache(sharding.k),
+                v=cache(sharding.v),
                 length=jnp.zeros((batch_size,), dtype=jnp.int32, out_sharding=sharding.length),  # type: ignore
             )
 

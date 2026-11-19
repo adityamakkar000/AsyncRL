@@ -30,6 +30,7 @@ from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 
 from src.model import KVCache
+from src.model.config import Int8Array
 
 DEFAULT_MASK_VALUE = -0.7 * float(jnp.finfo(jnp.dtype("float32")).max)
 NUM_LANES = 128
@@ -1460,6 +1461,8 @@ def ragged_decode_kernel(
     # k_cache_ref [block_b_size, kv_heads, kv_seq_len, head_dim]
     # v_cache_ref [block_b_size, kv_heads, kv_seq_len, head_dim]
 
+    is_quantized = isinstance(k_cache_ref, Int8Array)
+
     min_val = jnp.finfo(q_ref.dtype).min
     b, i = pl.program_id(0), pl.program_id(1)
 
@@ -1469,31 +1472,50 @@ def ragged_decode_kernel(
     is_last_block = (i == max_blocks)
 
 
-    def create_kv_read_write_dmas(batch_idx, kv_len): 
+    def create_kv_read_write_dmas(batch_idx, kv_len) -> list[tuple[tuple[Any], tuple[Any]]]:
         
         global_batch_idx = b * block_b + batch_idx
         start = pl.multiple_of((kv_len // align) * align, align)
+        dmas = []
 
-        for scratch_chunk_ref, hbm_ref, sem_read, sem_write in (
-            (k_chunk_ref, k_cache_hbm, sems.at[0, 0, batch_idx], sems.at[1, 0, batch_idx]),
-            (v_chunk_ref, v_cache_hbm, sems.at[0, 1, batch_idx], sems.at[1, 1, batch_idx]),
+        for scratch_chunk_ref, hbm_ref, sem_ref in (
+            (k_chunk_ref, k_cache_hbm, sems.at[0] ),
+            (v_chunk_ref, v_cache_hbm, sems.at[1] ),
         ):
 
-            vmem_chunk = scratch_chunk_ref.at[batch_idx] # [kv_heads, block_kv, d]
-            hbm_chunk = hbm_ref.at[layer_ref[0], global_batch_idx, :, pl.ds(start, align), :]
+            def slice(sc, hbm, sem):
 
-            read_dma = pltpu.make_async_copy(
-                hbm_chunk, 
-                vmem_chunk, 
-                sem_read
-            )
-            write_dma = pltpu.make_async_copy(
-                vmem_chunk, 
-                hbm_chunk,
-                sem_write
+                vmem_chunk = sc.at[batch_idx]
+                hbm_chunk = hbm.at[layer_ref[0], global_batch_idx, :, pl.ds(start, align)]
+
+                read_dma = pltpu.make_async_copy(
+                    vmem_chunk, 
+                    hbm_chunk, 
+                    sem.at[0, batch_idx]
+                )
+
+                write_dma = pltpu.make_async_copy(
+                    hbm_chunk, 
+                    vmem_chunk, 
+                    sem.at[1, batch_idx]
+                )
+
+                return (read_dma, write_dma)
+
+            out = jax.tree.map(slice, scratch_chunk_ref, hbm_ref, sem_ref)
+
+            read = [] 
+            write = [] 
+
+            for r,w in out:
+                read.append(r)
+                write.append(w)
+
+            dmas.append(
+                (tuple(read), tuple(write))
             )
 
-            yield read_dma, write_dma
+        return dmas 
 
     @pl.when(i == 0)
     def _():
@@ -1509,18 +1531,17 @@ def ragged_decode_kernel(
 
     def loop_fn(idx, _):
 
-
         batch_idx = b * block_b + idx
         kv_len =  kv_lengths[batch_idx]
         should_compute =  seq_start <  kv_len
 
-        dmas = list(create_kv_read_write_dmas(idx, kv_len))
+        dmas = create_kv_read_write_dmas(idx, kv_len)
 
         @pl.when(i == 0)
         def _():
 
             for read_dma, _write_dma in dmas:
-                read_dma.start()
+                jax.tree.map(lambda x: x.start(),read_dma)
 
         @pl.when(i == max_blocks // 2)
         def _():
@@ -1535,19 +1556,25 @@ def ragged_decode_kernel(
                     (v_ref, v_chunk_ref),
                 )
             ):
-                read_dma.wait() 
+
+
+                jax.tree.map(lambda x: x.wait(),read_dma)
 
                 # TODO: quantize here if needed 
                 chunk = scratch_chunk_ref.at[idx]
                 new = new_ref[idx][:, None, :].astype(chunk.dtype) # [kv_heads, 1, d]
                 chunk[...] = jnp.where(row, new, chunk[...])
 
-                write_dma.start()
+                jax.tree.map(lambda x: x.start(),write_dma)
+
 
         @pl.when(should_compute)
         def _():
 
             q = q_ref[idx]  # [kv_heads, groups, head_dim]
+
+            #TODO: de quantize here if needed
+
             k = k_cache_ref[idx].astype(q.dtype)  # [heads, block_kv_size, head_dim]
             v = v_cache_ref[idx].astype(q.dtype)  # [heads, block_kv_size, head_dim]
 
@@ -1578,11 +1605,11 @@ def ragged_decode_kernel(
         def _():
 
             for _read_dma, write_dma in dmas:
-                write_dma.wait()
+                jax.tree.map(lambda x: x.wait(),write_dma)
 
 
     # loop over every batch to only compute tiles that matter
-    jax.lax.fori_loop(0, block_b, loop_fn, init_val=None)
+    jax.lax.fori_loop(0, block_b, body_fun=loop_fn, init_val=None)
 
     @pl.when(is_last_block)
     def _():
@@ -1617,7 +1644,8 @@ def _decode_ragged_attention(
     q = rearrange(q * sm_scale, "b (h g) 1 d -> b h g d", h=h_kv)
     k = k[..., 0, :] # (b, h, d)
     v = v[..., 0, :] # (b, h, d)
-    align = 8 * (4 // jnp.dtype(kv_cache.k.dtype).itemsize)
+
+    align = 8 * (4 // kv_cache.dtype.itemsize)
 
     assert block_kv % align == 0, "kv block size should be align tile size"
 
@@ -1625,10 +1653,36 @@ def _decode_ragged_attention(
         last_end = kv_lengths[b * block_b]
         for j in range(1, block_b):
             last_end = jnp.maximum(last_end, kv_lengths[b*block_b + j])
-        return jnp.minimum(i, last_end // block_kv)
+        return jnp.minimum(i, (last_end - 1) // block_kv)
+
+
+    def kv_tree(value, scale):
+        return Int8Array(value, scale) if kv_cache.is_quantized else value
 
     def kv_cache_index(b, i, kv_lengths, layer):
         return (layer[0], b, 0, kv_block(b, i, kv_lengths), 0)
+
+    def kv_scale_index(b, i, kv_lengths, layer):
+        return (layer[0], b, 0, kv_block(b, i, kv_lengths))
+
+    def make_kv_block_spec():
+        return [kv_tree(
+            pl.BlockSpec((None, block_b, h_kv, block_kv, d), kv_cache_index),
+            pl.BlockSpec((None, block_b, h_kv, block_kv), kv_scale_index),
+        )] * 2
+
+    def make_kv_scratch_space():
+
+        sems = pltpu.SemaphoreType.DMA((2,2,block_b))
+        return [kv_tree(
+            pltpu.VMEM((block_b, h_kv, align, d), dtype=kv_cache.dtype),
+            pltpu.VMEM((block_b, h_kv, NUM_LANES), dtype=jnp.bfloat16),
+        )] * 2 + [kv_tree(sems, sems)]
+
+
+    def make_kv_hbm_spec():
+        any_spec = pl.BlockSpec(memory_space=pl.MemorySpace.ANY)
+        return [kv_tree(any_spec, any_spec)] * 2
 
     grid_spec = pltpu.PrefetchScalarGridSpec(
         num_scalar_prefetch=2,
@@ -1637,13 +1691,11 @@ def _decode_ragged_attention(
             pl.BlockSpec((block_b, h_kv, h // h_kv, d), lambda b, i, *_: (b, 0, 0, 0)),  # q
             pl.BlockSpec((block_b, h_kv, d), lambda b, i, *_: (b, 0, 0)),  # k
             pl.BlockSpec((block_b, h_kv, d), lambda b, i, *_: (b, 0, 0)),  # v
-            pl.BlockSpec((None, block_b, h_kv, block_kv, d), kv_cache_index),
-            pl.BlockSpec((None, block_b, h_kv, block_kv, d), kv_cache_index),
+            *make_kv_block_spec(),
         ],
         out_specs=[
             pl.BlockSpec((block_b, h_kv, h // h_kv, d), lambda b, i, *_: (b, 0, 0, 0)),
-            pl.BlockSpec(memory_space=pl.MemorySpace.ANY),
-            pl.BlockSpec(memory_space=pl.MemorySpace.ANY)
+            *make_kv_hbm_spec(),
         ],
         scratch_shapes=[
             pltpu.VMEM((block_b, h_kv, h // h_kv, d), dtype=jnp.float32), # output accum
@@ -1651,9 +1703,7 @@ def _decode_ragged_attention(
             # but we will only use the 0th index
             pltpu.VMEM((block_b, h_kv, h // h_kv, NUM_LANES), dtype=jnp.float32), # running sum
             pltpu.VMEM((block_b, h_kv, h // h_kv, NUM_LANES), dtype=jnp.float32), # max logit
-            pltpu.VMEM((block_b, h_kv, align, d), dtype=kv_cache.k.dtype),
-            pltpu.VMEM((block_b, h_kv, align, d), dtype=kv_cache.v.dtype),
-            pltpu.SemaphoreType.DMA((2, 2, block_b)),
+            *make_kv_scratch_space(), 
         ],
     )
 
@@ -1665,12 +1715,12 @@ def _decode_ragged_attention(
         attn_fn,
         out_shape=[
             jax.ShapeDtypeStruct(q.shape, q.dtype),
-            jax.ShapeDtypeStruct(kv_cache.k.shape, kv_cache.k.dtype),
-            jax.ShapeDtypeStruct(kv_cache.v.shape, kv_cache.v.dtype),
+            kv_cache.shape_dtype, 
+            kv_cache.shape_dtype
         ],
         grid_spec=grid_spec,
         compiler_params=pltpu.CompilerParams(dimension_semantics=("parallel", "arbitrary")),
-        input_output_aliases={5: 1, 6: 2}
+        input_output_aliases={5: 1, 6: 2, 7: 3, 8: 4} if kv_cache.is_quantized else {5: 1, 6: 2},
     )(kv_lengths, layer[None], q, k, v, kv_cache.k, kv_cache.v)
 
     out_cache = kv_cache.replace(k=k_cache, v=v_cache)

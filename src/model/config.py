@@ -3,12 +3,38 @@ from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 import jax
+import jax.numpy as jnp
 from flax import linen as nn
 from flax import struct
 from jaxtyping import Array, PyTree
 from omegaconf import MISSING
 
-from .utils import get_torch_weights_to_jax, save_to_hf
+from .utils import dequantize, get_torch_weights_to_jax, quantize, save_to_hf
+
+
+@struct.dataclass
+class Int8Array:
+    value: jax.Array
+    scale: jax.Array
+
+    @classmethod
+    def quantize(cls, x: jax.Array) -> "Int8Array":
+        return cls(*quantize(x))
+
+    def dequantize(self, dtype: jnp.dtype = jnp.bfloat16) -> jax.Array:
+        return dequantize(self.value, self.scale, dtype)
+
+    @property
+    def dtype(self) -> jnp.dtype:
+        return jnp.dtype(jnp.int8)
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return self.value.shape
+
+    @property
+    def shape_and_dtype(self) -> PyTree[jax.ShapeDtypeStruct]:
+        return jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype), (self))
 
 
 class AttentionMask(NamedTuple):
@@ -22,13 +48,38 @@ class RopeMatrix(NamedTuple):
 
 
 class KVCache(struct.PyTreeNode):
-    k: Array
-    v: Array
+    k: Array | Int8Array  # [l,b,h,t,d]
+    v: Array | Int8Array
     length: Array
 
     @property
     def max_len(self) -> int:
         return self.k.shape[-2]
+
+    @property
+    def is_quantized(self) -> bool:
+        return isinstance(self.k, Int8Array)
+
+    @property
+    def dtype(self) -> jnp.dtype:
+        return self.k.dtype
+
+    @property
+    def shape_dtype(self):
+        if isinstance(self.k, Int8Array):
+            return self.k.shape_and_dtype
+        return jax.ShapeDtypeStruct(self.k.shape, self.dtype)
+
+    def prefill(self, layer: Array, k: Array, v: Array) -> "KVCache":
+        def _update_cache(cache: Array | Int8Array, new: Array) -> Array | Int8Array:
+            update = Int8Array.quantize(new) if isinstance(cache, Int8Array) else new
+            return jax.tree.map(
+                lambda c, n: jax.lax.dynamic_update_slice(c, n[None].astype(c.dtype), (layer,) + (0,) * (c.ndim - 1)),
+                cache,
+                update,
+            )
+
+        return self.replace(k=_update_cache(self.k, k), v=_update_cache(self.v, v))
 
 
 @dataclass
