@@ -5,58 +5,62 @@ TPU_SERVER_URL="http://${TPU_SERVER}:8000"
 
 server_ls() {
   command -v jq >/dev/null 2>&1 || {
-    echo "server_jobs: need jq installed for table output (brew install jq)" >&2
+    echo "server_ls: need jq installed for table output (brew install jq)" >&2
     return 1
   }
-  local json
-  json=$(curl -sS -f "${TPU_SERVER_URL%/}/jobs") || return
-
-  if [ -t 1 ]; then
-    local max_cmd_len=30
-    echo "$json" | jq -r --arg max_len "$max_cmd_len" '
-      ["NODE_ID", "TPU_STATUS", "JOB_STATUS", "ZONE", "TPU_TYPE", "RUNTIME", "CMD", "RETRIES", "LAUNCHED_BY"],
-      (.[] | [
-        .node_id,
-        .tpu_status,
-        .job_status,
-        .zone,
-        .tpu_type,
-        .runtime,
-        (.cmd | gsub("\t"; " ") | gsub("\n"; " ") | if (length > ($max_len|tonumber)) then .[0:($max_len|tonumber)] + "…" else . end),
-        (.retries_left | tostring),
-        (.launched_by // "")
-      ])
-      | @tsv
-    ' | column -t -s $'\t'
-  else
-    echo "$json" | jq -r '
-      ["NODE_ID", "TPU_STATUS", "JOB_STATUS", "ZONE", "TPU_TYPE", "RUNTIME", "CMD", "RETRIES", "LAUNCHED_BY"],
-      (.[] | [
-        .node_id,
-        .tpu_status,
-        .job_status,
-        .zone,
-        .tpu_type,
-        .runtime,
-        (.cmd | gsub("\t"; " ") | gsub("\n"; " ")),
-        (.retries_left | tostring),
-        (.launched_by // "")
-      ])
-      | @tsv
-    ' | column -t -s $'\t'
-  fi
+  local json max_msg=60
+  json=$(curl -sS -f --max-time 10 "${TPU_SERVER_URL%/}/jobs") || return
+  [ -t 1 ] || max_msg=100000
+  echo "$json" | jq -r --argjson now "$(date +%s)" --argjson max "$max_msg" '
+    def dur: ($now - .) | floor | if . >= 86400 then "\(./86400|floor)d\((.%86400)/3600|floor)h"
+      elif . >= 3600 then "\(./3600|floor)h\((.%3600)/60|floor)m" elif . >= 60 then "\(./60|floor)m" else "\(.)s" end;
+    ["NODE_ID", "STATE", "FOR", "TPU", "TYPE", "ZONE", "ATTEMPTS", "PREEMPT", "RETRIES", "BY", "LATEST"],
+    (.[] | [
+      .node_id,
+      .state,
+      (.state_since | dur),
+      .tpu_status,
+      .tpu_type,
+      .zone,
+      (.attempts | tostring),
+      (.preemptions | tostring),
+      (.retries_left | tostring),
+      (.launched_by // ""),
+      (.message | gsub("[\t\n]"; " ") | if length > $max then .[0:$max] + "…" else . end)
+    ])
+    | @tsv
+  ' | column -t -s $'\t'
+  echo "dashboard: ${TPU_SERVER_URL%/}/"
 }
 
-server_delete() {
+server_job() {
   local node_id="$1"
   if [[ -z "$node_id" ]]; then
-    echo "usage: server_delete <node_id>" >&2
+    echo "usage: server_job <node_id>" >&2
     return 1
   fi
   local enc
   enc=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$node_id")
-  curl -sS -f -X DELETE "${TPU_SERVER_URL%/}/jobs/${enc}"
-  echo
+  curl -sS -f --max-time 10 "${TPU_SERVER_URL%/}/jobs/${enc}" | jq -r '
+    "\(.node_id)  \(.state)  tpu=\(.tpu_status)  \(.tpu_type) \(.zone)  attempts=\(.attempts) preempted=\(.preemptions) retries_left=\(.retries_left)",
+    "cmd: \(.cmd)",
+    "logs: \(.log_dir)",
+    "",
+    (.events[] | "\(.[0] | localtime | strftime("%m-%d %H:%M:%S"))  \(.[1] | .[0:15] + (" " * (15 - length)))  \(.[2])\(if (.[3] // 1) > 1 then " (x\(.[3]))" else "" end)")
+  '
+}
+
+server_delete() {
+  local force=false
+  if [[ "$1" == "--force" ]]; then force=true; shift; fi
+  local node_id="$1"
+  if [[ -z "$node_id" ]]; then
+    echo "usage: server_delete [--force] <node_id>" >&2
+    return 1
+  fi
+  local enc
+  enc=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$node_id")
+  curl -sS -f -X DELETE "${TPU_SERVER_URL%/}/jobs/${enc}?force=${force}" | jq -r '"\(.node_id): \(.action)"'
 }
 
 server_logs() {

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TPU Jobs</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e4e4df;
+  --run: #1f8a4c; --wait: #b7791f; --setup: #2b6cb0; --bad: #c53030; --done: #4a5568; --pre: #9b2c9b;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151514; --panel: #1e1e1c; --text: #ecece8; --muted: #9a9a93; --line: #2f2f2c;
+    --run: #48bb78; --wait: #ecc94b; --setup: #63b3ed; --bad: #fc8181; --done: #a0aec0; --pre: #d6bcfa; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 14px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; }
+h1 { font-size: 16px; margin: 0 8px 0 0; }
+.counts { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill { padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid currentColor; cursor: pointer; user-select: none; }
+.pill.off { opacity: .35; }
+input { margin-left: auto; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); min-width: 200px; }
+.updated { color: var(--muted); font-size: 12px; }
+main { padding: 12px 16px; }
+.table { width: 100%; overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; }
+tr.job { cursor: pointer; }
+tr.job:hover { background: var(--bg); }
+td.msg { white-space: normal; color: var(--muted); max-width: 420px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.state { font-weight: 700; font-size: 12px; }
+.RUNNING { color: var(--run); } .WAITING_FOR_TPU, .QUEUED { color: var(--wait); } .SETTING_UP { color: var(--setup); }
+.FAILED { color: var(--bad); } .FINISHED, .CANCELLED { color: var(--done); } .PREEMPTED, .RELEASING { color: var(--pre); }
+tr.detail td { background: var(--bg); white-space: normal; }
+.events { max-height: 320px; overflow-y: auto; margin: 6px 0; }
+.ev { display: grid; grid-template-columns: 90px 140px 1fr; gap: 8px; padding: 2px 0; }
+.ev .t { color: var(--muted); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.actions a, .actions button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); text-decoration: none; cursor: pointer; }
+.actions button.danger { color: var(--bad); border-color: var(--bad); }
+.cmd { color: var(--muted); word-break: break-all; }
+.empty { padding: 24px; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>TPU Jobs</h1>
+  <div class="counts" id="counts"></div>
+  <input id="filter" placeholder="filter by name, user, type…" autocomplete="off">
+  <span class="updated" id="updated"></span>
+</header>
+<main><div class="table"><table>
+  <thead><tr><th>Job</th><th>State</th><th>For</th><th>TPU</th><th>Type</th><th>Zone</th><th>Attempts</th><th>Preempted</th><th>Retries</th><th>By</th><th>Latest</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table></div></main>
+<script>
+const ORDER = ["RUNNING","SETTING_UP","WAITING_FOR_TPU","QUEUED","PREEMPTED","RELEASING","FAILED","FINISHED","CANCELLED"];
+let jobs = [], open = null, hidden = new Set(), detail = null;
+const el = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const enc = encodeURIComponent;
+function ago(t) {
+  let s = Math.max(0, Math.floor(Date.now() / 1000 - t));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d${h}h` : h ? `${h}h${m}m` : m ? `${m}m` : `${s}s`;
+}
+const clock = t => new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"});
+async function refresh() {
+  try {
+    jobs = await (await fetch("/jobs")).json();
+    if (open) {
+      detail = await (await fetch(`/jobs/${enc(open)}`)).json().catch(() => null);
+      if (detail) detail.ranks = await (await fetch(`/logs/${enc(open)}/ranks`)).json().catch(() => []);
+    }
+    el("updated").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) { el("updated").textContent = "server unreachable"; }
+  render();
+}
+function render() {
+  const counts = {};
+  jobs.forEach(j => counts[j.state] = (counts[j.state] || 0) + 1);
+  el("counts").innerHTML = ORDER.filter(s => counts[s]).map(s =>
+    `<span class="pill ${s} ${hidden.has(s) ? "off" : ""}" data-state="${s}">${s.replaceAll("_", " ").toLowerCase()} ${counts[s]}</span>`).join("");
+  const q = el("filter").value.toLowerCase();
+  const shown = jobs.filter(j => !hidden.has(j.state) && (!q || [j.node_id, j.launched_by, j.tpu_type, j.zone, j.state, j.cmd].join(" ").toLowerCase().includes(q)));
+  if (!shown.length) { el("rows").innerHTML = `<tr><td colspan="11" class="empty">${jobs.length ? "no jobs match" : "no jobs"}</td></tr>`; return; }
+  el("rows").innerHTML = shown.map(j => {
+    let row = `<tr class="job" data-id="${esc(j.node_id)}">
+      <td class="mono">${esc(j.node_id)}</td><td class="state ${j.state}">${j.state.replaceAll("_", " ")}</td>
+      <td>${ago(j.state_since)}</td><td class="mono">${esc(j.tpu_status)}</td><td>${esc(j.tpu_type)}</td><td>${esc(j.zone)}</td>
+      <td>${j.attempts}</td><td>${j.preemptions}</td><td>${j.retries_left}</td><td>${esc(j.launched_by)}</td><td class="msg">${esc(j.message)}</td></tr>`;
+    if (open === j.node_id && detail) {
+      const evs = detail.events.slice().reverse().map(([t, s, m, n]) =>
+        `<div class="ev"><span class="t mono">${clock(t)}</span><span class="state ${s}">${s.replaceAll("_", " ")}</span><span>${esc(m)}${n > 1 ? ` <b>×${n}</b>` : ""}</span></div>`).join("");
+      const terminal = ["FINISHED", "FAILED", "CANCELLED"].includes(j.state);
+      row += `<tr class="detail"><td colspan="11">
+        <div class="cmd mono">${esc(j.cmd)}</div>
+        <div class="events">${evs}</div>
+        <div class="actions">
+          <a href="/view/${enc(j.node_id)}" target="_blank">mesh log</a>
+          ${(Array.isArray(detail.ranks) ? detail.ranks : []).map(f => f.match(/^w(\d+)\.txt$/)).filter(Boolean).map(m =>
+            `<a href="/view/${enc(j.node_id)}?rank=${m[1]}" target="_blank">host ${m[1]}</a>`).join("")}
+          <button class="danger" data-act="${terminal ? "remove" : "cancel"}" data-id="${esc(j.node_id)}">${terminal ? "remove from list" : "cancel + delete TPU"}</button>
+          ${j.state === "RELEASING" ? `<button class="danger" data-act="force" data-id="${esc(j.node_id)}">force remove</button>` : ""}
+        </div></td></tr>`;
+    }
+    return row;
+  }).join("");
+}
+el("rows").addEventListener("click", async e => {
+  const btn = e.target.closest("button");
+  if (btn) {
+    const id = btn.dataset.id;
+    if (btn.dataset.act === "cancel" && !confirm(`Cancel ${id} and delete its TPU?`)) return;
+    if (btn.dataset.act === "force" && !confirm(`Drop ${id} from the server? Its TPU may keep running and must be deleted by hand.`)) return;
+    await fetch(`/jobs/${enc(id)}${btn.dataset.act === "force" ? "?force=true" : ""}`, {method: "DELETE"});
+    return refresh();
+  }
+  if (e.target.closest("a")) return;
+  const tr = e.target.closest("tr.job");
+  if (!tr) return;
+  open = open === tr.dataset.id ? null : tr.dataset.id;
+  detail = null;
+  refresh();
+});
+el("counts").addEventListener("click", e => {
+  const s = e.target.dataset.state;
+  if (!s) return;
+  hidden.has(s) ? hidden.delete(s) : hidden.add(s);
+  render();
+});
+el("filter").addEventListener("input", render);
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

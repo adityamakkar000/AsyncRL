@@ -54,7 +54,7 @@ keep_every: 100
 log_generations_every_n_steps: 100
 
 wandb_config: 
-  project: "BigRUn"
+  project: "CISPOScaling"
   notes: null
   tags: null
 

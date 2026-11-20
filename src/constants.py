@@ -1,6 +1,7 @@
 import os
 
-GS_BUCKET = "gs://arl-us-east-5"
+# GS_BUCKET = "gs://arl-us-east-5"
+GS_BUCKET = "gs://arl-us-central-1"
 RUN_PATH = f"{GS_BUCKET}/runs"
 
 HF_CHECKPOINT_PATH = os.path.expanduser("~/hf_params")

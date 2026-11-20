@@ -17,6 +17,5 @@ prerun:
   - uv venv --clear
   - source .venv/bin/activate
   - source .env
-  - chmod 600 ~/.netrc
-  - uv sync --extra eval
+  - uv sync
   - hf auth login --token ${HF_TOKEN}
