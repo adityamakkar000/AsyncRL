@@ -50,8 +50,8 @@ class InferenceState(struct.PyTreeNode):
         return InferenceState(
             next_token=slice_arg(self.next_token),
             kv_cache=KVCache(
-                k=slice_arg(self.kv_cache.k, axis=1),
-                v=slice_arg(self.kv_cache.v, axis=1),
+                k=jax.tree.map(lambda x: slice_arg(x, axis=1), self.kv_cache.k),
+                v=jax.tree.map(lambda x: slice_arg(x, axis=1), self.kv_cache.v),
                 length=slice_arg(self.kv_cache.length),
             ),
             key=self.key,
@@ -73,8 +73,8 @@ class InferenceState(struct.PyTreeNode):
         return InferenceState(
             next_token=replace(self.next_token, new_batch.next_token),
             kv_cache=KVCache(
-                k=replace(self.kv_cache.k, new_batch.kv_cache.k, axis=1),
-                v=replace(self.kv_cache.v, new_batch.kv_cache.v, axis=1),
+                k=jax.tree.map(lambda x, y: replace(x, y, axis=1), self.kv_cache.k, new_batch.kv_cache.k),
+                v=jax.tree.map(lambda x, y: replace(x, y, axis=1), self.kv_cache.v, new_batch.kv_cache.v),
                 length=replace(self.kv_cache.length, new_batch.kv_cache.length),
             ),
             key=self.key,

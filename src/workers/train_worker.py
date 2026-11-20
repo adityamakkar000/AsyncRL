@@ -167,6 +167,7 @@ class AsyncTrainerWorker(Worker):
             writer_kwargs: dict[str, Any] = {
                 "metrics_to_print": self.config.metrics_to_log,
                 "mesh": self.async_options.train_mesh,
+                "lag_one_step": False,  # training blocks until params are done so log right away
             }
             if self.writer_id is not None:
                 writer_kwargs["run_id"] = self.writer_id
