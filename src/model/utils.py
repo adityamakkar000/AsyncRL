@@ -15,6 +15,8 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 from stax.sharding.main import AXIS_NAMES_ENUM
 
+from src.constants import HF_CHECKPOINT_PATH
+
 DP = AXIS_NAMES_ENUM.DP.value
 FSDP = AXIS_NAMES_ENUM.FSDP.value
 CP_ULYSSES = AXIS_NAMES_ENUM.CP_ULYSSES.value
@@ -58,7 +60,7 @@ def get_jax_key(main_key: str, hf_mapping) -> str | None:
 
 def get_torch_weights_to_jax(params: PyTree, name: str, hf_mapping) -> PyTree:
     """Load Hugging Face model weights into a JAX PyTree of parameters."""
-    path = os.path.expanduser(f"~/model/{name}")
+    path = os.path.join(HF_CHECKPOINT_PATH, name)
     download_hf_weights(name, path)
     torch_hf_params = {}
 
@@ -143,7 +145,7 @@ def convert_pytree(params: PyTree, reverse_hf_mapping) -> dict[str, torch.Tensor
 
 
 def save_to_hf(dir_path: str, params: PyTree, hf_model_name: str, reverse_hf_mapping) -> None:
-    hf_path = os.path.expanduser(f"~/model/{hf_model_name}")
+    hf_path = os.path.join(HF_CHECKPOINT_PATH, hf_model_name)
     download_hf_weights(hf_model_name, hf_path)
 
     if not os.path.exists(dir_path):

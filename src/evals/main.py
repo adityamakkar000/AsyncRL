@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 
 import gcsfs
 import lm_eval
@@ -9,7 +10,7 @@ from lm_eval.tasks import TaskManager
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-from src.constants import GS_BUCKET, HF_CHECKPOINT_PATH
+from src.constants import HF_CHECKPOINT_PATH, RUN_PATH
 from src.evals.constants import SERVED_MODEL_NAME
 from src.model import Model
 from src.vllm_engine.main import vLLMEngine
@@ -29,7 +30,7 @@ class EvalRunner:
         self.vllm_engine = vLLMEngine(self.vllm_config, max_workers=100, debug=config.debug)
 
     def setup_model(self):
-        self.gs_path = f"{GS_BUCKET}/runs/{self.model_config.model_name}"
+        self.gs_path = f"{RUN_PATH}/{self.model_config.model_name}"
         config = f"{self.gs_path}/config.json"
 
         logger.info(f"Loading model config from {config}...")
@@ -107,6 +108,7 @@ class EvalRunner:
 
     def cleanup(self):
         self.vllm_engine.cleanup()
+        shutil.rmtree(HF_CHECKPOINT_PATH, ignore_errors=True)
 
     def run_evaluation(self):
         self.setup_model()

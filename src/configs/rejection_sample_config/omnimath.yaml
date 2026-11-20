@@ -6,7 +6,7 @@ defaults:
 datasets:
   - "omnimath" 
 gcs_paths:
-  - "gs://arl-experiments/data/rejection_samples/omnimath_samples.jsonl"
+  - "gs://arl-us-east-5/data/rejection_samples/omnimath_samples.jsonl"
 num_samples: -1
 pass_at: 32
 max_workers: 200

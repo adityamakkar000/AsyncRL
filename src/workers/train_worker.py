@@ -23,7 +23,7 @@ from stax.utils import metrics_all_reduce
 from stax.writer import TableMetrics
 from tqdm import tqdm
 
-from src.constants import CHECKPOINTS, GS_BUCKET, PROFILE
+from src.constants import RUN_PATH
 from src.data import DataLoader, InferenceRollout, RLBatch
 from src.model import Model
 
@@ -71,8 +71,7 @@ class AsyncTrainerWorker(Worker):
                 self.log_info("Saving intial checkpoint ...")
                 self.save_checkpoint(step=0)
                 dict_config = json.dumps(OmegaConf.to_container(self.config))
-                config_path = f"{self.gs_path}/config.json"
-                write_to_gcs(config_path, dict_config)
+                write_to_gcs(self.config_path, dict_config)
 
             self.sync_train_workers("Trainer initialization")
 
@@ -147,7 +146,10 @@ class AsyncTrainerWorker(Worker):
         self.worker_rank = stax.get_rank()
         self.n_hosts = jax.process_count()
         self.n_devices = jax.device_count()
-        self.gs_path = f"{GS_BUCKET}/runs/{self.config.experiment_name}"
+        gs_path = f"{RUN_PATH}/{self.config.experiment_name}"
+        self.checkpoint_path = f"{gs_path}/checkpoints"
+        self.profile_path = f"{gs_path}/profiles"
+        self.config_path = f"{gs_path}/config.json"
 
         self.weight_iteration = 0
         self.local_mesh = jax.make_mesh(
@@ -317,11 +319,10 @@ class AsyncTrainerWorker(Worker):
 
     @partial(setup, component="checkpointer")
     def _setup_checkpointer(self):
-        path = f"{self.gs_path}/{CHECKPOINTS}/"
         self.log_info(f"rank: {stax.get_rank()}")
 
         self.checkpointer = stax.OldCheckpointer(
-            output_dir=path,
+            output_dir=self.checkpoint_path,
             max_to_keep=self.config.max_checkpoints_to_keep,
             # only allow train workers to write checkpoints
             train_mesh=self.async_options.train_mesh,
@@ -557,7 +558,7 @@ class AsyncTrainerWorker(Worker):
             )
 
             if profile:
-                trace_path = f"{self.gs_path}/{PROFILE}/step_{self.global_step}"
+                trace_path = f"{self.profile_path}/step_{self.global_step}"
                 out = stax.get_perf_func(
                     trace_path,
                     self.train_fn,  # type: ignore

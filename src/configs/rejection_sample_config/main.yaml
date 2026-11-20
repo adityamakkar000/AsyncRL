@@ -6,7 +6,7 @@ defaults:
 datasets:
   - "aime" 
 gcs_paths:
-  - "gs://arl-experiments/data/rejection_samples/aime_2025_10_2samples.jsonl"
+  - "gs://arl-us-east-5/data/rejection_samples/aime_2025_10_2samples.jsonl"
 num_samples: -1
 pass_at: 10
 max_workers: 200

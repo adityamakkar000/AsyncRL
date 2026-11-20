@@ -1,11 +1,9 @@
 import os
 
-GS_BUCKET = "gs://arl-experiments"
-CHECKPOINTS = "checkpoints"
-DATA = "data"
-PROFILE = "profile"
+GS_BUCKET = "gs://arl-us-east-5"
+RUN_PATH = f"{GS_BUCKET}/runs"
 
-HF_CHECKPOINT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hf_params")
+HF_CHECKPOINT_PATH = os.path.expanduser("~/hf_params")
 
 INTERUPT_THINKING_PHARSE = "Okay, time is up. Let me stop thinking and formulate a final answer now. \n\n</think>"
 

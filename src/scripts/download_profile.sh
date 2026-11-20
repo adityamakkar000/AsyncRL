@@ -6,7 +6,7 @@ if [ -z "${1:-}" ]; then
     exit 1
 fi
 
-SRC="gs://arl-experiments/runs/$1/profile${2:+/step_$2}"
+SRC="gs://arl-us-east-5/runs/$1/profiles${2:+/step_$2}"
 DEST="./profile/$1"
 
 mkdir -p "$DEST"
