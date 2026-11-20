@@ -1,7 +1,9 @@
 # copy this file into ~/.bashrc or ~/.zshrc and fill out placeholder
 
+TPU_SERVER="100.97.202.27"
+TPU_SERVER_URL="http://${TPU_SERVER}:8000"
+
 server_ls() {
-  TPU_SERVER_URL='http://100.79.104.73:8000'
   command -v jq >/dev/null 2>&1 || {
     echo "server_jobs: need jq installed for table output (brew install jq)" >&2
     return 1
@@ -46,7 +48,6 @@ server_ls() {
 }
 
 server_delete() {
-  TPU_SERVER_URL='http://100.79.104.73:8000'
   local node_id="$1"
   if [[ -z "$node_id" ]]; then
     echo "usage: server_delete <node_id>" >&2
@@ -60,7 +61,6 @@ server_delete() {
 
 server_logs() {
   local node_id="$1"
-  TPU_SERVER_URL="http://100.79.104.73:8000"
   if [[ -z "$node_id" ]]; then
     echo "usage: server_logs <node_id>" >&2
     return 1
@@ -72,7 +72,6 @@ server_logs() {
 
 server_ranks() {
   local node_id="$1"
-  TPU_SERVER_URL="http://100.79.104.73:8000"
   if [[ -z "$node_id" ]]; then
     echo "usage: server_ranks <node_id>" >&2
     return 1
@@ -85,7 +84,6 @@ server_ranks() {
 
 server_rank_logs() {
   local node_id="$1" index="$2"
-  TPU_SERVER_URL="http://100.79.104.73:8000"
   if [[ -z "$node_id" || -z "$index" ]]; then
     echo "usage: server_rank_logs <node_id> <rank_index>" >&2
     return 1
