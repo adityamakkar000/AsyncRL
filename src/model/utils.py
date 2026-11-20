@@ -3,9 +3,11 @@ import glob
 import os
 import re
 import shutil
+from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import torch
 from huggingface_hub import snapshot_download
 from jax.sharding import PartitionSpec as P
@@ -20,6 +22,14 @@ from src.constants import HF_CHECKPOINT_PATH
 DP = AXIS_NAMES_ENUM.DP.value
 FSDP = AXIS_NAMES_ENUM.FSDP.value
 CP_ULYSSES = AXIS_NAMES_ENUM.CP_ULYSSES.value
+
+ACT_SPEC = P((DP, FSDP), CP_ULYSSES, None)
+QKV_SPEC = P((DP, FSDP), CP_ULYSSES, None, None)
+OUT_SPEC = P((DP, FSDP), None, CP_ULYSSES, None)
+
+
+def act_constrain(x: PyTree[Array], shard: bool = True, spec: P = ACT_SPEC) -> PyTree[Array]:
+    return jax.lax.with_sharding_constraint(x, spec) if shard else x
 
 
 def convert_dtype(dtype_str: str) -> jnp.dtype:
@@ -77,18 +87,30 @@ def get_torch_weights_to_jax(params: PyTree, name: str, hf_mapping) -> PyTree:
                 param_ending = jax_param_key.split(".")[-1]
                 jax_path = jax_param_key.split(".")[0].split("/")
 
+                layer = re.fullmatch(r"Block_([0-9]+)", jax_path[0])
+                if layer:
+                    jax_path[0] = "Block"
+
                 jax_param = params
 
                 for node in jax_path:
                     jax_param = jax_param[node]
 
-                new_param = torch_hf_params[hf_param_key].float()
+                new_param = torch_hf_params.pop(hf_param_key).float()
                 new_param = new_param.T.numpy() if "kernel" in param_ending else new_param.numpy()
 
-                assert new_param.shape == jax_param[param_ending].shape, (
-                    f"Shape mismatch for {jax_param_key}: expected {jax_param[param_ending].shape}, got {new_param.shape}"
+                target = jax_param[param_ending]
+                expected = target.shape[1:] if layer else target.shape
+                assert new_param.shape == expected, (
+                    f"Shape mismatch for {jax_param_key}: expected {expected}, got {new_param.shape}"
                 )
-                jax_param[param_ending] = new_param
+
+                if layer:
+                    if not isinstance(target, np.ndarray):
+                        target = jax_param[param_ending] = np.empty(target.shape, dtype=new_param.dtype)
+                    target[int(layer.group(1))] = new_param
+                else:
+                    jax_param[param_ending] = new_param
 
     return params
 
@@ -160,6 +182,17 @@ def save_to_hf(dir_path: str, params: PyTree, hf_model_name: str, reverse_hf_map
     save_file(new_tensors, f"{dir_path}/model.safetensors")
 
 
+def make_weight_shard_fn(weight_shard_dim: int = 0) -> Callable[[str, Array], int | None]:
+    def weight_shard_fn(path: str, param: Array) -> int | None:
+        if param.ndim < 2:
+            return None
+        if re.search(r"\['Block'\]", path):
+            return weight_shard_dim + 1 if param.ndim >= 3 else None
+        return weight_shard_dim
+
+    return weight_shard_fn
+
+
 def get_lm_head_weights(params: PyTree, tie_weights: bool) -> Array:
     if tie_weights:
         return jnp.transpose(params["token_emb"]["embedding"])
@@ -183,14 +216,14 @@ def _fwd(h, W, targets, chunk_size):
     chunk_size = min(chunk_size, B)
 
     num_chunks = make_chunks(B, chunk_size)
-    chunked_hidden_inputs = jax.lax.with_sharding_constraint(
-        h.reshape(num_chunks, chunk_size, D), P(None, (DP, FSDP, CP_ULYSSES), None)
+    chunked_hidden_inputs = act_constrain(
+        h.reshape(num_chunks, chunk_size, D), spec=P(None, (DP, FSDP, CP_ULYSSES), None)
     )  # num_chunks, chunk_size, D
-    chunked_targets = jax.lax.with_sharding_constraint(
-        targets.reshape(num_chunks, chunk_size), P(None, (DP, FSDP, CP_ULYSSES))
+    chunked_targets = act_constrain(
+        targets.reshape(num_chunks, chunk_size), spec=P(None, (DP, FSDP, CP_ULYSSES))
     )  # num_chunks, chunk_size
 
-    W_gather = jax.lax.with_sharding_constraint(W, P())
+    W_gather = act_constrain(W, spec=P())
 
     chunked_hidden_inputs, W_gather = jax.tree.map(lambda x: x.astype(jnp.float32), (chunked_hidden_inputs, W_gather))
 
@@ -214,8 +247,8 @@ def _bwd(chunk_size, residuals, dy):
     num_chunks, chunk_size, D = chunked_hidden_inputs.shape
     _, V = W_gather.shape
 
-    chunked_dy = jax.lax.with_sharding_constraint(
-        dy.astype(jnp.float32).reshape(num_chunks, chunk_size), P(None, (DP, FSDP, CP_ULYSSES))
+    chunked_dy = act_constrain(
+        dy.astype(jnp.float32).reshape(num_chunks, chunk_size), spec=P(None, (DP, FSDP, CP_ULYSSES))
     )
 
     def body(dW, chunk):

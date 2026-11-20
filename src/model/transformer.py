@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from flax import linen as nn
 from jaxtyping import Array
 
-from .config import BaseModel, KVCache
+from .config import AttentionMask, BaseModel, KVCache, RopeMatrix
 from .layers import RematBlock, RMSNorm, RopeCorrection, gather_rope, no_correction, rope_tables
 
 
@@ -28,9 +28,9 @@ class Transformer(BaseModel):
         self,
         x: Array,  # [B, T]
         sequence_lens: jax.Array,  # [B, ]
-        kv_cache: list[KVCache] | None = None,
+        kv_cache: KVCache | None = None,
         apply_lm_head: bool = True,
-    ) -> tuple[Array, list[KVCache]]:
+    ) -> tuple[Array, KVCache | None]:
         B, T = x.shape
 
         embed_layer = nn.Embed(
@@ -41,33 +41,43 @@ class Transformer(BaseModel):
         )
         x = embed_layer(x)
 
-        t_start = kv_cache[0].length if kv_cache else jnp.zeros((B,), dtype=jnp.int32)
+        t_start = kv_cache.length if kv_cache else jnp.zeros((B,), dtype=jnp.int32)
 
         pos = jnp.arange(T)[None, :]
         shifted_pos = pos + t_start[:, None]
-        q_segment_ids = shifted_pos < sequence_lens[:, None]
-        kv_segment_ids = pos < sequence_lens[:, None]
-        masks = (q_segment_ids, kv_segment_ids)
+        masks = AttentionMask(
+            q_segment_ids=shifted_pos < sequence_lens[:, None],
+            k_segment_ids=pos < sequence_lens[:, None],
+        )
 
         sin_table, cos_table = rope_tables(
             self.sequence_len, self.head_dim, self.rope_base, self.rope_correction, dtype=self.activation_dtype
         )
-        rope_matrix = gather_rope(sin_table, cos_table, shifted_pos)
+        sin, cos = gather_rope(sin_table, cos_table, shifted_pos)
+        rope_matrix = RopeMatrix(sin=sin, cos=cos)
 
-        out_cache: list[KVCache] = []
-        for i in range(self.n_layers):
-            x, out_layer_cache = RematBlock(
-                model_dim=self.model_dim,
-                d_ff=self.d_ff,
-                n_heads=self.n_heads,
-                n_kv_heads=self.n_kv_heads,
-                head_dim=self.head_dim,
-                activation_dtype=self.activation_dtype,
-                qk_norm=self.qk_norm,
-                rms_eps=self.rms_eps,
-                name=f"Block_{i}",
-            )(x, sequence_lens, masks, rope_matrix, kv_cache[i] if kv_cache else None)
-            out_cache.append(out_layer_cache)
+        ScanBlock = nn.scan(
+            RematBlock,
+            variable_axes={"params": 0},
+            split_rngs={"params": True},
+            in_axes=(nn.broadcast, nn.broadcast, nn.broadcast, 0),
+            length=self.n_layers,
+            unroll=self.n_layers if kv_cache is not None else 1,
+        )
+        (x, out_cache), _ = ScanBlock(
+            model_dim=self.model_dim,
+            d_ff=self.d_ff,
+            n_heads=self.n_heads,
+            n_kv_heads=self.n_kv_heads,
+            head_dim=self.head_dim,
+            activation_dtype=self.activation_dtype,
+            qk_norm=self.qk_norm,
+            rms_eps=self.rms_eps,
+            name="Block",
+        )((x, kv_cache), sequence_lens, masks, rope_matrix, jnp.arange(self.n_layers, dtype=jnp.int32))
+
+        if out_cache is not None:
+            out_cache = out_cache.replace(length=kv_cache.length + 1 if T == 1 else sequence_lens)
 
         x = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)
 

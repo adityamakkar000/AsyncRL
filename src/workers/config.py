@@ -32,10 +32,9 @@ class InferenceConfig:
     system_prompt: bool = False
 
 
-@struct.dataclass
-class InferenceState:
+class InferenceState(struct.PyTreeNode):
     next_token: Array
-    kv_cache: list[KVCache]
+    kv_cache: KVCache
     key: Array
     seq_lens: Array
     stop_mask: Array
@@ -45,12 +44,16 @@ class InferenceState:
     prompt_id: Array
 
     def slice(self, index: Array | int) -> "InferenceState":
-        def slice_arg(arr: Array):
-            return jax.lax.dynamic_slice_in_dim(arr, start_index=index, slice_size=1, axis=0)
+        def slice_arg(arr: Array, axis: int = 0):
+            return jax.lax.dynamic_slice_in_dim(arr, start_index=index, slice_size=1, axis=axis)
 
         return InferenceState(
             next_token=slice_arg(self.next_token),
-            kv_cache=[jax.tree.map(slice_arg, kv) for kv in self.kv_cache],
+            kv_cache=KVCache(
+                k=slice_arg(self.kv_cache.k, axis=1),
+                v=slice_arg(self.kv_cache.v, axis=1),
+                length=slice_arg(self.kv_cache.length),
+            ),
             key=self.key,
             seq_lens=slice_arg(self.seq_lens),
             stop_mask=slice_arg(self.stop_mask),
@@ -64,13 +67,16 @@ class InferenceState:
         new_batch = batch.slice(replace_index)
         index = jnp.argmax(self.stop_mask[:, 0])
 
-        def replace(arr: Array, new_arr: Array) -> Array:
-            start_index = (index,) + (0,) * (arr.ndim - 1)
-            return jax.lax.dynamic_update_slice(arr, new_arr.astype(arr.dtype), start_index)
+        def replace(arr: Array, new_arr: Array, axis: int = 0) -> Array:
+            return jax.lax.dynamic_update_slice_in_dim(arr, new_arr.astype(arr.dtype), index, axis=axis)
 
         return InferenceState(
             next_token=replace(self.next_token, new_batch.next_token),
-            kv_cache=[jax.tree.map(replace, kv, new_kv) for kv, new_kv in zip(self.kv_cache, new_batch.kv_cache)],
+            kv_cache=KVCache(
+                k=replace(self.kv_cache.k, new_batch.kv_cache.k, axis=1),
+                v=replace(self.kv_cache.v, new_batch.kv_cache.v, axis=1),
+                length=replace(self.kv_cache.length, new_batch.kv_cache.length),
+            ),
             key=self.key,
             seq_lens=replace(self.seq_lens, new_batch.seq_lens),
             stop_mask=replace(self.stop_mask, new_batch.stop_mask),
@@ -82,7 +88,7 @@ class InferenceState:
 
     @classmethod
     def get_default(
-        cls, batch_size: int, seq_len: int, key: Array, kv_cache: list[KVCache], sharding: jax.NamedSharding
+        cls, batch_size: int, seq_len: int, key: Array, kv_cache: KVCache, sharding: jax.NamedSharding
     ) -> "InferenceState":
         return cls(
             next_token=jnp.zeros((batch_size, 1), dtype=jnp.int32, out_sharding=sharding),

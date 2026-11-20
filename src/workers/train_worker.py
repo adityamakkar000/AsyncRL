@@ -25,7 +25,7 @@ from tqdm import tqdm
 
 from src.constants import RUN_PATH
 from src.data import DataLoader, InferenceRollout, RLBatch
-from src.model import Model
+from src.model import Model, make_weight_shard_fn
 
 from .config import AsyncOptions, TrainerConfig
 from .constants import EVAL_TIMEOUT, TIMEOUT
@@ -218,7 +218,7 @@ class AsyncTrainerWorker(Worker):
                 min_bytes_for_fsdp=self.config.sharding_config.min_bytes_for_fsdp,
                 data_shard_dim=self.config.sharding_config.data_shard_dim,
                 cp_shard_dim=self.config.sharding_config.cp_shard_dim,
-                weight_shard_dim=self.config.sharding_config.weight_shard_dim,
+                weight_shard_fn=make_weight_shard_fn(self.config.sharding_config.weight_shard_dim),
             ),
             # only use devices on the train worker's mesh
             devices=self.async_options.train_mesh.devices.reshape(-1),
@@ -231,6 +231,11 @@ class AsyncTrainerWorker(Worker):
         )
 
         self.train_mesh = shardings.mesh
+        dtype = self.config.loss_config.inference_config.params_dtype
+        self.replicate_params_fn = jax.jit(
+            lambda params: jax.tree.map(lambda p: p.astype(dtype), params),
+            out_shardings=jax.NamedSharding(self.train_mesh, jax.P()),
+        )
 
     @partial(setup, component="dataset")
     def _setup_dataset(self):
@@ -394,9 +399,7 @@ class AsyncTrainerWorker(Worker):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
 
         with stax.Tracker(timer=True) as t:
-            params_cast = jax.tree.map(
-                lambda p: p.astype(self.config.loss_config.inference_config.params_dtype), self.params
-            )
+            params_cast = self.replicate_params_fn(self.params)
             if self.worker_rank == 0:
                 for _ in range(self.async_options.inference_workers):
                     self.async_options.queues.weight_sync_queue.put("sync")

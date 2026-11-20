@@ -313,13 +313,13 @@ class SingleInferenceReplica:
         self, state: InferenceState, params: PyTree, prefill_prompts: InferenceState, next_index: int
     ) -> tuple[InferenceState, Array, Array, Array, Array]:
         with jax.named_scope("single_decode_loop"):
-            before_length = state.kv_cache[0].length
+            before_length = state.kv_cache.length
             state = jax.lax.while_loop(
                 lambda state: ~jnp.any(state.stop_mask),
                 lambda state: self.decode(state, params),
                 state,
             )
-            after_length = state.kv_cache[0].length
+            after_length = state.kv_cache.length
 
             index = jnp.argmax(state.stop_mask[:, 0], keepdims=True)
             tokens, logprobs, prompt_ids = (
@@ -334,7 +334,7 @@ class SingleInferenceReplica:
         return state, tokens, logprobs, prompt_ids, jnp.max(after_length - before_length)
 
     def decode(self, state: InferenceState, params: PyTree) -> InferenceState:
-        logger.info(f"Compiling decode step for attention length {state.kv_cache[0].max_len}", log_for_all=True)
+        logger.info(f"Compiling decode step for attention length {state.kv_cache.max_len}", log_for_all=True)
         key, sample_key = jax.random.split(state.key)
 
         with jax.named_scope("fwd_pass"):
@@ -376,7 +376,7 @@ class SingleInferenceReplica:
             )
 
         rows = jnp.arange(state.out_tokens.shape[0])
-        write_index = out_cache[0].length
+        write_index = out_cache.length
         out_tokens = state.out_tokens.at[rows, write_index].set(next_token[:, 0])
         out_logprobs = state.out_logprobs.at[rows, write_index].set(next_log_prob[:, 0])
 

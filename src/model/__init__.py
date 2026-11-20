@@ -3,6 +3,6 @@ from .llama import Llama3
 from .main import Model
 from .qwen3 import Qwen3
 from .transformer import Transformer
-from .utils import convert_dtype
+from .utils import convert_dtype, make_weight_shard_fn
 
-__all__ = ["Model", "ModelConfig", "KVCache", "convert_dtype", "Llama3", "Qwen3", "Transformer"]
+__all__ = ["Model", "ModelConfig", "KVCache", "convert_dtype", "make_weight_shard_fn", "Llama3", "Qwen3", "Transformer"]
