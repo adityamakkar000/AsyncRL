@@ -39,6 +39,7 @@ class GroupedQueryAttention(nn.Module):
     head_dim: int
     activation_dtype: jnp.dtype = jnp.float32
     qk_norm: bool = False
+    qk_norm_per_head: bool = True
     rms_eps: float = 1e-6
 
     @nn.compact
@@ -56,9 +57,15 @@ class GroupedQueryAttention(nn.Module):
         q = nn.Dense(features=self.n_heads * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
         k = nn.Dense(features=self.n_kv_heads * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
         v = nn.Dense(features=self.n_kv_heads * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
+
+        if self.qk_norm and not self.qk_norm_per_head:
+            # norm over the full projection, before splitting into heads
+            q = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(q)
+            k = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(k)
+
         q, k, v = jax.tree.map(lambda t: einops.rearrange(t, "b t (h d) -> b h t d", d=self.head_dim), (q, k, v))
 
-        if self.qk_norm:
+        if self.qk_norm and self.qk_norm_per_head:
             q = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(q)
             k = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(k)
 

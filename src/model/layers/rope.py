@@ -17,11 +17,12 @@ def rope_tables(
     rope_base: int,
     correction: RopeCorrection = no_correction,
     dtype: jnp.dtype = jnp.float32,
+    scale: float = 1.0,
 ) -> tuple[Array, Array]:
     pos = jnp.arange(0, head_dim, 2, dtype=jnp.float32) / head_dim
     theta = correction(1.0 / (rope_base**pos))
     inp = jnp.einsum("t,k->tk", jnp.arange(sequence_len), theta, precision=jax.lax.Precision.HIGHEST)
-    return jnp.sin(inp).astype(dtype), jnp.cos(inp).astype(dtype)
+    return (jnp.sin(inp) * scale).astype(dtype), (jnp.cos(inp) * scale).astype(dtype)
 
 
 def gather_rope(sin: Array, cos: Array, index_map: Array) -> tuple[Array, Array]:

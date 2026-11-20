@@ -20,8 +20,11 @@ class Transformer(BaseModel):
     activation_dtype: jnp.dtype = jnp.float32
     tie_weights: bool = False
     qk_norm: bool = False
+    qk_norm_per_head: bool = True
+    post_norm: bool = False
     rms_eps: float = 1e-6
     rope_correction: RopeCorrection = no_correction
+    rope_scale: float = 1.0
 
     @nn.compact
     def __call__(
@@ -49,13 +52,20 @@ class Transformer(BaseModel):
         kv_segment_ids = pos < sequence_lens[:, None]
         masks = (q_segment_ids, kv_segment_ids)
 
-        sin_table, cos_table = rope_tables(
-            self.sequence_len, self.head_dim, self.rope_base, self.rope_correction, dtype=self.activation_dtype
-        )
-        rope_matrix = gather_rope(sin_table, cos_table, shifted_pos)
+        def make_rope_matrix(correction: RopeCorrection, scale: float) -> tuple[Array, Array]:
+            sin_table, cos_table = rope_tables(
+                self.sequence_len, self.head_dim, self.rope_base, correction, dtype=self.activation_dtype, scale=scale
+            )
+            return gather_rope(sin_table, cos_table, shifted_pos)
+
+        corrected_layers = [self.uses_rope_correction(i) for i in range(self.n_layers)]
+        rope_matrices = {True: make_rope_matrix(self.rope_correction, self.rope_scale)}
+        if not all(corrected_layers):
+            rope_matrices[False] = make_rope_matrix(no_correction, 1.0)
 
         out_cache: list[KVCache] = []
         for i in range(self.n_layers):
+            rope_matrix = rope_matrices[corrected_layers[i]]
             x, out_layer_cache = RematBlock(
                 model_dim=self.model_dim,
                 d_ff=self.d_ff,
@@ -64,6 +74,8 @@ class Transformer(BaseModel):
                 head_dim=self.head_dim,
                 activation_dtype=self.activation_dtype,
                 qk_norm=self.qk_norm,
+                qk_norm_per_head=self.qk_norm_per_head,
+                post_norm=self.post_norm,
                 rms_eps=self.rms_eps,
                 name=f"Block_{i}",
             )(x, sequence_lens, masks, rope_matrix, kv_cache[i] if kv_cache else None)
@@ -78,6 +90,10 @@ class Transformer(BaseModel):
                 x = nn.Dense(features=self.vocab_size, use_bias=False, dtype=jnp.float32)(x)
 
         return x.astype(jnp.float32), out_cache
+
+    def uses_rope_correction(self, layer: int) -> bool:
+        """Whether this layer uses rope_correction and rope_scale; layers that don't get plain rope."""
+        return True
 
     @property
     def seq_len(self) -> int:

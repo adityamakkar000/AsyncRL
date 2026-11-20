@@ -16,6 +16,8 @@ class Block(nn.Module):
     head_dim: int
     activation_dtype: jnp.dtype = jnp.float32
     qk_norm: bool = False
+    qk_norm_per_head: bool = True
+    post_norm: bool = False
     rms_eps: float = 1e-6
 
     @nn.compact
@@ -27,20 +29,33 @@ class Block(nn.Module):
         rope_matrix: tuple[Array, Array],
         layer_cache: KVCache | None = None,
     ):
-        h = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)
-        h, out_layer_cache = GroupedQueryAttention(
+        attention = GroupedQueryAttention(
             model_dim=self.model_dim,
             n_heads=self.n_heads,
             n_kv_heads=self.n_kv_heads,
             head_dim=self.head_dim,
             activation_dtype=self.activation_dtype,
             qk_norm=self.qk_norm,
+            qk_norm_per_head=self.qk_norm_per_head,
             rms_eps=self.rms_eps,
-        )(h, seq_lens, masks, rope_matrix, layer_cache)
-        x = x + h
+        )
+        feed_forward = FeedForward(model_dim=self.model_dim, d_ff=self.d_ff, activation_dtype=self.activation_dtype)
 
-        h = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)
-        x = x + FeedForward(model_dim=self.model_dim, d_ff=self.d_ff, activation_dtype=self.activation_dtype)(h)
+        if self.post_norm:
+            # x + norm(f(x)): RMSNorm_0 follows attention, RMSNorm_1 follows the mlp
+            h, out_layer_cache = attention(x, seq_lens, masks, rope_matrix, layer_cache)
+            x = x + RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(h)
+
+            h = feed_forward(x)
+            x = x + RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(h)
+        else:
+            # x + f(norm(x)): RMSNorm_0 precedes attention, RMSNorm_1 precedes the mlp
+            h = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)
+            h, out_layer_cache = attention(h, seq_lens, masks, rope_matrix, layer_cache)
+            x = x + h
+
+            h = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)
+            x = x + feed_forward(h)
 
         return x, out_layer_cache
 

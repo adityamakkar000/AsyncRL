@@ -1,0 +1,14 @@
+model_args:
+  _target_: src.model.olmo3.Olmo3
+  vocab_size: 100278
+  sequence_len: 4096 # max right now due to SWA not supported
+  model_dim: 4096
+  d_ff: 11008
+  n_heads: 32
+  n_kv_heads: 32
+  head_dim: 128
+  n_layers: 32
+  rope_base: 500000
+  activation_dtype: "bfloat16"
+  tie_weights: false
+hf_model_name: "allenai/Olmo-3-7B-Think"
