@@ -23,7 +23,6 @@ class Block(nn.Module):
     def __call__(
         self,
         carry: tuple[Array, KVCache | None],
-        seq_lens: Array,
         masks: AttentionMask,
         rope_matrix: RopeMatrix,
         layer: Array,

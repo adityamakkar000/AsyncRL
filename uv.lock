@@ -249,7 +249,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "rich", specifier = "<14.0.0" },
     { name = "ruff", specifier = ">=0.14.10" },
-    { name = "stax", git = "https://github.com/adityamakkar000/stax.git" },
+    { name = "stax", git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2Ftp" },
     { name = "tensorboard", specifier = ">=2.20.0" },
     { name = "tfds-nightly", marker = "extra == 'data'", specifier = ">=4.9.9.dev202510250044" },
     { name = "torch", marker = "sys_platform != 'linux'", specifier = ">=2.9.0" },
@@ -6150,7 +6150,7 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git#5e07375d91331c447ef66568f2843a293df0933f" }
+source = { git = "https://github.com/adityamakkar000/stax.git?branch=aditya%2Ftp#1ddd65a11b395cde6dc6d9b5af5f9b1eb71cf060" }
 dependencies = [
     { name = "etils", extra = ["epath"] },
     { name = "flax", version = "0.11.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },

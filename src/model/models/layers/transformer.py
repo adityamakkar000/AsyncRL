@@ -76,7 +76,7 @@ class Transformer(BaseModel):
             qk_norm=self.qk_norm,
             rms_eps=self.rms_eps,
             name="Block",
-        )((x, kv_cache), sequence_lens, masks, rope_matrix, jnp.arange(self.n_layers, dtype=jnp.int32))
+        )((x, kv_cache), masks, rope_matrix, jnp.arange(self.n_layers, dtype=jnp.int32))
 
         if out_cache is not None:
             assert kv_cache is not None

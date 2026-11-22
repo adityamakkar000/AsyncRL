@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any
 
 import jax
@@ -13,6 +14,7 @@ from omegaconf import DictConfig
 from optax import GradientTransformation
 from stax import HFModelBase
 from stax import staxLogger as logger
+from stax.sharding import ModelSharding
 from transformers import AutoTokenizer
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
@@ -249,3 +251,7 @@ class Model(HFModelBase):
     @property
     def activation_dtype(self):
         return convert_dtype(self.model.activation_dtype)
+
+    @property
+    def weight_shard_fn(self) -> Callable[[str, Array], ModelSharding]:
+        return self.model.weight_shard_fn

@@ -1,4 +1,5 @@
 import abc
+import re
 from dataclasses import dataclass
 from typing import Any, NamedTuple, cast
 
@@ -8,6 +9,7 @@ from flax import linen as nn
 from flax import struct
 from jaxtyping import Array, PyTree
 from omegaconf import MISSING
+from stax.sharding import ModelSharding
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from .utils import dequantize, get_torch_weights_to_jax, quantize, save_to_hf
@@ -144,6 +146,18 @@ class BaseModel(abc.ABC, nn.Module):
             params[f"Block_{i}"] = jax.tree.map(lambda p, i=i: p[i], stacked)
 
         save_to_hf(path, params, model_name, self.reverse_hf_mapping)
+
+    @staticmethod
+    def weight_shard_fn(path: str, param: Array) -> ModelSharding:
+        if param.ndim < 2:
+            return ModelSharding()
+        if re.search(r"\['Block'\]", path):
+            if param.ndim < 3:
+                return ModelSharding()
+
+            row_parallel = re.search(r"\['(GroupedQueryAttention_0'\]\['Dense_3|FeedForward_0'\]\['Dense_2)'\]", path)
+            return ModelSharding(fsdp=2, tp=1) if row_parallel else ModelSharding(fsdp=1, tp=2)
+        return ModelSharding(fsdp=0, tp=1)
 
     @abc.abstractmethod
     def __call__(self, x: Array, sequence_lens: Array, kv_cache: KVCache | None = None) -> tuple[Array, KVCache | None]:

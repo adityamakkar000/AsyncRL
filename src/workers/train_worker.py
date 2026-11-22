@@ -22,7 +22,7 @@ from stax.writer import TableMetrics
 
 from src.constants import RUN_PATH
 from src.data import DataWorker, EvalWorker, RLBatch
-from src.model import Model, make_weight_shard_fn
+from src.model import Model
 
 from .config import AsyncOptions, TrainerConfig
 from .constants import EVAL_TIMEOUT, TIMEOUT
@@ -222,12 +222,13 @@ class AsyncTrainerWorker(Worker):
                     dp=self.config.sharding_config.dp_group_size,
                     fsdp=self.config.sharding_config.fsdp_group_size,
                     cp_ulysses=self.config.sharding_config.cp_group_size,
+                    tp=self.config.sharding_config.tp_group_size,
                 ),
                 opt_state_offload=self.config.sharding_config.opt_state_offload,
                 min_bytes_for_fsdp=self.config.sharding_config.min_bytes_for_fsdp,
                 data_shard_dim=self.config.sharding_config.data_shard_dim,
                 cp_shard_dim=self.config.sharding_config.cp_shard_dim,
-                weight_shard_fn=make_weight_shard_fn(self.config.sharding_config.weight_shard_dim),
+                weight_shard_fn=self.model.weight_shard_fn,
             ),
             # only use devices on the train worker's mesh
             devices=self.async_options.train_mesh.devices.reshape(-1),

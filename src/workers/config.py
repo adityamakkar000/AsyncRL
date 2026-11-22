@@ -129,10 +129,10 @@ class ShardingConfig:
     cp_shard_dim: int = 0
 
     min_bytes_for_fsdp: int = int(1e6)  # 1e6/(1024*1024) = 1MB
-    weight_shard_dim: int = 0
 
     dp_group_size: int = 1
     cp_group_size: int = 1
+    tp_group_size: int = 1
     fsdp_group_size: int = -1
 
 

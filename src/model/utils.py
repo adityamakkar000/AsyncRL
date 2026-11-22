@@ -2,7 +2,6 @@ import glob
 import os
 import re
 import shutil
-from collections.abc import Callable
 from functools import partial
 
 import jax
@@ -15,17 +14,20 @@ from jax.tree_util import DictKey
 from jaxtyping import Array, PyTree
 from safetensors import safe_open
 from safetensors.torch import save_file
-from stax.sharding.main import AXIS_NAMES_ENUM
+from stax.sharding import AXIS_NAMES
 
 from src.constants import HF_CHECKPOINT_PATH
 
-DP = AXIS_NAMES_ENUM.DP.value
-FSDP = AXIS_NAMES_ENUM.FSDP.value
-CP_ULYSSES = AXIS_NAMES_ENUM.CP_ULYSSES.value
+BATCH_AXES = AXIS_NAMES.data_parallel_mesh()
+CONTEXT_AXES = AXIS_NAMES.context_parallel_mesh()
 
-ACT_SPEC = P((DP, FSDP), CP_ULYSSES, None)
-QKV_SPEC = P((DP, FSDP), CP_ULYSSES, None, None)
-OUT_SPEC = P((DP, FSDP), None, CP_ULYSSES, None)
+ACT_SPEC = P(BATCH_AXES, (*CONTEXT_AXES, AXIS_NAMES.TP), None)
+
+TP_IN_SPEC = P(BATCH_AXES, CONTEXT_AXES, None)
+TP_UP_SPEC = P(BATCH_AXES, CONTEXT_AXES, AXIS_NAMES.TP)
+
+QKV_SPEC = P(BATCH_AXES, (AXIS_NAMES.CP_ULYSSES, AXIS_NAMES.TP), AXIS_NAMES.CP_RING, None)
+OUT_SPEC = P(BATCH_AXES, None, CONTEXT_AXES, AXIS_NAMES.TP)
 
 
 def has_mesh() -> bool:
@@ -220,17 +222,6 @@ def save_to_hf(dir_path: str, params: PyTree, hf_model_name: str, reverse_hf_map
 
     new_tensors = convert_pytree(params, reverse_hf_mapping)
     save_file(new_tensors, f"{dir_path}/model.safetensors")
-
-
-def make_weight_shard_fn(weight_shard_dim: int = 0) -> Callable[[str, Array], int | None]:
-    def weight_shard_fn(path: str, param: Array) -> int | None:
-        if param.ndim < 2:
-            return None
-        if re.search(r"\['Block'\]", path):
-            return weight_shard_dim + 1 if param.ndim >= 3 else None
-        return weight_shard_dim
-
-    return weight_shard_fn
 
 
 def get_lm_head_weights(params: PyTree, tie_weights: bool) -> Array:

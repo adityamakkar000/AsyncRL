@@ -4,8 +4,9 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array
+from stax.sharding import AXIS_NAMES
 
-from src.model.utils import CP_ULYSSES, DP, FSDP, act_constrain
+from src.model.utils import act_constrain
 
 
 def make_chunks(B: int, chunk_size: int):
@@ -26,10 +27,10 @@ def _fwd(h, W, targets, chunk_size):
 
     num_chunks = make_chunks(B, chunk_size)
     chunked_hidden_inputs = act_constrain(
-        h.reshape(num_chunks, chunk_size, D), spec=P(None, (DP, FSDP, CP_ULYSSES), None)
+        h.reshape(num_chunks, chunk_size, D), spec=P(None, AXIS_NAMES.data_mesh(), None)
     )  # num_chunks, chunk_size, D
     chunked_targets = act_constrain(
-        targets.reshape(num_chunks, chunk_size), spec=P(None, (DP, FSDP, CP_ULYSSES))
+        targets.reshape(num_chunks, chunk_size), spec=P(None, AXIS_NAMES.data_mesh())
     )  # num_chunks, chunk_size
 
     W_gather = act_constrain(W, spec=P())
@@ -57,7 +58,7 @@ def _bwd(chunk_size, residuals, dy):
     _, V = W_gather.shape
 
     chunked_dy = act_constrain(
-        dy.astype(jnp.float32).reshape(num_chunks, chunk_size), spec=P(None, (DP, FSDP, CP_ULYSSES))
+        dy.astype(jnp.float32).reshape(num_chunks, chunk_size), spec=P(None, AXIS_NAMES.data_mesh())
     )
 
     def body(dW, chunk):

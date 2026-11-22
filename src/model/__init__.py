@@ -3,7 +3,7 @@ from .main import Model
 from .models.layers.transformer import Transformer
 from .models.llama import Llama3
 from .models.qwen_3 import Qwen3
-from .utils import convert_dtype, make_weight_shard_fn
+from .utils import convert_dtype
 
 __all__ = [
     "BaseModel",
@@ -14,5 +14,4 @@ __all__ = [
     "Qwen3",
     "Transformer",
     "convert_dtype",
-    "make_weight_shard_fn",
 ]

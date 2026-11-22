@@ -6,7 +6,7 @@ from jax.sharding import PartitionSpec as P
 from jaxtyping import Array
 
 from ...config import AttentionMask, KVCache, RopeMatrix
-from ...utils import DP, FSDP, OUT_SPEC, QKV_SPEC, act_constrain, has_mesh
+from ...utils import BATCH_AXES, OUT_SPEC, QKV_SPEC, TP_IN_SPEC, act_constrain, has_mesh
 from ..kernels import SegmentIds, decode_ragged_attention, gqa_flash_attention
 from .norm import RMSNorm
 from .rope import apply_rope
@@ -22,7 +22,7 @@ def flash_attention(q: Array, k: Array, v: Array, masks: AttentionMask, sm_scale
     if has_mesh():
         fa = jax.shard_map(
             flash_attention_naive,
-            in_specs=(QKV_SPEC, QKV_SPEC, QKV_SPEC, P((DP, FSDP), None), None),
+            in_specs=(QKV_SPEC, QKV_SPEC, QKV_SPEC, P(BATCH_AXES, None), None),
             out_specs=QKV_SPEC,
             check_vma=False,
         )
@@ -50,9 +50,12 @@ class GroupedQueryAttention(nn.Module):
         assert self.n_heads % self.n_kv_heads == 0, "Number of heads must be divisible by number of kv heads"
         assert self.model_dim % self.n_heads == 0, "Model dim must be divisible by number of heads"
 
+        x = act_constrain(x, shard, TP_IN_SPEC)
+
         q = nn.Dense(features=self.n_heads * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
         k = nn.Dense(features=self.n_kv_heads * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
         v = nn.Dense(features=self.n_kv_heads * self.head_dim, use_bias=False, dtype=self.activation_dtype)(x)
+
         q, k, v = jax.tree.map(lambda t: einops.rearrange(t, "b t (h d) -> b h t d", d=self.head_dim), (q, k, v))
 
         if self.qk_norm:
