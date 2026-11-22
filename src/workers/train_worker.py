@@ -191,7 +191,7 @@ class AsyncTrainerWorker(Worker):
         assert self.tx is not None, "self.tx is None"
         assert self.model is not None, "self.model is None"
 
-        abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx, abstract=True)
+        abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx, sharding=None)
         params_shape, opt_state_shape = abstract_state["params"], abstract_state["opt_state"]
 
         self.loss_fn = instantiate(
@@ -223,6 +223,8 @@ class AsyncTrainerWorker(Worker):
             ),
             # only use devices on the train worker's mesh
             devices=self.async_options.train_mesh.devices.reshape(-1),
+            # jit kwargs
+            train_jit_kwargs={"donate_argnums": (1,)},
         )
 
         self.params_sharding, self.opt_state_sharding, self.shard_data_fn = (
@@ -232,6 +234,7 @@ class AsyncTrainerWorker(Worker):
         )
 
         self.train_mesh = shardings.mesh
+        self.shardings = shardings
         dtype = self.config.loss_config.inference_config.params_dtype
         self.replicate_params_fn = jax.jit(
             lambda params: jax.tree.map(lambda p: p.astype(dtype), params),
@@ -277,7 +280,7 @@ class AsyncTrainerWorker(Worker):
 
         if self.config.teacher_config is not None:
             logger.info("Loading teacher/reference model", log_for_all=True)
-            _teacher_step, teacher_params, _teacher_metadata = self.model.load_from_ckpt_old(
+            _teacher_step, teacher_params, _teacher_metadata = self.model.load_from_ckpt(
                 self.config.teacher_config.teacher_checkpoint, self.config.teacher_config.teacher_step
             )
             self.teacher_params = jax.tree.map(lambda x, s: jax.device_put(x, s), teacher_params, self.params_sharding)
@@ -288,11 +291,11 @@ class AsyncTrainerWorker(Worker):
             return
 
         self.log_info("Initializing new run ...")
-        sharding = {"params": self.params_sharding, "opt_state": self.opt_state_sharding}
-        out_state = self.model.init_state(rng=self.key(), tx=self.tx, sharding=sharding, abstract=False)
-        self.opt_state = out_state["opt_state"]
+        out_state = self.model.init_state(rng=self.key(), tx=self.tx, sharding=self.shardings)
 
         self.params: Any = out_state["params"]
+        self.opt_state = out_state["opt_state"]
+
         logger.info(
             f"Params intialized with total size: {self.model.count_params(self.params):_} parameters.", log_for_all=True
         )
@@ -327,11 +330,13 @@ class AsyncTrainerWorker(Worker):
     def _setup_checkpointer(self):
         self.log_info(f"rank: {stax.get_rank()}")
 
-        self.checkpointer = stax.OldCheckpointer(
+        train_mesh = self.async_options.train_mesh
+        self.checkpointer = stax.Checkpointer(
             output_dir=self.checkpoint_path,
             max_to_keep=self.config.max_checkpoints_to_keep,
             # only allow train workers to write checkpoints
-            train_mesh=self.async_options.train_mesh,
+            active_processes={d.process_index for d in train_mesh.devices.flat},
+            train_mesh=train_mesh,
             keep_every=self.config.keep_every,
         )
 
@@ -345,17 +350,17 @@ class AsyncTrainerWorker(Worker):
         assert self.train_dataset is not None, "Train dataset must be set up to make save tree."
         assert self.train_mesh is not None, "train mesh should be intialized for checkpointing"
 
-        dataset_state = {"train": self.train_dataset.save_checkpoint()}
-
         state = {
             "params": self.params if params is None else params,
             "opt_state": self.opt_state if opt_state is None else opt_state,
-            "global_step": self.global_step,
-            "dataset": dataset_state,
-            "key": self.key.key,
         }
 
-        metadata = {"writer_id": self.writer_id}
+        metadata = {
+            "writer_id": self.writer_id,
+            "global_step": self.global_step,
+            "dataset": {"train": self.train_dataset.save_checkpoint()},
+            "key": np.asarray(self.key.key).tolist(),
+        }
 
         def convert_metric(x):
             return x.item() if isinstance(x, Array) else x
@@ -371,7 +376,7 @@ class AsyncTrainerWorker(Worker):
             assert self.checkpointer is not None, "Checkpointer not set up."
             state, metadata = self.make_save_tree()
             self.log_info(f"Saving checkpoint at step {step} ...")
-            self.checkpointer.save(step=step, checkpoint_data=state, metadata=metadata)
+            self.checkpointer.save_checkpoint(step, save_tree=state, metadata=metadata)
         else:
             self.log_info(f"Debug mode enabled, skipping checkpoint save at step {step}.")
 
@@ -386,78 +391,80 @@ class AsyncTrainerWorker(Worker):
 
         self.global_step = self.checkpointer.latest_step
 
-        state, metadata = self.checkpointer.restore()
-        self.params = jax.tree.map(lambda x, s: jax.device_put(x, s), state["params"], self.params_sharding)
-        self.opt_state = jax.tree.map(lambda x, s: jax.device_put(x, s), state["opt_state"], self.opt_state_sharding)
+        def with_sharding(x, s):
+            return jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=s)
 
-        self.key.key = state["key"]
-        train_state = state["dataset"].get("train")
-        self.train_dataset.restore_checkpoint(train_state)
+        abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx)
+        restored = self.checkpointer.restore(
+            state={
+                "params": jax.tree.map(with_sharding, abstract_state["params"], self.params_sharding),
+                "opt_state": jax.tree.map(with_sharding, abstract_state["opt_state"], self.opt_state_sharding),
+            }
+        )
+        state, metadata = restored["state"], restored["metadata"]
+        self.params = state["params"]
+        self.opt_state = state["opt_state"]
+
+        self.key.key = jax.numpy.asarray(metadata["key"], dtype=jax.numpy.uint32)
+        self.train_dataset.restore_checkpoint(metadata["dataset"]["train"])
 
         self.writer_id = metadata.get("writer_id", None)
 
     def train_sync_weights(self):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
 
-        with stax.Tracker(timer=True) as t:
-            params_cast = self.replicate_params_fn(self.params)
-            if self.worker_rank == 0:
-                for _ in range(self.async_options.inference_workers):
-                    self.async_options.queues.weight_sync_queue.put("sync")
+        params_cast = self.replicate_params_fn(self.params)
+        if self.worker_rank == 0:
+            for _ in range(self.async_options.inference_workers):
+                self.async_options.queues.weight_sync_queue.put("sync")
 
-            _ = self.rdma_server.transfer({"params": params_cast}, init_mesh=self.train_mesh)
+        _ = self.rdma_server.transfer({"params": params_cast}, init_mesh=self.train_mesh)
 
-            del params_cast
-
+        del params_cast
         self.weight_iteration += 1
-        self.log_info(f"[weight_sync] Weights sent to inference worker in {t.data['time']:.2f} seconds")
-        return {"train/weight_sync_time": t.data["time"]}
 
     def run_eval(self) -> tuple[dict[str, float], list[TableMetrics]]:
         metrics: dict[str, float] = {}
         tables: list[TableMetrics] = []
 
-        with stax.Tracker(timer=True) as t:
-            if self.worker_rank == 0:
-                total_eval_prompts = 0
-                for val_dataset in self.val_datasets:
-                    name = val_dataset.dataset_config.name
-                    samples = val_dataset.samples
-                    total_eval_prompts += len(samples)
+        if self.worker_rank == 0:
+            total_eval_prompts = 0
+            for val_dataset in self.val_datasets:
+                name = val_dataset.dataset_config.name
+                samples = val_dataset.samples
+                total_eval_prompts += len(samples)
 
-                    for sample in samples:
-                        sample.dataset_name = name
-                        self.async_options.queues.eval_prompt_queue.put(sample)
+                for sample in samples:
+                    sample.dataset_name = name
+                    self.async_options.queues.eval_prompt_queue.put(sample)
 
-                    logger.info(f"[eval] {name}: waiting on {len(samples)} prompts", log_for_all=True)
+                logger.info(f"[eval] {name}: waiting on {len(samples)} prompts", log_for_all=True)
 
-                generations: dict[str, list[InferenceRollout]] = {}
-                with tqdm(total=total_eval_prompts, desc="[eval] rollouts", unit="prompt", mininterval=10) as bar:
-                    for _ in range(total_eval_prompts):
-                        generation = self.async_options.queues.eval_rollout_queue.get(timeout=EVAL_TIMEOUT)
-                        generations.setdefault(generation.sample.dataset_name, []).append(generation)
-                        bar.update(1)
+            generations: dict[str, list[InferenceRollout]] = {}
+            with tqdm(total=total_eval_prompts, desc="[eval] rollouts", unit="prompt", mininterval=10) as bar:
+                for _ in range(total_eval_prompts):
+                    generation = self.async_options.queues.eval_rollout_queue.get(timeout=EVAL_TIMEOUT)
+                    generations.setdefault(generation.sample.dataset_name, []).append(generation)
+                    bar.update(1)
 
-                for val_dataset in self.val_datasets:
-                    val_generations = generations[val_dataset.dataset_config.name]
-                    scores, rewards = val_dataset.score_rollouts(
-                        val_generations, self.config.eval_config.group_size, list(self.config.eval_config.pass_k)
+            for val_dataset in self.val_datasets:
+                val_generations = generations[val_dataset.dataset_config.name]
+                scores, rewards = val_dataset.score_rollouts(
+                    val_generations, self.config.eval_config.group_size, list(self.config.eval_config.pass_k)
+                )
+                metrics |= {f"eval/{val_dataset.dataset_config.name}/{key}": v for key, v in scores.items()}
+
+                if self.config.eval_config.log_traces_n_prompts != 0:
+                    traces = val_dataset.build_trace_table(
+                        val_generations, rewards, self.config.eval_config.log_traces_n_prompts
                     )
-                    metrics |= {f"eval/{val_dataset.dataset_config.name}/{key}": v for key, v in scores.items()}
+                    tables.append(TableMetrics(f"eval/generations/{name}", traces))
 
-                    if self.config.eval_config.log_traces_n_prompts != 0:
-                        traces = val_dataset.build_trace_table(
-                            val_generations, rewards, self.config.eval_config.log_traces_n_prompts
-                        )
-                        tables.append(TableMetrics(f"eval/generations/{name}", traces))
+            for _ in range(self.async_options.train_workers - 1):
+                self.async_options.queues.eval_done_queue.put("done")
+        else:
+            self.async_options.queues.eval_done_queue.get(timeout=EVAL_TIMEOUT)
 
-                for _ in range(self.async_options.train_workers - 1):
-                    self.async_options.queues.eval_done_queue.put("done")
-            else:
-                self.async_options.queues.eval_done_queue.get(timeout=EVAL_TIMEOUT)
-
-        metrics["eval/time"] = t.data["time"]
-        logger.info(f"[eval] complete in {t.data['time']:.2f}s", log_for_all=True)
         return metrics, tables
 
     def _start_queue(self):
@@ -481,31 +488,27 @@ class AsyncTrainerWorker(Worker):
         rollouts = []
         weight_iterations = []
         num_filtered_rollouts = 0
-        with stax.Tracker(timer=True) as t:
-            while len(rollouts) < self.train_n_prompts_per_host:
-                rollout: InferenceRollout = self.async_options.queues.rollout_queue.get(timeout=TIMEOUT)
+        while len(rollouts) < self.train_n_prompts_per_host:
+            rollout: InferenceRollout = self.async_options.queues.rollout_queue.get(timeout=TIMEOUT)
 
-                if num_filtered_rollouts > 0 and num_filtered_rollouts % 10 == 0:
-                    logger.warning(
-                        f"Filtered {num_filtered_rollouts} rollouts due to lag or zero variance, consider increasing max_lag or disabling zero variance filtering if this is happening frequently.",
-                        log_for_all=True,
-                    )
+            if num_filtered_rollouts > 0 and num_filtered_rollouts % 10 == 0:
+                logger.warning(
+                    f"Filtered {num_filtered_rollouts} rollouts due to lag or zero variance, consider increasing max_lag or disabling zero variance filtering if this is happening frequently.",
+                    log_for_all=True,
+                )
 
-                if (lag_diff := (self.weight_iteration - rollout.lag)) > self.config.async_config.max_lag:
-                    num_filtered_rollouts += 1
-                    continue
+            if (lag_diff := (self.weight_iteration - rollout.lag)) > self.config.async_config.max_lag:
+                num_filtered_rollouts += 1
+                continue
 
-                if self.config.loss_config.filter_zero_variance and self.train_dataset.check_rollout_zero_variance(
-                    rollout
-                ):
-                    num_filtered_rollouts += 1
-                    continue
+            if self.config.loss_config.filter_zero_variance and self.train_dataset.check_rollout_zero_variance(rollout):
+                num_filtered_rollouts += 1
+                continue
 
-                rollouts.append(rollout)
-                weight_iterations.append(lag_diff)
+            rollouts.append(rollout)
+            weight_iterations.append(lag_diff)
 
         metrics = {
-            "train/rollout_queue_wait_time": t.data["time"],
             "train/max_off_policy": max(weight_iterations),
             "train/min_off_policy": min(weight_iterations),
             "train/mean_off_policy": sum(weight_iterations) / len(weight_iterations),
@@ -543,42 +546,104 @@ class AsyncTrainerWorker(Worker):
 
         return metrics
 
+    def global_train_batch(self, local_batch):
+        assert self.shard_data_fn is not None, "Sharding function not set up."
+        global_batch = self.shard_data_fn(local_batch)
+        return jax.tree.map(
+            lambda x: rearrange(
+                x,
+                "(m g) ... -> g m ...",
+                m=self.config.train_batch_size // self.config.grad_accum_steps,
+                g=self.config.grad_accum_steps,
+            ),  # [grad_accum_steps, minibatch_size, seq_len]
+            global_batch,
+        )
+
     def train_step(
         self, params, opt_state, local_batch, teacher_params=None, profile=False
     ) -> tuple[PyTree, PyTree, dict]:
         assert self.train_fn is not None, "Train function not set up."
-        assert self.shard_data_fn is not None, "Sharding function not set up."
 
-        with stax.Tracker(timer=True) as t:
-            global_batch = self.shard_data_fn(local_batch)
-            global_train_batch = jax.tree.map(
-                lambda x: rearrange(
-                    x,
-                    "(m g) ... -> g m ...",
-                    m=self.config.train_batch_size // self.config.grad_accum_steps,
-                    g=self.config.grad_accum_steps,
-                ),  # [grad_accum_steps, minibatch_size, seq_len]
-                global_batch,
-            )
-
-            if profile:
-                trace_path = f"{self.profile_path}/step_{self.global_step}"
-                out = stax.get_perf_func(
-                    trace_path,
-                    self.train_fn,  # type: ignore
-                    params,
-                    opt_state,
-                    global_train_batch,
-                    teacher_params=teacher_params,
-                )
-            else:
-                out = self.train_fn(params, opt_state, global_train_batch, teacher_params=teacher_params)
+        trace_path = f"{self.profile_path}/step_{self.global_step}" if profile else None
+        with stax.Tracker(trace=trace_path):
+            global_train_batch = self.global_train_batch(local_batch)
+            out = self.train_fn(params, opt_state, global_train_batch, teacher_params=teacher_params)
 
             # we have to sync weights so might as well block to get true step time
             jax.tree.map(lambda x: x.block_until_ready(), out)
 
-        metrics = out["metrics"] | {"train/learner_step_time": t.data["time"]}
-        return out["params"], out["opt_state"], metrics
+        return out["params"], out["opt_state"], out["metrics"]
+
+    def compile_train_fn(self):
+        assert self.train_fn is not None, "Train function not set up."
+        self.log_info("Precompiling test batch")
+
+        local_test_batch = RLBatch.get_test_batch(
+            batch_size=self.config.train_batch_size // self.config.async_config.train_workers,
+            max_seq_len=self.config.loss_config.inference_config.max_seq_len,
+        )
+        self.train_fn.lower(  # type: ignore
+            self.params, self.opt_state, self.global_train_batch(local_test_batch), teacher_params=self.teacher_params
+        ).compile()
+
+    def get_step_metrics(
+        self,
+        generations: list[InferenceRollout],
+        train_metrics: dict,
+        local_train_batch_metrics: dict,
+        local_rollout_metrics: dict,
+        *,
+        rollout_time: float,
+        prep_batch_time: float,
+        learner_time: float,
+        sync_time: float,
+        step_time: float,
+        eval_out: tuple[dict[str, float], list[TableMetrics]] | None,
+        eval_time: float | None,
+    ) -> tuple[dict, list[TableMetrics]]:
+        assert self.opt_state is not None, "Train state not initialized."
+        assert self.train_dataset is not None, "Train dataset not set up."
+
+        metrics = (
+            train_metrics
+            | metrics_all_reduce(local_train_batch_metrics, self.async_options.train_mesh)
+            | metrics_all_reduce(
+                local_rollout_metrics | {"train/rollout_queue_wait_time": rollout_time}, self.async_options.train_mesh
+            )
+            | {f"devices/{k}": v for k, v in memory_metrics(jax.local_devices()).items()}
+            | {
+                "train/lr": self.opt_state[1].hyperparams["learning_rate"],
+                "train/prep_batch_time": prep_batch_time,
+                "train/learner_step_time": learner_time,
+                "train/weight_sync_time": sync_time,
+                "train/step_time": step_time,
+            }
+        )
+        tables: list[TableMetrics] = []
+
+        if stax.get_rank() == 0:
+            metrics |= self.get_inference_metrics()
+
+        if eval_out is not None:
+            eval_metrics, eval_tables = eval_out
+            metrics |= eval_metrics | {"eval/time": eval_time}
+            tables.extend(eval_tables)
+
+        unstable = metrics.get("train/is_ratio") and abs(1 - metrics["train/is_ratio"].item()) > 0.05
+        if self.global_step % self.config.log_generations_every_n_steps == 0 or unstable:
+            if unstable:
+                logger.warning(f"unstable training detected, saving table for step {self.global_step}")
+            tables.append(
+                TableMetrics(
+                    f"train/generations/{self.train_dataset.dataset_config.name}",
+                    {
+                        "answer": [g.sample.answer for g in generations for _ in g.rollout_strs],
+                        "rollout": [r for g in generations for r in g.rollout_strs],
+                    },
+                )
+            )
+
+        return metrics, tables
 
     def train(self):
         assert self.params is not None and self.opt_state is not None, "Train state not initialized."
@@ -588,66 +653,49 @@ class AsyncTrainerWorker(Worker):
         assert self.checkpointer is not None, "Checkpointer not set up."
 
         self.train_sync_weights()
-        self.log_info("Precompiling test batch")
+        self.compile_train_fn()
 
-        # Profile first step to overlap compile with intial inference queue filling
-        local_test_batch = RLBatch.get_test_batch(
-            batch_size=self.config.train_batch_size // self.config.async_config.train_workers,
-            max_seq_len=self.config.loss_config.inference_config.max_seq_len,
-        )
-        self.train_step(self.params, self.opt_state, local_test_batch, self.teacher_params, profile=True)
-
+        initial_step = self.global_step
         self.log_info(f"Starting training loop at step {self.global_step}")
         while self.global_step < self.total_steps:
-            tables: list[TableMetrics] = []
+            with stax.Tracker(timer=True) as step_t:
+                with stax.Tracker(timer=True) as rollout_t:
+                    generations, local_rollout_metrics = self.get_rollouts()
 
-            with stax.Tracker(timer=True) as t:
-                generations, local_rollout_metrics = self.get_rollouts()
-
-                local_train_batch, local_train_batch_metrics = self.train_dataset.prepare_batch(generations, train=True)
-
-                self.params, self.opt_state, train_metrics = self.train_step(
-                    self.params, self.opt_state, local_train_batch, teacher_params=self.teacher_params
-                )
-                weight_sync_time = self.train_sync_weights()
-
-            other_metrics = {
-                **{f"devices/{k}": v for k, v in memory_metrics(jax.local_devices()).items()},
-                "train/lr": self.opt_state[1].hyperparams["learning_rate"],
-                "train/weight_sync_time": weight_sync_time["train/weight_sync_time"],
-                "train/step_time": t.data["time"],
-            }
-
-            metrics = (
-                train_metrics
-                | metrics_all_reduce(local_train_batch_metrics, self.async_options.train_mesh)
-                | metrics_all_reduce(local_rollout_metrics, self.async_options.train_mesh)
-                | other_metrics
-            )
-
-            if stax.get_rank() == 0:
-                metrics |= self.get_inference_metrics()
-
-            if self.global_step % self.config.eval_config.eval_every_n_steps == 0 and (
-                self.global_step > 0 or self.config.eval_config.eval_on_step_0
-            ):
-                eval_metrics, eval_tables = self.run_eval()
-                metrics |= eval_metrics
-                tables.extend(eval_tables)
-
-            unstable = metrics.get("train/is_ratio") and abs(1 - metrics["train/is_ratio"].item()) > 0.05
-            if self.global_step % self.config.log_generations_every_n_steps == 0 or unstable:
-                if unstable:
-                    logger.warning(f"unstable training detected, saving table for step {self.global_step}")
-                tables.append(
-                    TableMetrics(
-                        f"train/generations/{self.train_dataset.dataset_config.name}",
-                        {
-                            "answer": [g.sample.answer for g in generations for _ in g.rollout_strs],
-                            "rollout": [r for g in generations for r in g.rollout_strs],
-                        },
+                with stax.Tracker(timer=True) as prep_batch_t:
+                    local_train_batch, local_train_batch_metrics = self.train_dataset.prepare_batch(
+                        generations, train=True
                     )
-                )
+
+                with stax.Tracker(timer=True) as learner_t:
+                    self.params, self.opt_state, train_metrics = self.train_step(
+                        self.params,
+                        self.opt_state,
+                        local_train_batch,
+                        teacher_params=self.teacher_params,
+                        profile=self.global_step == initial_step,
+                    )
+
+                with stax.Tracker(timer=True) as sync_t:
+                    self.train_sync_weights()
+
+            if self.should_eval:
+                with stax.Tracker(timer=True) as eval_t:
+                    eval_out = self.run_eval()
+
+            metrics, tables = self.get_step_metrics(
+                generations,
+                train_metrics,
+                local_train_batch_metrics,
+                local_rollout_metrics,
+                rollout_time=rollout_t.data["time"],
+                prep_batch_time=prep_batch_t.data["time"],
+                learner_time=learner_t.data["time"],
+                sync_time=sync_t.data["time"],
+                step_time=step_t.data["time"],
+                eval_out=eval_out if self.should_eval else None,
+                eval_time=eval_t.data["time"] if self.should_eval else None,
+            )
 
             self.writer(self.global_step, metrics, table_metrics=tables)
             self.global_step += 1
@@ -670,13 +718,19 @@ class AsyncTrainerWorker(Worker):
 
     def block_checkpointer(self):
         assert self.checkpointer is not None, "Checkpointer not set up."
-        self.checkpointer.block_until_ready()
+        self.checkpointer.wait_until_finished()
 
     @partial(setup, component="cleanup")
     def finish(self):
         if self.checkpointer:
             self.log_info("Cleaning up checkpointer resources...")
             self.block_checkpointer()
+
+    @property
+    def should_eval(self) -> bool:
+        return self.global_step % self.config.eval_config.eval_every_n_steps == 0 and (
+            self.global_step > 0 or self.config.eval_config.eval_on_step_0
+        )
 
     @property
     def total_steps(self):

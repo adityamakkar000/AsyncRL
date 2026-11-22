@@ -3,8 +3,10 @@ import jax.numpy as jnp
 from flax import linen as nn
 from jaxtyping import Array
 
-from .config import AttentionMask, BaseModel, KVCache, RopeMatrix
-from .layers import RematBlock, RMSNorm, RopeCorrection, gather_rope, no_correction, rope_tables
+from ...config import AttentionMask, BaseModel, KVCache, RopeMatrix
+from .block import RematBlock
+from .norm import RMSNorm
+from .rope import RopeCorrection, gather_rope, no_correction, rope_tables
 
 
 class Transformer(BaseModel):
@@ -77,6 +79,7 @@ class Transformer(BaseModel):
         )((x, kv_cache), sequence_lens, masks, rope_matrix, jnp.arange(self.n_layers, dtype=jnp.int32))
 
         if out_cache is not None:
+            assert kv_cache is not None
             out_cache = out_cache.replace(length=kv_cache.length + 1 if T == 1 else sequence_lens)
 
         x = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)

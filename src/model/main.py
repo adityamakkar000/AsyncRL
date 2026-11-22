@@ -5,7 +5,7 @@ import orbax.checkpoint as ocp
 import stax
 from flax import linen as nn
 from hydra.utils import instantiate
-from jax.sharding import Sharding, SingleDeviceSharding
+from jax.sharding import Sharding
 from jaxtyping import Array, PyTree
 from omegaconf import DictConfig
 from optax import GradientTransformation
@@ -13,7 +13,8 @@ from stax import HFModelBase
 from stax import staxLogger as logger
 
 from .config import BaseModel, Int8Array, KVCache, ModelConfig
-from .utils import convert_dtype, fused_linear_selection, get_lm_head_weights
+from .models.kernels import fused_linear_selection
+from .utils import convert_dtype, get_lm_head_weights, mesh_size
 
 shardingType = PyTree[Sharding] | None
 
@@ -27,37 +28,36 @@ class Model(HFModelBase):
         )
 
     def init_state(
-        self, rng: Array, tx: GradientTransformation | None, *, sharding: shardingType = None, abstract: bool = False
+        self, rng: Array, tx: GradientTransformation | None, *, sharding: stax.Shardings | None = None
     ) -> PyTree:
-        x_init = jnp.ones((1, self.sequence_len), dtype=jnp.int32)
-        seq_lens = jnp.array([1])
+        def init_fn(rng, x, sequence_lens):
+            params = self.model.init(rngs=rng, x=x, sequence_lens=sequence_lens, kv_cache=None)["params"]
+            return {"params": params, "opt_state": tx.init(params) if tx else None}
 
-        def init_state(rng, x_init, sequence_lens):
-            params = jax.eval_shape(self.model.init, rngs=rng, x=x_init, sequence_lens=sequence_lens, kv_cache=None)[
-                "params"
-            ]
-            out_state = {"params": params}
-            if tx:
-                out_state["opt_state"] = tx.init(jax.tree.map(lambda x: jnp.empty(x.shape, dtype=x.dtype), params))
-            return out_state
-
-        if abstract:
-            return jax.eval_shape(init_state, rng, x_init, seq_lens)
-
-        out_state = init_state(rng, x_init, seq_lens)
-        out_state["params"] = self.load_from_hf(out_state["params"], self.config.hf_model_name)
+        batch = mesh_size()
+        abstract_x = jax.ShapeDtypeStruct((batch, self.sequence_len), jnp.int32)
+        abstract_seq_lens = jax.ShapeDtypeStruct((batch,), jnp.int32)
 
         if sharding is None:
-            single_sharding = SingleDeviceSharding(jax.local_devices()[0])
-            sharding = jax.tree.map(lambda _: single_sharding, out_state)
+            logger.info("No sharding is given returning abstract state")
+            return jax.eval_shape(init_fn, rng, abstract_x, abstract_seq_lens)
 
-        if out_state.keys() != sharding.keys():
-            raise ValueError(f"sharding keys do not match got {sharding.keys()} expected {out_state.keys()}")
-        out_state = jax.tree.map(lambda x, s: jax.device_put(x, s), out_state, sharding)
+        local_batch = jax.local_device_count()
+        x_init = np.ones((local_batch, self.sequence_len), dtype=np.int32)
+        seq_lens = np.ones((local_batch,), dtype=np.int32)
+
+        sharded_init_args = sharding.shard_data((rng, x_init, seq_lens))
+        out_shardings = {"params": sharding.param_sharding, "opt_state": sharding.opt_state_sharding if tx else None}
+
+        out_state = jax.jit(init_fn, out_shardings=out_shardings)(*sharded_init_args)
+
+        logger.info(jax.tree.map(lambda x: (x.shape, x.sharding.spec), out_state["params"]))
+        out_state["params"] = self.load_from_hf(out_state["params"], self.config.hf_model_name)
 
         table = nn.tabulate(self.model, rngs=jax.random.PRNGKey(0), depth=1)
-        logger.info(table(x=x_init, sequence_lens=seq_lens, kv_cache=None))
-
+        logger.info(
+            table(x=np.ones(abstract_x.shape, np.int32), sequence_lens=np.ones((batch,), np.int32), kv_cache=None)
+        )
         return out_state
 
     def init_kv_cache(self, batch_size: int, length: int, sharding: KVCache, dtype: str = "bfloat16") -> KVCache:
@@ -91,12 +91,12 @@ class Model(HFModelBase):
     def load_from_ckpt(
         self, path: str, step_number: int | None = None, use_best=False
     ) -> tuple[int, PyTree, dict[str, float]]:
-        assert (step_number is not None) ^ use_best, "Either step_number or use_best must be set."
+        assert not (use_best and step_number is not None), "Set either step_number or use_best, not both."
         path = f"{path}/checkpoints/"
         if use_best:
             path += "best/"
 
-        checkpointer = ocp.CheckpointManager(directory=path, options=ocp.CheckpointManagerOptions())
+        checkpointer = ocp.CheckpointManager(directory=path, options=ocp.CheckpointManagerOptions(read_only=True))
 
         if step_number == -1:
             step_number = None
@@ -106,7 +106,7 @@ class Model(HFModelBase):
             if step_number is None:
                 raise ValueError("No checkpoints found.")
 
-        save_tree = self.init_state(jax.random.PRNGKey(0), tx=None, abstract=True)
+        save_tree = {"params": self.init_state(jax.random.PRNGKey(0), tx=None, sharding=None)["params"]}
         # use np.ndarray to load on CPU from sharded arrays (https://github.com/google/orbax/issues/648)
         restore_args = jax.tree.map(lambda _: ocp.RestoreArgs(restore_type=np.ndarray), save_tree)
         restored = checkpointer.restore(
@@ -119,25 +119,6 @@ class Model(HFModelBase):
         assert hasattr(restored, "state"), "Restored object has no attribute 'state'"
 
         return step_number, restored.state["params"], restored.metadata  # type: ignore
-
-    def load_from_ckpt_old(
-        self,
-        path: str,
-        step_number: int | None = None,
-    ) -> tuple[int, PyTree, dict[str, float]]:
-        path = f"{path}/checkpoints/"
-
-        checkpointer = stax.OldCheckpointer(path)
-        if step_number == -1:
-            step_number = None
-
-        if step_number is None:
-            step_number = checkpointer.latest_step
-            if step_number is None:
-                raise ValueError("No checkpoints found.")
-
-        state, metadata = checkpointer.restore(step=step_number)
-        return step_number, state["params"], metadata
 
     def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
         return self.model.load_from_hf(params, model_name)

@@ -2,7 +2,7 @@ import jax.numpy as jnp
 from flax import linen as nn
 from jaxtyping import Array
 
-from ..utils import act_constrain
+from ...utils import act_constrain
 
 
 class FeedForward(nn.Module):

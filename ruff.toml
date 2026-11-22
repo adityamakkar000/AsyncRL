@@ -6,10 +6,10 @@ respect-gitignore = true
 quote-style = "double"
 indent-style = "space"
 docstring-code-format = true
-exclude = ["*.ipynb", "src/model/layers/flash_attention.py"]
+exclude = ["*.ipynb", "src/model/models/kernels/gqa_fa.py"]
 
 [lint]
-exclude = ["*.ipynb", "src/model/layers/flash_attention.py"]
+exclude = ["*.ipynb", "src/model/models/kernels/gqa_fa.py"]
 extend-select = [
     "F", 
     "I",

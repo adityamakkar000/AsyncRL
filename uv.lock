@@ -6150,7 +6150,7 @@ wheels = [
 [[package]]
 name = "stax"
 version = "0.1.0"
-source = { git = "https://github.com/adityamakkar000/stax.git#52f636568bc18f6dbc5b4c06f414ac2bc564b5d5" }
+source = { git = "https://github.com/adityamakkar000/stax.git#61c5a79ec66892e84e923e630f746c4f19fcbc8f" }
 dependencies = [
     { name = "etils", extra = ["epath"] },
     { name = "flax", version = "0.11.1", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },

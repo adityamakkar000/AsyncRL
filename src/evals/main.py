@@ -43,7 +43,7 @@ class EvalRunner:
         logger.info(f"Model config loaded: \n{OmegaConf.to_yaml(model_config)}")
         logger.info(f"Loading model from {self.gs_path}...")
         model = Model(model_config)
-        self.step_number, params, metadata = model.load_from_ckpt_old(
+        self.step_number, params, metadata = model.load_from_ckpt(
             self.gs_path, step_number=self.model_config.step_number
         )
         logger.info(f"Checkpoint loaded successfully from step {self.step_number}")

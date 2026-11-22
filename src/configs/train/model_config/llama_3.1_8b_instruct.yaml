@@ -1,5 +1,5 @@
 model_args:
-  _target_: src.model.llama.Llama3
+  _target_: src.model.models.llama.Llama3
   vocab_size: 128256
   sequence_len: 16384
   model_dim: 4096

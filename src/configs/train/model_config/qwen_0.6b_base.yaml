@@ -1,5 +1,5 @@
 model_args:
-  _target_: src.model.qwen3.Qwen3
+  _target_: src.model.models.qwen_3.Qwen3
   vocab_size: 151936
   d_ff: 3072
   sequence_len: 16384

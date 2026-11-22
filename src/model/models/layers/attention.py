@@ -1,5 +1,3 @@
-from functools import partial
-
 import einops
 import jax
 import jax.numpy as jnp
@@ -7,9 +5,9 @@ from flax import linen as nn
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array
 
-from ..config import AttentionMask, KVCache, RopeMatrix
-from ..utils import DP, FSDP, OUT_SPEC, QKV_SPEC, act_constrain
-from .flash_attention import SegmentIds, decode_ragged_attention, gqa_flash_attention
+from ...config import AttentionMask, KVCache, RopeMatrix
+from ...utils import DP, FSDP, OUT_SPEC, QKV_SPEC, act_constrain, has_mesh
+from ..kernels import SegmentIds, decode_ragged_attention, gqa_flash_attention
 from .norm import RMSNorm
 from .rope import apply_rope
 
@@ -19,14 +17,17 @@ def flash_attention_naive(q: Array, k: Array, v: Array, masks: AttentionMask, sm
     return gqa_flash_attention(q, k, v, sm_scale=sm_scale, segment_ids=segment_ids, causal=True)
 
 
-@partial(
-    jax.shard_map,
-    in_specs=(QKV_SPEC, QKV_SPEC, QKV_SPEC, P((DP, FSDP), None), None),
-    out_specs=QKV_SPEC,
-    check_vma=False,
-)
-def flash_attention_sharded(q: Array, k: Array, v: Array, masks: AttentionMask, sm_scale: float) -> Array:
-    return flash_attention_naive(q, k, v, masks, sm_scale)
+def flash_attention(q: Array, k: Array, v: Array, masks: AttentionMask, sm_scale: float) -> Array:
+    fa = flash_attention_naive
+    if has_mesh():
+        fa = jax.shard_map(
+            flash_attention_naive,
+            in_specs=(QKV_SPEC, QKV_SPEC, QKV_SPEC, P((DP, FSDP), None), None),
+            out_specs=QKV_SPEC,
+            check_vma=False,
+        )
+
+    return fa(q, k, v, masks, sm_scale)
 
 
 class GroupedQueryAttention(nn.Module):
@@ -65,15 +66,14 @@ class GroupedQueryAttention(nn.Module):
         sm_scale = self.head_dim**-0.5
         out_cache = None
 
-        if train and not self.is_mutable_collection("params"):
+        if train:
             q, k, v = act_constrain((q, k, v), spec=QKV_SPEC)
-            out: Array = flash_attention_sharded(q, k, v, masks, sm_scale)
+            out: Array = flash_attention(q, k, v, masks, sm_scale)
             out = act_constrain(out, spec=OUT_SPEC)
-        elif train or T >= 128:
+        elif T >= 128:
             out = flash_attention_naive(q, k, v, masks, sm_scale)
-            if not train:
-                layer, cache = kv_cache
-                out_cache = cache.prefill(layer, k, v)
+            layer, cache = kv_cache
+            out_cache = cache.prefill(layer, k, v)
         else:
             assert T == 1, f"gqa should only be called by decode got {T} shape, full shape{x.shape}"
             out, out_cache = decode_ragged_attention(q, k, v, kv_cache, sm_scale=sm_scale)

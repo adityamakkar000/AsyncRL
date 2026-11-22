@@ -1,9 +1,9 @@
-import functools
 import glob
 import os
 import re
 import shutil
 from collections.abc import Callable
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -28,8 +28,16 @@ QKV_SPEC = P((DP, FSDP), CP_ULYSSES, None, None)
 OUT_SPEC = P((DP, FSDP), None, CP_ULYSSES, None)
 
 
+def has_mesh() -> bool:
+    return not jax.sharding.get_abstract_mesh().empty
+
+
+def mesh_size() -> int:
+    return jax.sharding.get_abstract_mesh().size if has_mesh() else 1
+
+
 def act_constrain(x: PyTree[Array], shard: bool = True, spec: P = ACT_SPEC) -> PyTree[Array]:
-    return jax.lax.with_sharding_constraint(x, spec) if shard else x
+    return jax.lax.with_sharding_constraint(x, spec) if shard and has_mesh() else x
 
 
 def quantize(x: Array) -> tuple[Array, Array]:
@@ -82,19 +90,13 @@ def get_jax_key(main_key: str, hf_mapping) -> str | None:
     raise TypeError(f"couldnt find key: {main_key}")
 
 
-def get_torch_weights_to_jax(params: PyTree, name: str, hf_mapping) -> PyTree:
-    """Load Hugging Face model weights into a JAX PyTree of parameters."""
-    path = os.path.join(HF_CHECKPOINT_PATH, name)
-    download_hf_weights(name, path)
-    torch_hf_params = {}
-
+def build_hf_index(path, hf_mapping, n_layers) -> dict[tuple[str, ...], list[tuple[str, str]]]:
+    index = {}
     files = list(glob.glob(path + "/*safetensors"))
     for file in files:
         with safe_open(file, framework="torch") as f:
             for hf_param_key in f.keys():  # noqa: SIM118
-                torch_hf_params[hf_param_key] = f.get_tensor(hf_param_key)
                 jax_param_key = get_jax_key(hf_param_key, hf_mapping)
-
                 if jax_param_key is None:
                     continue
 
@@ -105,26 +107,50 @@ def get_torch_weights_to_jax(params: PyTree, name: str, hf_mapping) -> PyTree:
                 if layer:
                     jax_path[0] = "Block"
 
-                jax_param = params
-
-                for node in jax_path:
-                    jax_param = jax_param[node]
-
-                new_param = torch_hf_params.pop(hf_param_key).float()
-                new_param = new_param.T.numpy() if "kernel" in param_ending else new_param.numpy()
-
-                target = jax_param[param_ending]
-                expected = target.shape[1:] if layer else target.shape
-                assert new_param.shape == expected, (
-                    f"Shape mismatch for {jax_param_key}: expected {expected}, got {new_param.shape}"
-                )
+                jax_key = tuple(jax_path + [param_ending])
+                location = (file, hf_param_key)
 
                 if layer:
-                    if not isinstance(target, np.ndarray):
-                        target = jax_param[param_ending] = np.empty(target.shape, dtype=new_param.dtype)
-                    target[int(layer.group(1))] = new_param
+                    if index.get(jax_key) is None:
+                        index[jax_key] = [None] * n_layers
+                    index[jax_key][int(layer.group(1))] = location
                 else:
-                    jax_param[param_ending] = new_param
+                    index[jax_key] = [location]
+
+    return index
+
+
+def load_leaf(path, param, index: dict[tuple[str, ...], list[tuple[str, str]]]):
+    keys = index[tuple(x.key for x in path)]
+    transpose = path[-1].key == "kernel"
+    stacked = path[0].key == "Block"
+
+    def read(file, hf_key, idx):
+        with safe_open(file, "pt") as f:
+            s = f.get_slice(hf_key)
+            x = s[idx[::-1]].T if transpose else s[idx]
+        return x.float().numpy().astype(param.dtype)
+
+    def cb(idx):
+        if stacked:
+            # TODO: if pipeline is added (layers are sharded, idx[0] != None) then have to index the layers
+            # on this device/host
+            return np.stack([read(f, k, idx[1:]) for f, k in keys], axis=0)
+        file, hf_key = keys[0]
+        return read(file, hf_key, idx)
+
+    hf_loaded_param = jax.make_array_from_callback(param.shape, param.sharding, cb)
+    return hf_loaded_param
+
+
+def get_torch_weights_to_jax(params: PyTree, name: str, hf_mapping) -> PyTree:
+    """Load Hugging Face model weights into a JAX PyTree of parameters."""
+    path = os.path.join(HF_CHECKPOINT_PATH, name)
+    download_hf_weights(name, path)
+
+    n_layers = jax.tree.leaves(params["Block"])[0].shape[0]
+    index = build_hf_index(path, hf_mapping, n_layers)
+    params = jax.tree.map_with_path(partial(load_leaf, index=index), params)
 
     return params
 
@@ -211,81 +237,3 @@ def get_lm_head_weights(params: PyTree, tie_weights: bool) -> Array:
     if tie_weights:
         return jnp.transpose(params["token_emb"]["embedding"])
     return params["Dense_0"]["kernel"]
-
-
-def make_chunks(B: int, chunk_size: int):
-    assert B % chunk_size == 0, "B must be divisible by chunk_size"
-    num_chunks = B // chunk_size
-    return num_chunks
-
-
-@functools.partial(jax.custom_vjp, nondiff_argnums=(3,))
-def fused_linear_selection(h, W, targets, chunk_size=1024) -> Array:
-    return _fwd(h, W, targets, chunk_size)[0]
-
-
-def _fwd(h, W, targets, chunk_size):
-    B, D = h.shape
-    _, _V = W.shape
-    chunk_size = min(chunk_size, B)
-
-    num_chunks = make_chunks(B, chunk_size)
-    chunked_hidden_inputs = act_constrain(
-        h.reshape(num_chunks, chunk_size, D), spec=P(None, (DP, FSDP, CP_ULYSSES), None)
-    )  # num_chunks, chunk_size, D
-    chunked_targets = act_constrain(
-        targets.reshape(num_chunks, chunk_size), spec=P(None, (DP, FSDP, CP_ULYSSES))
-    )  # num_chunks, chunk_size
-
-    W_gather = act_constrain(W, spec=P())
-
-    chunked_hidden_inputs, W_gather = jax.tree.map(lambda x: x.astype(jnp.float32), (chunked_hidden_inputs, W_gather))
-
-    def body_fn(carry, chunk):
-        hidden_chunk, target_chunk = chunk
-        logits_chunked = hidden_chunk @ W_gather  # chunk_size x V
-        log_softmax = jax.nn.log_softmax(logits_chunked, axis=-1)  # chunk_size x V
-        target_log_probs = jnp.take_along_axis(log_softmax, target_chunk[:, None], axis=-1)[:, 0]  # chunk_size
-
-        return carry, target_log_probs
-
-    _, chunked_output = jax.lax.scan(body_fn, None, (chunked_hidden_inputs, chunked_targets))  # num_chunks x chunk_size
-
-    output = chunked_output.reshape(B)  # (B,)
-
-    return output, (chunked_hidden_inputs, W_gather, chunked_targets)
-
-
-def _bwd(chunk_size, residuals, dy):
-    chunked_hidden_inputs, W_gather, chunked_targets = residuals
-    num_chunks, chunk_size, D = chunked_hidden_inputs.shape
-    _, V = W_gather.shape
-
-    chunked_dy = act_constrain(
-        dy.astype(jnp.float32).reshape(num_chunks, chunk_size), spec=P(None, (DP, FSDP, CP_ULYSSES))
-    )
-
-    def body(dW, chunk):
-        hidden_chunk, target_chunk, dy_chunk = chunk
-        logits_chunked = hidden_chunk @ W_gather  # chunk_size x V
-
-        p = jax.nn.softmax(logits_chunked, axis=-1)  # chunk_size x V
-        onehot = jax.nn.one_hot(target_chunk, V, dtype=p.dtype)
-        dz = dy_chunk[:, None] * (onehot - p)  # chunk_size x V
-
-        dh_chunk = dz @ W_gather.T  # chunk_size x D
-        dW = dW + hidden_chunk.T @ dz  # D x V
-        return dW, dh_chunk
-
-    dW, chunked_dh = jax.lax.scan(
-        body,
-        jnp.zeros_like(W_gather, dtype=jnp.float32),
-        (chunked_hidden_inputs, chunked_targets, chunked_dy),
-    )
-
-    dh = chunked_dh.reshape(-1, D)  # (B, D)
-    d_targets = jnp.zeros((num_chunks * chunk_size), jax.dtypes.float0)
-    return dh, dW, d_targets
-
-
-fused_linear_selection.defvjp(_fwd, _bwd)

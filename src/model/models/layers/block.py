@@ -2,8 +2,8 @@ import jax.numpy as jnp
 from flax import linen as nn
 from jaxtyping import Array
 
-from ..config import AttentionMask, KVCache, RopeMatrix
-from ..utils import act_constrain
+from ...config import AttentionMask, KVCache, RopeMatrix
+from ...utils import act_constrain
 from .attention import GroupedQueryAttention
 from .mlp import FeedForward
 from .norm import RMSNorm
@@ -29,7 +29,7 @@ class Block(nn.Module):
         layer: Array,
     ):
         x, layer_cache = carry
-        shard = layer_cache is None and not self.is_initializing()
+        shard = layer_cache is None
 
         x = act_constrain(x, shard)
         h = RMSNorm(activation_dtype=self.activation_dtype, eps=self.rms_eps)(x)

@@ -506,7 +506,8 @@ class AsyncInferenceWorker(Worker):
         self.model = Model(trainer_config.model_config)
         self.validate_config()
 
-        abstract_output = self.model.init_state(rng=jax.random.PRNGKey(0), tx=None, sharding=None, abstract=True)
+        abstract_output = self.model.init_state(rng=jax.random.PRNGKey(0), tx=None)
+        del abstract_output["opt_state"]
         dummy_params = jax.tree.map(
             lambda x: jnp.zeros(x.shape, dtype=self.inference_config.params_dtype), abstract_output
         )
