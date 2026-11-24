@@ -1,3 +1,5 @@
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -11,6 +13,8 @@ from omegaconf import DictConfig
 from optax import GradientTransformation
 from stax import HFModelBase
 from stax import staxLogger as logger
+from transformers import AutoTokenizer
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from .config import BaseModel, Int8Array, KVCache, ModelConfig
 from .models.kernels import fused_linear_selection
@@ -26,6 +30,14 @@ class Model(HFModelBase):
         assert isinstance(self.model, BaseModel), (
             f"Expected model to be an instance of BaseModel, got {type(self.model)}"
         )
+        self.tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(config.hf_model_name)
+        self.eos_token: int = self.tokenizer.eos_token_id
+        assert self.eos_token is not None, f"tokenizer has no eos_token_id: {self.tokenizer}"
+        pad_token = self.tokenizer.pad_token_id
+        self.pad_token: int = self.eos_token if pad_token is None else pad_token
+
+    def decode_tokens(self, tokens: Any, skip_special_tokens: bool = False) -> str:
+        return self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
 
     def init_state(
         self, rng: Array, tx: GradientTransformation | None, *, sharding: stax.Shardings | None = None
@@ -132,9 +144,9 @@ class Model(HFModelBase):
         *,
         x: Array,
         sequence_lens: Array,
-        kv_cache: list[KVCache] | None = None,
+        kv_cache: KVCache | None = None,
         apply_lm_head: bool = True,
-    ) -> tuple[Array, list[KVCache]]:
+    ) -> tuple[Array, KVCache]:
         logits, cache = self.model.apply(params, x, sequence_lens, kv_cache, apply_lm_head)
 
         return logits, cache  # type: ignore
@@ -214,9 +226,9 @@ class Model(HFModelBase):
         *,
         x: Array,
         sequence_lens: Array,
-        kv_cache: list[KVCache] | None = None,
+        kv_cache: KVCache | None = None,
         apply_lm_head: bool = True,
-    ) -> tuple[Array, list[KVCache]]:
+    ) -> tuple[Array, KVCache]:
         """
         Forward pass of the model
         Args:

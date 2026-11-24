@@ -1,12 +1,10 @@
-from typing import List
-
 import datasets
 
 from src.data import grade_answer_verl
-from src.data.math_utils import extract_boxed_answer
+from src.data.envs.math.math_utils import extract_boxed_answer
 
 
-def boxed_score(doc: dict, results: List[str], extract_answer):
+def boxed_score(doc: dict, results: list[str], extract_answer):
     answer: str = extract_answer(doc)
     scores = []
     for result in results:
@@ -17,7 +15,7 @@ def boxed_score(doc: dict, results: List[str], extract_answer):
     return {"boxed_parse": average_score}
 
 
-def process_gsm8k_results(doc: dict, results: List[str]) -> dict:
+def process_gsm8k_results(doc: dict, results: list[str]) -> dict:
     def extract_answer(doc: dict) -> str:
         answer = doc.get("answer", "")
         return answer.split("####")[-1].strip()
@@ -25,14 +23,14 @@ def process_gsm8k_results(doc: dict, results: List[str]) -> dict:
     return boxed_score(doc, results, extract_answer)
 
 
-def process_aime24_results(doc: dict, results: List[str]) -> dict:
+def process_aime24_results(doc: dict, results: list[str]) -> dict:
     def extract_answer(doc: dict) -> str:
         return str(doc.get("Answer", ""))
 
     return boxed_score(doc, results, extract_answer)
 
 
-def process_aime25_results(doc: dict, results: List[str]) -> dict:
+def process_aime25_results(doc: dict, results: list[str]) -> dict:
     def extract_answer(doc: dict) -> str:
         return str(doc.get("answer", ""))
 
@@ -51,7 +49,7 @@ def process_math500_docs(dataset: datasets.Dataset) -> datasets.Dataset:
     return dataset.map(_process_doc)
 
 
-def process_math500_results(doc: dict, results: List[str]) -> dict:
+def process_math500_results(doc: dict, results: list[str]) -> dict:
     def extract_answer(doc: dict) -> str:
         return doc.get("answer", "")
 

@@ -2,36 +2,23 @@ defaults:
   - base 
   - model_config: qwen_0.6b_base
   - loss_config: loss
-  - datasets@train_dataset_config: gsm8k
+  - train_envs/math@train_envs.math: [gsm8k]
+  - eval_config: gsm8k_val
   - override loss_config/inference_config: debug
   - _self_
-
 
 debug: true
 
 train_batch_size: 512
 
 eval_config:
-  group_size: 8
-  pass_k: [1, 4, 8]
-  eval_every_n_steps: 25
-  val_dataset_configs:
-    - name: gsm8k_val
-      verifier:
-        _target_: src.data.verifier.MathVerifier
-      filters:
-        - _target_: src.data.filters.PromptLengthFilter
-          max_length: 256
-        - _target_: src.data.filters.EnglishFilter
-      transforms:
-        - _target_: src.data.transforms.RandomSample
-          n: 16
-
-train_dataset_config:
-  filters:
-    - _target_: src.data.filters.PromptLengthFilter
-      max_length: 256
-    - _target_: src.data.filters.EnglishFilter
+  eval_envs:
+    math:
+      datasets:
+        gsm8k_val:
+          transforms:
+            - _target_: src.data.transformations.transforms.RandomSample
+              n: 16
 
 grad_accum_steps: 1
 seed: 0
@@ -50,7 +37,6 @@ learning_rate_end: 1e-6
 warmup_steps: 0.0
 decay_steps: 1.0
 
-spot_training: true 
 checkpoint_interval: 50
 max_checkpoints_to_keep: 1
 
@@ -68,7 +54,6 @@ loss_config:
     temperature: 1.0
     reasoning_budget: null 
     think_mode: true
-    system_prompt: false
   rl_config:
     _target_: src.workers.loss.CISPOLoss
     epsilon: 4
@@ -85,7 +70,6 @@ sharding_config:
   dp_group_size: 1
   cp_group_size: 1 
   fsdp_group_size: -1
-
 
 async_config:
   train_workers: 1

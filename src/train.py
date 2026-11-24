@@ -56,7 +56,8 @@ def main(cfg: DictConfig) -> None:
     queues = MPQueues(GLOBAL_IP)
     queues.register(
         maxsizes={
-            "prompt_queue": cfg.loss_config.inference_config.max_decode_batch_size * jax.device_count(),
+            "prompt_queue": 1,
+            "scored_queue": 2 * cfg.train_batch_size // cfg.loss_config.inference_config.group_size,
             "weight_sync_queue": inference_workers,
         }
     )

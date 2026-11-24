@@ -14,14 +14,7 @@ from stax import Tracker
 from stax.logger import staxLogger as logger
 
 from src.constants import INTERUPT_THINKING_PHARSE
-from src.data import (
-    InferenceRollout,
-    Sample,
-    apply_chat_template,
-    decode_tokens,
-    load_tokenizer,
-    resolve_pad_eos,
-)
+from src.data import InferenceRollout, Sample
 from src.model import KVCache, Model
 
 from .config import AsyncOptions, AsyncState, InferenceConfig, InferenceState, TrainerConfig
@@ -36,7 +29,7 @@ from .utils import (
 from .worker import Worker
 
 GLOBAL_AXIS = "global"
-DECODE_METRICS_EVERY = 16
+DECODE_METRICS_EVERY = 64
 TP_AXIS = "tp"
 
 
@@ -56,8 +49,8 @@ class SingleInferenceReplica:
         self.config = config
 
         self.model = model
-        self.tokenizer = load_tokenizer(self.model.config.hf_model_name)
-        self.pad_token, self.eos_token = resolve_pad_eos(self.tokenizer)
+        self.tokenizer = self.model.tokenizer
+        self.pad_token, self.eos_token = self.model.pad_token, self.model.eos_token
         self.thinking_tokens = (
             self.tokenizer(INTERUPT_THINKING_PHARSE, add_special_tokens=False, return_tensors="np")
             .input_ids[0]
@@ -88,7 +81,6 @@ class SingleInferenceReplica:
 
         self.eval_group_size = eval_group_size
 
-        self.detokenizer = load_tokenizer(self.model.config.hf_model_name)
         self.finish_queue: Queue = Queue()
 
     def start(self, key: Array):
@@ -154,8 +146,7 @@ class SingleInferenceReplica:
                     is_eval=is_eval,
                 )
 
-            prompts = [sample.prompt for sample, _ in samples]
-            input_tokens, seq_lens = self.tokenize(prompts)
+            input_tokens, seq_lens = self.tokenize([sample for sample, _ in samples])
 
         metrics = {"get_prompts_time": t1.data["time"], "tokenize_time": t2.data["time"], "eval_prompts": n_eval}
         return input_tokens, seq_lens, metrics
@@ -411,7 +402,7 @@ class SingleInferenceReplica:
         cleaned = [self.clean_sequence(t, lp) for t, lp in zip(rollout.rollout_tokens, rollout.rollout_logprobs)]
         rollout.rollout_tokens = [t for t, _ in cleaned]
         rollout.rollout_logprobs = [lp for _, lp in cleaned]
-        rollout.rollout_strs = self.detokenizer.batch_decode(
+        rollout.rollout_strs = self.tokenizer.batch_decode(
             [t.tolist() for t in rollout.rollout_tokens], skip_special_tokens=False
         )
         queues = self.async_options.queues
@@ -425,7 +416,7 @@ class SingleInferenceReplica:
                 "No eos token found in rollout.\nToken sequence: "
                 + str(tokens)
                 + "\nDetokenized string: "
-                + decode_tokens(self.detokenizer, tokens)
+                + self.model.decode_tokens(tokens)
             )
         return tokens[: eos_idx + 1], logprobs[: eos_idx + 1]
 
@@ -463,15 +454,15 @@ class SingleInferenceReplica:
             time.sleep(0.2)
         self._maybe_update_params()
 
-    def tokenize(self, texts: list[str]) -> tuple[np.ndarray, np.ndarray]:
+    def tokenize(self, samples: list[Sample]) -> tuple[np.ndarray, np.ndarray]:
         inputs: list[list[int]] = [
-            apply_chat_template(
+            self.model.model.apply_chat_template(
                 self.tokenizer,
-                self.config.system_prompt,
-                text,
+                sample.system_prompt,
+                sample.prompt,
                 enable_thinking=self.config.think_mode,
             )
-            for text in texts
+            for sample in samples
         ]
 
         seq_lens = np.array([len(x) for x in inputs], dtype=np.int32)

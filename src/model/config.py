@@ -1,6 +1,6 @@
 import abc
 from dataclasses import dataclass
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 import jax
 import jax.numpy as jnp
@@ -8,6 +8,7 @@ from flax import linen as nn
 from flax import struct
 from jaxtyping import Array, PyTree
 from omegaconf import MISSING
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from .utils import dequantize, get_torch_weights_to_jax, quantize, save_to_hf
 
@@ -113,6 +114,24 @@ class BaseModel(abc.ABC, nn.Module):
     @abc.abstractmethod
     def reverse_hf_mapping(self):
         pass
+
+    @staticmethod
+    def get_chat_template(system_prompt: str | None, prompt: str) -> list[dict[str, str]]:
+        system = [{"role": "system", "content": system_prompt}] if system_prompt else []
+        return [*system, {"role": "user", "content": prompt}]
+
+    @classmethod
+    def apply_chat_template(
+        cls, tokenizer: PreTrainedTokenizerBase, system_prompt: str | None, prompt: str, enable_thinking: bool = True
+    ) -> list[int]:
+        tokens = tokenizer.apply_chat_template(
+            cls.get_chat_template(system_prompt, prompt),
+            add_generation_prompt=True,
+            enable_thinking=enable_thinking,
+            tokenize=True,
+            return_dict=False,
+        )
+        return cast(list[int], tokens)
 
     def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
         return get_torch_weights_to_jax(params, model_name, self.hf_mapping)

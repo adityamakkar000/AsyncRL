@@ -217,20 +217,24 @@ class QueueManager(BaseManager):
 class MPQueues:
     prompt_queue: queue.Queue
     rollout_queue: queue.Queue
+    scored_queue: queue.Queue
     weight_sync_queue: queue.Queue[str]
     inference_metrics_queue: queue.Queue[dict]
     eval_prompt_queue: queue.Queue
     eval_rollout_queue: queue.Queue
     eval_done_queue: queue.Queue[str]
+    data_events_queue: queue.Queue[tuple[str, tuple[str, int, int]]]
 
     NAMES = (
         "prompt_queue",
         "rollout_queue",
+        "scored_queue",
         "weight_sync_queue",
         "inference_metrics_queue",
         "eval_prompt_queue",
         "eval_rollout_queue",
         "eval_done_queue",
+        "data_events_queue",
     )
 
     def __init__(self, global_ip: str = GLOBAL_IP, port: int = PORT, key: bytes = KEY):

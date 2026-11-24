@@ -8,7 +8,7 @@ from flax import struct
 from jaxtyping import Array, PyTree
 from omegaconf import MISSING
 
-from src.data import DatasetConfig
+from src.data import EnvConfig
 from src.model import KVCache, ModelConfig
 from src.workers.utils import MPQueues
 
@@ -29,7 +29,6 @@ class InferenceConfig:
     params_dtype: str = "bfloat16"
     reasoning_budget: int | None = None
     think_mode: bool = True
-    system_prompt: bool = False
 
 
 class InferenceState(struct.PyTreeNode):
@@ -166,7 +165,7 @@ class EvalConfig:
     log_traces_n_prompts: int = -1
     eval_every_n_steps: int = 50
     eval_on_step_0: bool = False
-    val_dataset_configs: list[DatasetConfig] = field(default_factory=list)
+    eval_envs: dict[str, EnvConfig] = field(default_factory=dict)
 
 
 @dataclass
@@ -178,7 +177,7 @@ class TeacherConfig:
 @dataclass
 class TrainerConfig:
     experiment_name: str = MISSING  # The name of the experiment
-    train_dataset_config: DatasetConfig = MISSING  # The configuration for the data module
+    train_envs: dict[str, EnvConfig] = MISSING
     model_config: ModelConfig = MISSING  # The configuration for the model
     loss_config: LossConfig = MISSING  # The configuration for the loss function
 
@@ -209,10 +208,6 @@ class TrainerConfig:
     wandb_config: WandBConfig | None = None
     metrics_to_log: list[str] = field(default_factory=lambda: ["train/loss", "val/loss"])  # Metrics to log to terminal
     log_generations_every_n_steps: int = 25
-
-    spot_training: bool = False  # Whether to enable spot training
-    # if true, will load from latest checkpoint if checkpoint dir with same exp name
-    # else will create new checkpoint dir
 
     checkpoint_interval: int = 1000
     max_checkpoints_to_keep: int = 5

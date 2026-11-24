@@ -1,5 +1,0 @@
-defaults:
-  - math
-  - _self_
-
-name: gsm8k

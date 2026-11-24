@@ -1,0 +1,7 @@
+defaults:
+  - /eval_envs/math@eval_envs.math: [gsm8k_val]
+  - _self_
+
+group_size: 8
+pass_k: [1, 4, 8]
+eval_every_n_steps: 25

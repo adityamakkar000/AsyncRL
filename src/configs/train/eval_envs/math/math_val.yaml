@@ -1,0 +1,6 @@
+_target_: src.data.envs.math.MathEnv
+datasets:
+  aime_2025: {}
+  aime_2026: {}
+  math_500: {}
+  amc_25: {}

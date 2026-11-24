@@ -2,31 +2,13 @@ defaults:
   - base 
   - model_config: llama_3.1_8b_instruct
   - loss_config: loss
-  - datasets@train_dataset_config: troll-17k-train
+  - train_envs/math@train_envs.math: [dapo]
+  - eval_config: math_val
   - override loss_config/inference_config: debug
   - override loss_config/rl_config: miscispo
   - _self_
 
 train_batch_size: 512
-
-eval_config:
-  group_size: 8
-  pass_k: [32]
-  eval_every_n_steps: 100
-  eval_on_step_0: true
-  val_dataset_configs:
-    - name: aime_2025
-      verifier:
-        _target_: src.data.verifier.MathVerifier
-    - name: aime_2026
-      verifier:
-        _target_: src.data.verifier.MathVerifier
-    - name: math_500
-      verifier:
-        _target_: src.data.verifier.MathVerifier
-    - name: amc_25
-      verifier:
-        _target_: src.data.verifier.MathVerifier
 
 grad_accum_steps: 8
 seed: 123
@@ -47,7 +29,6 @@ learning_rate_end: 1e-7
 warmup_steps: 0.01
 decay_steps: 0.95
 
-spot_training: true 
 checkpoint_interval: 50
 max_checkpoints_to_keep: 1
 keep_every: 100
@@ -60,7 +41,7 @@ wandb_config:
 
 loss_config:
   inference_config:
-    max_seq_len: 2048
+    max_seq_len: 4096
     max_decode_batch_size: 48
     prefill_multiplier: 1
     warmup_seq_len: 1024
@@ -68,7 +49,6 @@ loss_config:
     temperature: 1.0
     reasoning_budget: null 
     think_mode: true
-    system_prompt: false
 
 model_config:
   fused_chunk_size: 8192
@@ -82,7 +62,6 @@ sharding_config:
   dp_group_size: 1
   cp_group_size: 1 
   fsdp_group_size: -1
-
 
 async_config:
   train_workers: 2

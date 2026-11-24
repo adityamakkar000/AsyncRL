@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Any, cast
+from enum import StrEnum
+from typing import Any, NamedTuple, cast
 
 import jax
 import numpy as np
@@ -7,34 +8,57 @@ from flax import struct
 from omegaconf import MISSING
 
 
-@dataclass
+class DataEvent(StrEnum):
+    FINISHED = "finished"
+    CONSUMED = "consumed"
+    DROPPED = "dropped"
+
+
+class SampleKey(NamedTuple):
+    env: str
+    epoch: int
+    id: int
+
+
+class ReplayKey(NamedTuple):
+    key: SampleKey
+    retries: int
+
+
+@dataclass(frozen=True)
 class Sample:
+    env: str
+    epoch: int
+    id: int
+    system_prompt: str | None
     prompt: str
-    answer: str
-    solution: str | None
-    dataset_name: str = ""
 
-    @classmethod
-    def from_dict(cls, data: dict):
-        prompt = data.get("prompt")
-        answer = data.get("answer")
-        solution = data.get("solution")
+    @property
+    def key(self) -> SampleKey:
+        return SampleKey(self.env, self.epoch, self.id)
 
-        if prompt is None or answer is None:
-            raise ValueError("Prompt and answer are required")
 
-        return cls(prompt=prompt, answer=answer, solution=solution)
-
-    def get_dict(self) -> dict:
-        return {"prompt": self.prompt, "answer": self.answer, "solution": self.solution}
+@dataclass(frozen=True)
+class Score:
+    reward: float
+    status: str
+    extracted: str | None = None
+    expected: str | None = None
 
 
 @dataclass
 class DatasetConfig:
-    name: str = MISSING
-    verifier: dict[str, Any] = MISSING
-    transforms: list[dict[str, Any]] = field(default_factory=list)
-    filters: list[dict[str, Any]] = field(default_factory=list)
+    filters: list[Any] = field(default_factory=list)
+    transforms: list[Any] = field(default_factory=list)
+
+
+@dataclass
+class EnvConfig:
+    _target_: str = MISSING
+    datasets: dict[str, DatasetConfig] = MISSING
+    filters: list[Any] = field(default_factory=list)
+    transforms: list[Any] = field(default_factory=list)
+    use_system_prompt: bool = False
 
 
 class RLBatch(struct.PyTreeNode):
@@ -104,3 +128,17 @@ class InferenceRollout:
     @property
     def lag(self) -> int:
         return min(self.weight_iteration) if self.weight_iteration else 0
+
+
+@dataclass
+class ScoredRollout:
+    rollout: InferenceRollout
+    scores: list[Score]
+
+    @property
+    def rewards(self) -> np.ndarray:
+        return np.array([score.reward for score in self.scores], dtype=np.float32)
+
+    @property
+    def zero_variance(self) -> bool:
+        return len({score.reward for score in self.scores}) == 1
