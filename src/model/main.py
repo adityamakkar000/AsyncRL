@@ -199,6 +199,27 @@ class Model(HFModelBase):
 
         return x_logprobs
 
+    def get_values(self, params: PyTree, tokens: Array, seq_lens: Array) -> Array:
+        """
+        Value estimates with the backbone detached, so gradients only reach the value head.
+        Skips the lm head, so it is much cheaper than get_logprobs_and_values.
+        Args:
+            params: Model parameters.
+            tokens: Input tokens of shape (B, T).
+            seq_lens: Sequence lengths of shape (B,).
+        Returns:
+            values: Value estimates of shape (B, T - 1), aligned with get_logprobs_and_values.
+        """
+        if not self.model.apply_value_head:
+            raise ValueError("Requires model_args.apply_value_head=true ")
+
+        hidden_output, _ = self.model.apply(
+            {"params": params}, x=tokens, sequence_lens=seq_lens, kv_cache=None, apply_lm_head=False
+        )  # B, T, D
+        hidden_output = jax.lax.stop_gradient(hidden_output)
+        values = hidden_output @ params["value_head"]["kernel"][..., 0]  # B, T
+        return values[:, :-1]
+
     def get_logprobs_and_values(self, params: PyTree, tokens: Array, seq_lens: Array) -> tuple[Array, Array]:
         """
         Log probability of each target token and the value estimate of the state it was sampled from,
