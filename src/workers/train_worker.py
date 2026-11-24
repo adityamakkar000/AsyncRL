@@ -62,7 +62,6 @@ class AsyncTrainerWorker(Worker):
             self._setup_dataset()
             self._setup_train_state()
             self._setup_writer()
-            self.data_worker.start()
 
             if not self.resumed:
                 self.log_info("Saving intial checkpoint ...")
@@ -138,7 +137,7 @@ class AsyncTrainerWorker(Worker):
         self.global_step = 0
 
         self.worker_rank = stax.get_rank()
-        self.n_hosts = jax.process_count()
+        self.n_hosts: int = jax.process_count()
         self.n_devices = jax.device_count()
         gs_path = f"{RUN_PATH}/{self.config.experiment_name}"
         self.checkpoint_path = f"{gs_path}/checkpoints"
@@ -258,6 +257,7 @@ class AsyncTrainerWorker(Worker):
             filter_zero_variance=self.config.loss_config.filter_zero_variance,
             timeout=TIMEOUT,
         )
+
         self.eval_worker = EvalWorker(
             self.config.eval_config,
             queues,
@@ -425,6 +425,51 @@ class AsyncTrainerWorker(Worker):
         del params_cast
         self.weight_iteration += 1
 
+    def get_step_metrics(
+        self,
+        train_metrics: dict,
+        local_rollout_metrics: dict,
+        local_batch_metrics: dict,
+        *,
+        prep_batch_time: float,
+        learner_time: float,
+        sync_time: float,
+        step_time: float,
+        eval_out: tuple[dict[str, float], list[TableMetrics]] | None,
+        eval_time: float | None,
+    ) -> tuple[dict, list[TableMetrics]]:
+        assert self.opt_state is not None, "Train state not initialized."
+
+        metrics = (
+            train_metrics
+            | metrics_all_reduce(local_rollout_metrics | local_batch_metrics, self.async_options.train_mesh)
+            | {f"devices/{k}": v for k, v in memory_metrics(jax.local_devices()).items()}
+            | {
+                "train/lr": self.opt_state[1].hyperparams["learning_rate"],
+                "train/prep_batch_time": prep_batch_time,
+                "train/learner_step_time": learner_time,
+                "train/weight_sync_time": sync_time,
+                "train/step_time": step_time,
+            }
+        )
+        tables: list[TableMetrics] = []
+
+        if stax.get_rank() == 0:
+            metrics |= self.get_inference_metrics()
+
+        if eval_out is not None:
+            eval_metrics, eval_tables = eval_out
+            metrics |= eval_metrics | {"eval/time": eval_time}
+            tables.extend(eval_tables)
+
+        unstable = metrics.get("train/is_ratio") and abs(1 - metrics["train/is_ratio"].item()) > 0.05
+        if self.global_step % self.config.log_generations_every_n_steps == 0 or unstable:
+            if unstable:
+                logger.warning(f"unstable training detected, saving table for step {self.global_step}")
+            tables.append(TableMetrics("train/generations", self.data_worker.table()))
+
+        return metrics, tables
+
     def get_inference_metrics(self) -> dict[str, float]:
         by_worker: dict[int, list[dict]] = defaultdict(list)
         while not self.async_options.queues.inference_metrics_queue.empty():
@@ -493,51 +538,6 @@ class AsyncTrainerWorker(Worker):
             self.params, self.opt_state, self.global_train_batch(local_test_batch), teacher_params=self.teacher_params
         ).compile()
 
-    def get_step_metrics(
-        self,
-        train_metrics: dict,
-        local_rollout_metrics: dict,
-        local_batch_metrics: dict,
-        *,
-        prep_batch_time: float,
-        learner_time: float,
-        sync_time: float,
-        step_time: float,
-        eval_out: tuple[dict[str, float], list[TableMetrics]] | None,
-        eval_time: float | None,
-    ) -> tuple[dict, list[TableMetrics]]:
-        assert self.opt_state is not None, "Train state not initialized."
-
-        metrics = (
-            train_metrics
-            | metrics_all_reduce(local_rollout_metrics | local_batch_metrics, self.async_options.train_mesh)
-            | {f"devices/{k}": v for k, v in memory_metrics(jax.local_devices()).items()}
-            | {
-                "train/lr": self.opt_state[1].hyperparams["learning_rate"],
-                "train/prep_batch_time": prep_batch_time,
-                "train/learner_step_time": learner_time,
-                "train/weight_sync_time": sync_time,
-                "train/step_time": step_time,
-            }
-        )
-        tables: list[TableMetrics] = []
-
-        if stax.get_rank() == 0:
-            metrics |= self.get_inference_metrics()
-
-        if eval_out is not None:
-            eval_metrics, eval_tables = eval_out
-            metrics |= eval_metrics | {"eval/time": eval_time}
-            tables.extend(eval_tables)
-
-        unstable = metrics.get("train/is_ratio") and abs(1 - metrics["train/is_ratio"].item()) > 0.05
-        if self.global_step % self.config.log_generations_every_n_steps == 0 or unstable:
-            if unstable:
-                logger.warning(f"unstable training detected, saving table for step {self.global_step}")
-            tables.append(TableMetrics("train/generations", self.data_worker.table()))
-
-        return metrics, tables
-
     def train(self):
         assert self.params is not None and self.opt_state is not None, "Train state not initialized."
         assert self.shard_data_fn is not None, "Sharding function not set up."
@@ -546,6 +546,7 @@ class AsyncTrainerWorker(Worker):
         assert self.checkpointer is not None, "Checkpointer not set up."
 
         self.train_sync_weights()
+        self.data_worker.start()
         self.compile_train_fn()
 
         initial_step = self.global_step
@@ -614,6 +615,9 @@ class AsyncTrainerWorker(Worker):
             self.log_info("[checkpointer] saving final checkpointing...")
             self.block_checkpointer()
         self.data_worker.cleanup()
+        if self.worker_rank == 0:
+            for _ in range(self.async_options.inference_workers):
+                self.async_options.queues.weight_sync_queue.put("stop")
 
     @property
     def should_eval(self) -> bool:

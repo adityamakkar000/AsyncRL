@@ -544,7 +544,9 @@ class AsyncInferenceWorker(Worker):
 
     def monitor_weight_sync(self, async_state: AsyncState, async_options: AsyncOptions):
         while True:
-            _ = async_options.queues.weight_sync_queue.get()
+            if async_options.queues.weight_sync_queue.get() == "stop":
+                logger.info(f"[shutdown] Rank {stax.get_rank()} received stop signal, exiting", log_for_all=True)
+                os._exit(0)
 
             logger.info(
                 f"[weight_sync] Rank {stax.get_rank()} received sync signal from train worker, syncing weights to latest parameters...",
