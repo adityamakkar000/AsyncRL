@@ -1,6 +1,7 @@
 import os
 import threading
 import traceback
+from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
@@ -36,7 +37,7 @@ class DataWorker:
         self.timeout = timeout
         self.loader = DataLoader(self.envs, queues.data_events_queue, seed) if rank == 0 else None
         self.weight_iteration = 0
-        self.n_filtered = 0
+        self.filtered: Counter[str] = Counter()
         self.filtered_lock = threading.Lock()
         self.scored: list[ScoredRollout] = []
         self.stopped = threading.Event()
@@ -91,7 +92,7 @@ class DataWorker:
 
         scored = score_rollout(self.envs[rollout.sample.env], rollout)
         if self.filter_zero_variance and scored.zero_variance:
-            self.drop(rollout)
+            self.drop(rollout, "zero_variance")
             return
 
         self.queues.data_events_queue.put((DataEvent.FINISHED, rollout.sample.key))
@@ -109,13 +110,13 @@ class DataWorker:
     def drop_if_stale(self, rollout: InferenceRollout) -> bool:
         stale = self.lag(rollout) > self.max_lag
         if stale:
-            self.drop(rollout)
+            self.drop(rollout, "lag")
         return stale
 
-    def drop(self, rollout: InferenceRollout) -> None:
+    def drop(self, rollout: InferenceRollout, reason: str) -> None:
         self.queues.data_events_queue.put((DataEvent.DROPPED, rollout.sample.key))
         with self.filtered_lock:
-            self.n_filtered += 1
+            self.filtered[reason] += 1
 
     def lag(self, rollout: InferenceRollout) -> int:
         return self.weight_iteration - rollout.lag
@@ -123,8 +124,9 @@ class DataWorker:
     def rollout_metrics(self) -> dict[str, float]:
         lags = [self.lag(item.rollout) for item in self.scored]
         with self.filtered_lock:
-            n_filtered, self.n_filtered = self.n_filtered, 0
+            filtered, self.filtered = self.filtered, Counter()
 
+        n_filtered = filtered.total()
         if n_filtered >= 10:
             logger.warning(
                 f"Filtered {n_filtered} rollouts due to lag or zero variance, consider increasing max_lag or disabling zero variance filtering if this is happening frequently.",
@@ -135,5 +137,6 @@ class DataWorker:
             "train/max_off_policy": max(lags),
             "train/min_off_policy": min(lags),
             "train/mean_off_policy": sum(lags) / len(lags),
-            "train/num_filtered_rollouts": n_filtered,
+            "train/lag_filter": filtered["lag"],
+            "train/zero_variance_filter": filtered["zero_variance"],
         }
