@@ -201,6 +201,9 @@ class TrainerConfig:
     learning_rate_init: float = 0.0
     learning_rate_peak: float = 1e-4
     learning_rate_end: float = 1e-5
+    # peak lr for the value head (follows the same schedule shape, scaled by critic_learning_rate / learning_rate_peak);
+    # None trains the value head with the policy lr
+    critic_learning_rate: float | None = None
     warmup_steps: Any = 0.1
     decay_steps: Any = 0.9
 

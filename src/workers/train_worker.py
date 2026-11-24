@@ -296,6 +296,10 @@ class AsyncTrainerWorker(Worker):
             _teacher_step, teacher_params, _teacher_metadata = self.model.load_from_ckpt(
                 self.config.teacher_config.teacher_checkpoint, self.config.teacher_config.teacher_step
             )
+
+            if self.model.model.apply_value_head and "value_head" not in teacher_params:
+                kernel_dict = {"kernel": np.zeros((self.model.model.model_dim, 1), np.float32)}
+                teacher_params["value_head"] = kernel_dict
             self.teacher_params = jax.tree.map(lambda x, s: jax.device_put(x, s), teacher_params, self.params_sharding)
 
         if self.resumed:
@@ -337,7 +341,31 @@ class AsyncTrainerWorker(Worker):
             optax.clip_by_global_norm(self.config.grad_clip) if self.config.grad_clip is not None else optax.identity()
         )
         optimizer_args: dict = {"learning_rate": lr_scheduler, **self.config.optimizer_kwargs}
-        self.tx = optax.chain(track_grad_norm(), clip, optax.inject_hyperparams(optimizer)(**optimizer_args))
+        tx = optax.inject_hyperparams(optimizer)(**optimizer_args)
+
+        if self.config.critic_learning_rate is not None:
+            scale = self.config.critic_learning_rate / self.config.learning_rate_peak
+            critic_tx = optax.inject_hyperparams(optimizer)(
+                **{**optimizer_args, "learning_rate": lambda step: lr_scheduler(step) * scale}
+            )
+
+            def label_params(params):
+                is_critic = lambda path: any(getattr(k, "key", None) == "value_head" for k in path)
+                return jax.tree_util.tree_map_with_path(lambda p, _: "critic" if is_critic(p) else "policy", params)
+
+            tx = optax.multi_transform({"policy": tx, "critic": critic_tx}, label_params)
+
+        self.tx = optax.chain(track_grad_norm(), clip, tx)
+
+    def current_lrs(self) -> dict[str, Array]:
+        opt_state = self.opt_state[2]
+        if self.config.critic_learning_rate is None:
+            return {"train/lr": opt_state.hyperparams["learning_rate"]}
+        inner = opt_state.inner_states
+        return {
+            "train/lr": inner["policy"].inner_state.hyperparams["learning_rate"],
+            "train/critic_lr": inner["critic"].inner_state.hyperparams["learning_rate"],
+        }
 
     @partial(setup, component="checkpointer")
     def _setup_checkpointer(self):
@@ -427,7 +455,9 @@ class AsyncTrainerWorker(Worker):
     def train_sync_weights(self):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
 
-        params_cast = self.replicate_params_fn(self.params)
+        # the value head is train-only; inference runs the policy without it
+        inference_params = {k: v for k, v in self.params.items() if k != "value_head"}
+        params_cast = self.replicate_params_fn(inference_params)
         if self.worker_rank == 0:
             for _ in range(self.async_options.inference_workers):
                 self.async_options.queues.weight_sync_queue.put("sync")
@@ -457,7 +487,7 @@ class AsyncTrainerWorker(Worker):
             | metrics_all_reduce(local_rollout_metrics | local_batch_metrics, self.async_options.train_mesh)
             | {f"devices/{k}": v for k, v in memory_metrics(jax.local_devices()).items()}
             | {
-                "train/lr": self.opt_state[2].hyperparams["learning_rate"],
+                **self.current_lrs(),
                 "train/grad_norm": self.opt_state[0].grad_norm,
                 "train/prep_batch_time": prep_batch_time,
                 "train/learner_step_time": learner_time,

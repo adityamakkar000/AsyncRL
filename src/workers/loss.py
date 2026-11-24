@@ -172,3 +172,118 @@ class RLOOLoss(LossFunction):
     @property
     def compute_normalization(self) -> Callable[[int | Array, PyTree], int | Array]:
         return lambda denom, batch: denom + jnp.sum(batch.token_mask)
+
+def compute_gae(rewards: Array, values: Array, token_mask: Array, gamma: float = 0.99, lam: float = 0.95) -> Array:
+    """
+    Args:
+        rewards: [B] scalar reward per sequence.
+        values: [B, T] value estimates of the state each token was sampled from.
+        token_mask: [B, T] mask of tokens to train on.
+    Returns:
+        advantages: [B, T]
+    """
+    token_mask = token_mask.astype(values.dtype)
+    values = values * token_mask
+    zeros = jnp.zeros_like(token_mask[:, :1])
+
+    next_mask = jnp.concatenate([token_mask[:, 1:], zeros], axis=-1)
+    next_values = jnp.concatenate([values[:, 1:], zeros], axis=-1) * next_mask
+
+    termination_mask = token_mask * (1 - next_mask)
+    token_rewards = termination_mask * rewards[:, None]
+
+    deltas = token_rewards + gamma * next_values - values  # [B, T]
+
+    def step(carry, x):
+        delta_t, nm_t = x
+        advantage_t = delta_t + gamma * lam * nm_t * carry
+        return advantage_t, advantage_t
+
+    _, advantages = jax.lax.scan(
+        step, jnp.zeros_like(rewards, dtype=values.dtype), (deltas.T, next_mask.T), reverse=True
+    )
+    return advantages.T * token_mask
+
+
+class PPOLoss(LossFunction):
+    name: str = "PPO"
+
+    def __init__(
+        self,
+        loss_config: LossConfig,
+        delta: float = 0.2,
+        gamma: float = 1.0,
+        lam: float = 0.95,
+        vf_coeff: float = 0.5,
+    ):
+        super().__init__(loss_config)
+        self.delta = delta
+        self.gamma = gamma
+        self.lam = lam
+        self.vf_coeff = vf_coeff
+
+    def compute_advantage(self, batch: RLBatch, teacher_params: PyTree = None, values: Array | None = None) -> Array:
+        assert values is not None, "PPO requires value estimates to compute advantages"
+        return compute_gae(batch.rewards, jax.lax.stop_gradient(values), batch.token_mask, self.gamma, self.lam)
+
+    def compute_loss(
+        self,
+        x_logprobs: Array,
+        advantages: Array,
+        batch: RLBatch,
+        teacher_params: PyTree = None,
+        values: Array | None = None,
+        returns: Array | None = None,
+    ) -> tuple[Array, dict[str, Array]]:
+        mask = batch.token_mask
+        ratio = jnp.exp(x_logprobs - batch.reference_model_logprobs)
+
+        # DPPO trust region: drop tokens whose probability (not ratio) moved more than delta in the advantage's direction
+        prob_diff = jnp.exp(x_logprobs) - jnp.exp(batch.reference_model_logprobs)
+        clipped = jax.lax.stop_gradient(
+            ((advantages > 0) & (prob_diff > self.delta)) | ((advantages < 0) & (-prob_diff > self.delta))
+        )
+
+        policy_objective = (1 - clipped) * ratio * advantages
+        value_loss = 0.5 * (values - returns) ** 2
+
+        objective = jnp.sum((policy_objective - self.vf_coeff * value_loss) * mask)
+
+        return objective, {
+            "clip_frac": jnp.sum(clipped * mask),
+            "value_loss": jnp.sum(value_loss * mask),
+            "value_mean": jnp.sum(values * mask),
+            "advantage_mean": jnp.sum(advantages * mask),
+        }
+
+    def __call__(
+        self, model: Model, params: PyTree, batch: RLBatch, teacher_params=None, train: bool = True
+    ) -> tuple[Array, PyTree]:
+        x_logprobs, values = model.get_logprobs_and_values(params, batch.tokens, batch.seq_lens)
+
+        batch = batch.replace(  # type: ignore
+            tokens=batch.tokens[:, 1:],
+            reference_model_logprobs=batch.reference_model_logprobs[:, 1:],
+            token_mask=batch.token_mask[:, 1:],
+        )
+
+        advantages = jax.lax.stop_gradient(self.compute_advantage(batch, values=values))
+        returns = jax.lax.stop_gradient(advantages + values)
+
+        loss, aux_metrics = self.compute_loss(x_logprobs, advantages, batch, teacher_params, values=values, returns=returns)
+        loss *= -1  # gradient descent
+
+        log_ratio = x_logprobs - batch.reference_model_logprobs
+
+        # metrics will be reduced by compute_normalization function
+        aux_metrics |= {
+            "loss": loss,
+            "is_ratio": jnp.sum(jnp.exp(log_ratio) * batch.token_mask),
+            "kl": jnp.sum(log_ratio * batch.token_mask),
+        }
+
+        return loss, aux_metrics
+
+    @property
+    def compute_normalization(self) -> Callable[[int | Array, PyTree], int | Array]:
+        return lambda denom, batch: denom + jnp.sum(batch.token_mask)

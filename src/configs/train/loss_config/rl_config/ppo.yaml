@@ -1,0 +1,5 @@
+_target_: src.workers.loss.PPOLoss
+delta: 0.2
+gamma: 1.0
+lam: 0.95
+vf_coeff: 0.5
