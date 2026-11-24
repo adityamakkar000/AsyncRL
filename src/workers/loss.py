@@ -64,6 +64,7 @@ class LossFunction(abc.ABC):
             "loss": loss,
             "is_ratio": jnp.sum(jnp.exp(log_ratio) * batch.token_mask),
             "kl": jnp.sum(log_ratio * batch.token_mask),
+            "entropy": jnp.sum(-x_logprobs * batch.token_mask),
         }
 
         return loss, aux_metrics

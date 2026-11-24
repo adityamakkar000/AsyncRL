@@ -27,7 +27,7 @@ from src.model import Model, make_weight_shard_fn
 from .config import AsyncOptions, TrainerConfig
 from .constants import EVAL_TIMEOUT, TIMEOUT
 from .rdma_transfer import RDMATransferServer
-from .utils import PER_WORKER_SUMS, Key, memory_metrics, reduce_inference_metric, setup, write_to_gcs
+from .utils import PER_WORKER_SUMS, Key, memory_metrics, reduce_inference_metric, setup, track_grad_norm, write_to_gcs
 from .worker import Worker
 
 load_dotenv()
@@ -325,7 +325,7 @@ class AsyncTrainerWorker(Worker):
             optax.clip_by_global_norm(self.config.grad_clip) if self.config.grad_clip is not None else optax.identity()
         )
         optimizer_args: dict = {"learning_rate": lr_scheduler, **self.config.optimizer_kwargs}
-        self.tx = optax.chain(clip, optax.inject_hyperparams(optimizer)(**optimizer_args))
+        self.tx = optax.chain(track_grad_norm(), clip, optax.inject_hyperparams(optimizer)(**optimizer_args))
 
     @partial(setup, component="checkpointer")
     def _setup_checkpointer(self):
@@ -445,7 +445,8 @@ class AsyncTrainerWorker(Worker):
             | metrics_all_reduce(local_rollout_metrics | local_batch_metrics, self.async_options.train_mesh)
             | {f"devices/{k}": v for k, v in memory_metrics(jax.local_devices()).items()}
             | {
-                "train/lr": self.opt_state[1].hyperparams["learning_rate"],
+                "train/lr": self.opt_state[2].hyperparams["learning_rate"],
+                "train/grad_norm": self.opt_state[0].grad_norm,
                 "train/prep_batch_time": prep_batch_time,
                 "train/learner_step_time": learner_time,
                 "train/weight_sync_time": sync_time,

@@ -5,11 +5,12 @@ from collections.abc import Callable
 from functools import wraps
 from multiprocessing.managers import BaseManager
 from statistics import fmean
-from typing import Any
+from typing import Any, NamedTuple
 
 import gcsfs
 import jax
 import jax.numpy as jnp
+import optax
 import stax
 from jax.experimental.transfer import start_transfer_server
 from jaxtyping import Array
@@ -66,6 +67,22 @@ def setup(setup_fn: Callable[[Any], None], component: str):
         logger.info(f"{component} setup complete in {end - start:.2f} seconds.")
 
     return wrapper
+
+
+class GradNormState(NamedTuple):
+    grad_norm: Array
+
+
+def track_grad_norm() -> optax.GradientTransformation:
+    def init(params: optax.Params) -> optax.OptState:
+        return GradNormState(jnp.zeros([], jnp.float32))
+
+    def update(
+        updates: optax.Updates, state: optax.OptState, params: optax.Params | None = None
+    ) -> tuple[optax.Updates, optax.OptState]:
+        return updates, GradNormState(optax.global_norm(updates).astype(jnp.float32))
+
+    return optax.GradientTransformation(init, update)
 
 
 class Key:
