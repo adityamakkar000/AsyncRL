@@ -67,7 +67,6 @@ class Model(HFModelBase):
         out_state["params"] = self.load_from_hf(out_state["params"], self.config.hf_model_name)
 
         if self.model.apply_value_head:
-            # the value head starts at zero (V = 0), keeping the sharding of the initialized kernel
             kernel = out_state["params"]["value_head"]["kernel"]
             out_state["params"]["value_head"]["kernel"] = jax.device_put(
                 jnp.zeros(kernel.shape, dtype=kernel.dtype), kernel.sharding
@@ -140,7 +139,6 @@ class Model(HFModelBase):
         return step_number, restored.state["params"], restored.metadata  # type: ignore
 
     def load_from_hf(self, params: PyTree, model_name: str) -> PyTree:
-        # the value head is train-only and has no HF weights; keep it out of the HF loader
         value_head = params.get("value_head")
         params = self.model.load_from_hf({k: v for k, v in params.items() if k != "value_head"}, model_name)
         if value_head is not None:
