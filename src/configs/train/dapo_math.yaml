@@ -4,7 +4,7 @@ defaults:
   - loss_config: loss
   - train_envs/math@train_envs.math: [dapo]
   - eval_config: math_val
-  - override loss_config/inference_config: debug
+  - inference_config: debug
   - override loss_config/rl_config: miscispo
   - _self_
 
@@ -40,15 +40,16 @@ wandb_config:
   tags: null
 
 loss_config:
-  inference_config:
-    max_seq_len: 4096
-    max_decode_batch_size: 48
-    prefill_multiplier: 1
-    warmup_seq_len: 1024
-    group_size: 16
-    temperature: 1.0
-    reasoning_budget: null 
-    think_mode: true
+  group_size: 16
+
+inference_config:
+  max_seq_len: 4096
+  max_decode_batch_size: 48
+  prefill_batch_size: 48
+  warmup_seq_len: 1024
+  temperature: 1.0
+  reasoning_budget: null
+  think_mode: true
 
 model_config:
   fused_chunk_size: 8192

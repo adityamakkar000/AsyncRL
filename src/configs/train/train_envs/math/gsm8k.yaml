@@ -1,8 +1,3 @@
 _target_: src.data.envs.math.MathEnv
 datasets:
-  gsm8k:
-    filters:
-      - _target_: src.data.transformations.filters.PromptLengthFilter
-        max_length: 256
-        hf_model: ${model_config.hf_model_name}
-      - _target_: src.data.transformations.filters.EnglishFilter
+  gsm8k: {}

@@ -1,12 +1,3 @@
 _target_: src.data.envs.math.MathEnv
 datasets:
-  troll-17k-train:
-    filters:
-      - _target_: src.data.transformations.filters.PromptLengthFilter
-        max_length: 1024
-        hf_model: ${model_config.hf_model_name}
-      - _target_: src.data.transformations.filters.EnglishFilter
-      - _target_: src.data.transformations.filters.FigureFilter
-    transforms:
-      - _target_: src.data.transformations.transforms.Dedupe
-      - _target_: src.data.transformations.transforms.FixEscapedLatex
+  troll-17k-train: {}

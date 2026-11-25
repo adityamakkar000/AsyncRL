@@ -1,17 +1,21 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, NamedTuple, cast
 
 import jax
 import numpy as np
 from flax import struct
-from omegaconf import MISSING
 
 
 class DataEvent(StrEnum):
     FINISHED = "finished"
     CONSUMED = "consumed"
     DROPPED = "dropped"
+
+
+class Split(StrEnum):
+    TRAIN = "train"
+    EVAL = "eval"
 
 
 class SampleKey(NamedTuple):
@@ -32,33 +36,32 @@ class Sample:
     id: int
     system_prompt: str | None
     prompt: str
+    n_rollouts: int
+    split: Split = Split.TRAIN
 
     @property
     def key(self) -> SampleKey:
         return SampleKey(self.env, self.epoch, self.id)
 
 
+class ScoreStatus(StrEnum):
+    CORRECT = "correct"
+    WRONG = "wrong"
+    UNPARSABLE = "unparsable"
+    JUDGED = "judged"
+
+
 @dataclass(frozen=True)
 class Score:
     reward: float
-    status: str
+    status: ScoreStatus
     extracted: str | None = None
     expected: str | None = None
 
 
 @dataclass
 class DatasetConfig:
-    filters: list[Any] = field(default_factory=list)
-    transforms: list[Any] = field(default_factory=list)
-
-
-@dataclass
-class EnvConfig:
-    _target_: str = MISSING
-    datasets: dict[str, DatasetConfig] = MISSING
-    filters: list[Any] = field(default_factory=list)
-    transforms: list[Any] = field(default_factory=list)
-    use_system_prompt: bool = False
+    n_samples: int | None = None
 
 
 class RLBatch(struct.PyTreeNode):
@@ -116,8 +119,6 @@ class InferenceRollout:
     rollout_tokens: list[np.ndarray]
     rollout_logprobs: list[np.ndarray]
     weight_iteration: list[int]
-    n_rollouts: int = 1
-    is_eval: bool = False
 
     def __len__(self):
         assert len(self.rollout_logprobs) == len(self.rollout_tokens), (
@@ -126,8 +127,16 @@ class InferenceRollout:
         return len(self.rollout_tokens)
 
     @property
+    def n_rollouts(self) -> int:
+        return self.sample.n_rollouts
+
+    @property
     def lag(self) -> int:
         return min(self.weight_iteration) if self.weight_iteration else 0
+
+    def publish(self, queues: Any) -> None:
+        out = queues.eval_rollout_queue if self.sample.split == Split.EVAL else queues.rollout_queue
+        out.put(self)
 
 
 @dataclass

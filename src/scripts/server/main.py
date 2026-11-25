@@ -173,6 +173,7 @@ class Server:
             if old is not None and not old.is_terminal:
                 raise KeyError(f"{body.node_id} is already {old.state.value}")
             self.jobs[body.node_id] = job
+        job.write_command()
         job.event(
             f"submitted by {body.launched_by or 'unknown'}" + (f" (replaces {old.state.value} run)" if old else "")
         )
@@ -247,11 +248,16 @@ def run_job(req: RunJobRequest) -> dict[str, Any]:
     return {"ok": True, "node_id": req.node_id, "replaced": replaced}
 
 
-@app.get("/code/{name}")
-def code_exists(name: str) -> dict[str, Any]:
-    if not _SAFE_NODE_ID.match(name):
-        raise HTTPException(status_code=400, detail="invalid name")
-    return {"exists": os.path.isdir(os.path.join(os.path.expanduser("~"), "jobs", name))}
+@app.get("/runs/{run_name}/command")
+def run_command(run_name: str) -> dict[str, Any]:
+    launch_name, sep, index = run_name.rpartition("_sweep_")
+    if not _SAFE_NODE_ID.match(run_name) or not sep or not index.isdigit():
+        raise HTTPException(status_code=400, detail=f"invalid run name: {run_name}")
+    path = os.path.join(os.path.expanduser("~"), "jobs", launch_name, "logs", run_name, "command.txt")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"no stored command for {run_name}")
+    with open(path) as f:
+        return {"command": f.read()}
 
 
 @app.get("/jobs", response_model=list[JobView])

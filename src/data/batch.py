@@ -1,12 +1,7 @@
 import jax
 import numpy as np
 
-from .config import InferenceRollout, RLBatch, ScoredRollout
-from .envs import Environment
-
-
-def score_rollout(env: Environment, rollout: InferenceRollout) -> ScoredRollout:
-    return ScoredRollout(rollout, [env.grade(rollout.sample.id, text) for text in rollout.rollout_strs])
+from .config import RLBatch, ScoredRollout, ScoreStatus
 
 
 def compute_aux_metrics(batch: RLBatch) -> dict[str, float]:
@@ -50,7 +45,7 @@ def collate(scored: list[ScoredRollout], pad_token: int, max_seq_len: int) -> tu
         ),
     )
 
-    num_unparsable = sum(score.status == "unparsable" for s in scored for score in s.scores)
+    num_unparsable = sum(score.status == ScoreStatus.UNPARSABLE for s in scored for score in s.scores)
     metrics = {"num_unparsable": num_unparsable / rewards.size} | compute_aux_metrics(batch)
     return batch, {f"train/{k}": v for k, v in metrics.items()}
 

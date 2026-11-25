@@ -57,7 +57,7 @@ def main(cfg: DictConfig) -> None:
     queues.register(
         maxsizes={
             "prompt_queue": 1,
-            "scored_queue": 2 * cfg.train_batch_size // cfg.loss_config.inference_config.group_size,
+            "scored_queue": 2 * cfg.train_batch_size // cfg.loss_config.group_size,
             "weight_sync_queue": inference_workers,
         }
     )

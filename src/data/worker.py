@@ -7,20 +7,22 @@ from typing import Any
 
 from stax.logger import staxLogger as logger
 
-from .batch import collate, score_rollout, train_table
-from .config import DataEvent, EnvConfig, InferenceRollout, RLBatch, ScoredRollout
+from .batch import collate, train_table
+from .config import DataEvent, InferenceRollout, RLBatch, ScoredRollout, ScoreStatus
 from .dataloader import DataLoader
 from .envs import load_envs
+from .scorer import Scorer
 
 
 class DataWorker:
     def __init__(
         self,
-        env_configs: dict[str, EnvConfig],
+        env_configs: dict[str, Any],
         queues: Any,
         rank: int,
         seed: int,
         n_prompts: int,
+        group_size: int,
         pad_token: int,
         max_seq_len: int,
         max_lag: int,
@@ -28,6 +30,8 @@ class DataWorker:
         timeout: int,
     ) -> None:
         self.envs = load_envs(env_configs)
+        n_processes = max(1, (os.cpu_count() or 2) // 2)
+        self.scorer = Scorer(n_processes, max_pending=2 * n_processes)
         self.queues = queues
         self.n_prompts = n_prompts
         self.pad_token = pad_token
@@ -35,7 +39,7 @@ class DataWorker:
         self.max_lag = max_lag
         self.filter_zero_variance = filter_zero_variance
         self.timeout = timeout
-        self.loader = DataLoader(self.envs, queues.data_events_queue, seed) if rank == 0 else None
+        self.loader = DataLoader(self.envs, queues.data_events_queue, seed, group_size) if rank == 0 else None
         self.weight_iteration = 0
         self.filtered: Counter[str] = Counter()
         self.filtered_lock = threading.Lock()
@@ -45,11 +49,18 @@ class DataWorker:
     def start(self) -> None:
         if self.loader is not None:
             self.spawn(self.fill_next)
-        self.spawn(self.score_next)
+        self.spawn(self.submit_next)
+        self.spawn(self.add_next)
 
     def next(self, weight_iteration: int) -> tuple[RLBatch, dict[str, float], dict[str, float]]:
         self.weight_iteration = weight_iteration
-        self.scored = self.take_scored()
+        self.scored = []
+        while len(self.scored) < self.n_prompts:
+            item: ScoredRollout = self.queues.scored_queue.get(timeout=self.timeout)
+            if not self.drop_if_stale(item.rollout):
+                self.queues.data_events_queue.put((DataEvent.CONSUMED, item.rollout.sample.key))
+                self.scored.append(item)
+
         batch, batch_metrics = collate(self.scored, self.pad_token, self.max_seq_len)
         rollout_metrics = self.rollout_metrics()
         return batch, rollout_metrics, batch_metrics
@@ -67,6 +78,7 @@ class DataWorker:
 
     def cleanup(self) -> None:
         self.stopped.set()
+        self.scorer.close()
 
     def spawn(self, step: Callable[[], None]) -> None:
         def run_forever():
@@ -85,27 +97,19 @@ class DataWorker:
         assert self.loader is not None
         self.queues.prompt_queue.put(self.loader.next())
 
-    def score_next(self) -> None:
+    def submit_next(self) -> None:
         rollout: InferenceRollout = self.queues.rollout_queue.get()
-        if self.drop_if_stale(rollout):
-            return
+        if not self.drop_if_stale(rollout):
+            self.scorer.submit(self.envs[rollout.sample.env], rollout)
 
-        scored = score_rollout(self.envs[rollout.sample.env], rollout)
+    def add_next(self) -> None:
+        scored = self.scorer.get()
         if self.filter_zero_variance and scored.zero_variance:
-            self.drop(rollout, "zero_variance")
+            self.drop(scored.rollout, "zero_variance")
             return
 
-        self.queues.data_events_queue.put((DataEvent.FINISHED, rollout.sample.key))
+        self.queues.data_events_queue.put((DataEvent.FINISHED, scored.rollout.sample.key))
         self.queues.scored_queue.put(scored)
-
-    def take_scored(self) -> list[ScoredRollout]:
-        scored: list[ScoredRollout] = []
-        while len(scored) < self.n_prompts:
-            item: ScoredRollout = self.queues.scored_queue.get(timeout=self.timeout)
-            if not self.drop_if_stale(item.rollout):
-                self.queues.data_events_queue.put((DataEvent.CONSUMED, item.rollout.sample.key))
-                scored.append(item)
-        return scored
 
     def drop_if_stale(self, rollout: InferenceRollout) -> bool:
         stale = self.lag(rollout) > self.max_lag
@@ -133,7 +137,9 @@ class DataWorker:
                 log_for_all=True,
             )
 
+        scores = [score for item in self.scored for score in item.scores]
         return {
+            "train/num_judged": sum(score.status == ScoreStatus.JUDGED for score in scores) / len(scores),
             "train/max_off_policy": max(lags),
             "train/min_off_policy": min(lags),
             "train/mean_off_policy": sum(lags) / len(lags),

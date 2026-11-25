@@ -1,4 +1,3 @@
 defaults:
   - rl_config: cispo
-  - inference_config: main
   - _self_

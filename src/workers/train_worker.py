@@ -27,7 +27,16 @@ from src.model import Model, make_weight_shard_fn
 from .config import AsyncOptions, TrainerConfig
 from .constants import EVAL_TIMEOUT, TIMEOUT
 from .rdma_transfer import RDMATransferServer
-from .utils import PER_WORKER_SUMS, Key, memory_metrics, reduce_inference_metric, setup, track_grad_norm, write_to_gcs
+from .utils import (
+    PER_WORKER_SUMS,
+    Key,
+    memory_metrics,
+    reduce_inference_metric,
+    setup,
+    to_steps,
+    track_grad_norm,
+    write_to_gcs,
+)
 from .worker import Worker
 
 load_dotenv()
@@ -86,14 +95,14 @@ class AsyncTrainerWorker(Worker):
             raise ValueError(f"Unsupported optimizer: {cfg.optimizer}")
         if cfg.grad_clip is not None and cfg.grad_clip <= 0:
             raise ValueError("grad_clip must be positive if set")
-        if (cfg.warmup_steps + cfg.decay_steps) > 1.0:
-            raise ValueError("warmup_steps and decay_steps must sum to at most 1.0")
-        if cfg.train_batch_size % cfg.loss_config.inference_config.group_size != 0:
+        if to_steps(cfg.warmup_steps, cfg.num_steps) + to_steps(cfg.decay_steps, cfg.num_steps) > cfg.num_steps:
+            raise ValueError("warmup_steps and decay_steps must sum to at most num_steps")
+        if cfg.train_batch_size % cfg.loss_config.group_size != 0:
             raise ValueError(
-                f"Batch size must be divisible by group size for proper batching in inference, got {cfg.train_batch_size} batch size and {cfg.loss_config.inference_config.group_size} group size."
+                f"Batch size must be divisible by group size for proper batching in inference, got {cfg.train_batch_size} batch size and {cfg.loss_config.group_size} group size."
             )
         if cfg.model_config.fused_chunk_size is not None:
-            flat_tokens = (cfg.train_batch_size // cfg.grad_accum_steps) * cfg.loss_config.inference_config.max_seq_len
+            flat_tokens = (cfg.train_batch_size // cfg.grad_accum_steps) * cfg.inference_config.max_seq_len
             if flat_tokens % cfg.model_config.fused_chunk_size != 0:
                 raise ValueError(
                     f"Fused chunk size {cfg.model_config.fused_chunk_size} must evenly divide B * T {flat_tokens}."
@@ -101,16 +110,16 @@ class AsyncTrainerWorker(Worker):
 
         n_hosts = jax.process_count()
         train_batch_size = cfg.train_batch_size
-        assert train_batch_size % (cfg.loss_config.inference_config.group_size * n_hosts) == 0, (
-            f"Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {train_batch_size} batch size, {cfg.loss_config.inference_config.group_size} group size, and {n_hosts} hosts."
+        assert train_batch_size % (cfg.loss_config.group_size * n_hosts) == 0, (
+            f"Train batch size must be divisible by group size * number of hosts to get a correct number of prompts per batch for inference, got {train_batch_size} batch size, {cfg.loss_config.group_size} group size, and {n_hosts} hosts."
         )
 
         n_devices_train = jax.local_device_count() * cfg.async_config.train_workers
         assert train_batch_size % (n_devices_train * cfg.grad_accum_steps) == 0, (
             f"Train batch size must be divisible by train devices * grad_accum_steps for proper gradient accumulation, got {train_batch_size} train batch size, {n_devices_train} train devices, and {cfg.grad_accum_steps} grad_accum_steps."
         )
-        assert (train_batch_size // cfg.loss_config.inference_config.group_size) % jax.process_count() == 0, (
-            f"Number of groups per step must be divisible by number of hosts for proper distribution of groups, got {train_batch_size} train batch size, {cfg.loss_config.inference_config.group_size} group size, and {jax.process_count()} hosts."
+        assert (train_batch_size // cfg.loss_config.group_size) % jax.process_count() == 0, (
+            f"Number of groups per step must be divisible by number of hosts for proper distribution of groups, got {train_batch_size} train batch size, {cfg.loss_config.group_size} group size, and {jax.process_count()} hosts."
         )
 
     @partial(setup, component="initialized state")
@@ -171,6 +180,8 @@ class AsyncTrainerWorker(Worker):
                 name=self.config.experiment_name,
                 entity=os.getenv("WANDB_ENTITY", ""),
                 project=writer_config.project,
+                notes=writer_config.notes,
+                tags=writer_config.tags,
                 **writer_kwargs,
             )
         else:
@@ -232,7 +243,7 @@ class AsyncTrainerWorker(Worker):
 
         self.train_mesh = shardings.mesh
         self.shardings = shardings
-        dtype = self.config.loss_config.inference_config.params_dtype
+        dtype = self.config.inference_config.params_dtype
         self.replicate_params_fn = jax.jit(
             lambda params: jax.tree.map(lambda p: p.astype(dtype), params),
             out_shardings=jax.NamedSharding(self.train_mesh, jax.P()),
@@ -241,7 +252,7 @@ class AsyncTrainerWorker(Worker):
     @partial(setup, component="dataset")
     def _setup_dataset(self):
         assert self.model is not None, "Model must be set up before the data workers."
-        inference_config = self.config.loss_config.inference_config
+        group_size = self.config.loss_config.group_size
         queues = self.async_options.queues
         train_workers = self.async_options.train_workers
 
@@ -250,9 +261,10 @@ class AsyncTrainerWorker(Worker):
             queues,
             rank=self.worker_rank,
             seed=self.config.seed,
-            n_prompts=self.config.train_batch_size // inference_config.group_size // train_workers,
+            n_prompts=self.config.train_batch_size // group_size // train_workers,
+            group_size=group_size,
             pad_token=self.model.pad_token,
-            max_seq_len=inference_config.max_seq_len,
+            max_seq_len=self.config.inference_config.max_seq_len,
             max_lag=self.config.async_config.max_lag,
             filter_zero_variance=self.config.loss_config.filter_zero_variance,
             timeout=TIMEOUT,
@@ -306,8 +318,8 @@ class AsyncTrainerWorker(Worker):
         lr_scheduler = optax.warmup_cosine_decay_schedule(
             init_value=self.config.learning_rate_init,
             peak_value=self.config.learning_rate_peak,
-            warmup_steps=int(self.config.warmup_steps * self.config.num_steps),
-            decay_steps=int(self.config.decay_steps * self.config.num_steps),
+            warmup_steps=to_steps(self.config.warmup_steps, self.config.num_steps),
+            decay_steps=to_steps(self.config.decay_steps, self.config.num_steps),
             end_value=self.config.learning_rate_end,
         )
 
@@ -533,7 +545,7 @@ class AsyncTrainerWorker(Worker):
 
         local_test_batch = RLBatch.get_test_batch(
             batch_size=self.config.train_batch_size // self.config.async_config.train_workers,
-            max_seq_len=self.config.loss_config.inference_config.max_seq_len,
+            max_seq_len=self.config.inference_config.max_seq_len,
         )
         self.train_fn.lower(  # type: ignore
             self.params, self.opt_state, self.global_train_batch(local_test_batch), teacher_params=self.teacher_params
@@ -616,6 +628,7 @@ class AsyncTrainerWorker(Worker):
             self.log_info("[checkpointer] saving final checkpointing...")
             self.block_checkpointer()
         self.data_worker.cleanup()
+        self.eval_worker.cleanup()
         if self.worker_rank == 0:
             for _ in range(self.async_options.inference_workers):
                 self.async_options.queues.weight_sync_queue.put("stop")

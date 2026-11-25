@@ -43,8 +43,6 @@ class SingleInferenceReplica:
         worker_id: int,
         inference_rank: int,
         devices: np.ndarray,
-        *,
-        eval_group_size: int | None = None,
     ):
         self.config = config
 
@@ -78,8 +76,6 @@ class SingleInferenceReplica:
 
         self.prompt_id_offset = 0
         self.global_rollouts: dict[int, InferenceRollout] = {}
-
-        self.eval_group_size = eval_group_size
 
         self.finish_queue: Queue = Queue()
 
@@ -123,30 +119,28 @@ class SingleInferenceReplica:
 
     def get_samples(self):
         with Tracker(timer=True) as t1:
-            samples: list[tuple[Sample, bool]] = []
+            samples: list[Sample] = []
             while len(samples) < self.max_prefill_prompts:
                 try:
-                    samples.append((self.async_options.queues.eval_prompt_queue.get_nowait(), True))
+                    samples.append(self.async_options.queues.eval_prompt_queue.get_nowait())
                 except Empty:
                     break
 
             n_eval = len(samples)
             while len(samples) < self.max_prefill_prompts:
-                samples.append((self.async_options.queues.prompt_queue.get(timeout=TIMEOUT), False))
+                samples.append(self.async_options.queues.prompt_queue.get(timeout=TIMEOUT))
 
         with Tracker(timer=True) as t2:
-            for i, (sample, is_eval) in enumerate(samples):
+            for i, sample in enumerate(samples):
                 self.global_rollouts[self.prompt_id_offset + i] = InferenceRollout(
                     sample=sample,
                     rollout_tokens=[],
                     rollout_logprobs=[],
                     rollout_strs=[],
                     weight_iteration=[],
-                    n_rollouts=(self.eval_group_size or self.config.group_size) if is_eval else self.config.group_size,
-                    is_eval=is_eval,
                 )
 
-            input_tokens, seq_lens = self.tokenize([sample for sample, _ in samples])
+            input_tokens, seq_lens = self.tokenize(samples)
 
         metrics = {"get_prompts_time": t1.data["time"], "tokenize_time": t2.data["time"], "eval_prompts": n_eval}
         return input_tokens, seq_lens, metrics
@@ -405,9 +399,8 @@ class SingleInferenceReplica:
         rollout.rollout_strs = self.tokenizer.batch_decode(
             [t.tolist() for t in rollout.rollout_tokens], skip_special_tokens=False
         )
-        queues = self.async_options.queues
-        (queues.eval_rollout_queue if rollout.is_eval else queues.rollout_queue).put(rollout)
-        queues.inference_metrics_queue.put({"ready_rollouts": 1, "worker_id": self.global_worker_id})
+        rollout.publish(self.async_options.queues)
+        self.async_options.queues.inference_metrics_queue.put({"ready_rollouts": 1, "worker_id": self.global_worker_id})
 
     def clean_sequence(self, tokens: np.ndarray, logprobs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         eos_idx = np.where((tokens != self.eos_token) & (tokens != self.pad_token))[0][-1] + 1
@@ -480,7 +473,7 @@ class SingleInferenceReplica:
 
     @property
     def max_prefill_prompts(self) -> int:
-        return max(1, int(self.config.prefill_multiplier * self.config.max_decode_batch_size))
+        return self.config.prefill_batch_size
 
     @property
     def max_attention_length(self) -> int:
@@ -490,8 +483,7 @@ class SingleInferenceReplica:
 class AsyncInferenceWorker(Worker):
     def __init__(self, trainer_config: TrainerConfig, async_options: AsyncOptions):
         self.trainer_config = trainer_config
-        self.inference_config = trainer_config.loss_config.inference_config
-        self.eval_config = trainer_config.eval_config
+        self.inference_config = trainer_config.inference_config
         self.async_options = async_options
 
         self.model = Model(trainer_config.model_config)
@@ -528,7 +520,6 @@ class AsyncInferenceWorker(Worker):
                 i,
                 self.worker_rank,
                 device_groups[i],
-                eval_group_size=self.eval_config.group_size,
             )
             for i in range(self.n_replicas)
         ]
@@ -598,16 +589,8 @@ class AsyncInferenceWorker(Worker):
                 "Reasoning budget should be None when think_mode is disabled"
             )
 
-        assert self.inference_config.prefill_multiplier > 0, (
-            f"prefill_multiplier must be positive, got {self.inference_config.prefill_multiplier}"
-        )
-        prefill_prompts = max(
-            1, int(self.inference_config.prefill_multiplier * self.inference_config.max_decode_batch_size)
-        )
-        assert prefill_prompts * self.inference_config.group_size >= self.inference_config.max_decode_batch_size, (
-            f"prefill batch of {prefill_prompts} prompts x group size {self.inference_config.group_size} cannot fill "
-            f"max_decode_batch_size {self.inference_config.max_decode_batch_size}"
-        )
+        prefill_batch_size = self.inference_config.prefill_batch_size
+        assert prefill_batch_size > 0, f"prefill_batch_size must be positive, got {prefill_batch_size}"
 
         if self.inference_config.warmup_seq_len is not None:
             warmup_seq_len = self.inference_config.warmup_seq_len

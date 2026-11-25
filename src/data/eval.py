@@ -1,3 +1,4 @@
+import os
 import random
 from collections import defaultdict
 from typing import Any
@@ -7,9 +8,11 @@ from stax.logger import staxLogger as logger
 from stax.writer import TableMetrics
 from tqdm import tqdm
 
-from .batch import score_rollout
-from .config import InferenceRollout, Sample, ScoredRollout
+from .config import Sample, ScoredRollout, ScoreStatus, Split
 from .envs import load_envs
+from .scorer import Scorer
+
+EVAL_PROCESSES = max(1, (os.cpu_count() or 2) // 4)
 
 
 def pass_at_k(n: int, c: int, k: int) -> float:
@@ -24,11 +27,13 @@ def eval_metrics(scored: list[ScoredRollout], group_size: int, pass_k: list[int]
     rewards = np.stack([s.rewards for s in scored])
     iterations = [i for s in scored for i in s.rollout.weight_iteration]
     n_correct = (rewards > 0).sum(axis=1)
-    n_unparsable = sum(score.status == "unparsable" for s in scored for score in s.scores)
+    n_unparsable = sum(score.status == ScoreStatus.UNPARSABLE for s in scored for score in s.scores)
+    n_judged = sum(score.status == ScoreStatus.JUDGED for s in scored for score in s.scores)
 
     metrics = {
         f"avg@{group_size}": rewards.mean().item(),
         "num_unparsable": n_unparsable / rewards.size,
+        "num_judged": n_judged / rewards.size,
         "n_prompts": float(len(scored)),
         "weight_iteration_min": float(min(iterations)) if iterations else 0.0,
         "weight_iteration_max": float(max(iterations)) if iterations else 0.0,
@@ -59,6 +64,7 @@ class EvalWorker:
     def __init__(self, config: Any, queues: Any, n_train_workers: int, rank: int, timeout: int) -> None:
         self.config = config
         self.envs = load_envs(config.eval_envs)
+        self.scorer = Scorer(EVAL_PROCESSES) if rank == 0 else None
         self.queues = queues
         self.n_train_workers = n_train_workers
         self.rank = rank
@@ -71,7 +77,7 @@ class EvalWorker:
 
         metrics: dict[str, float] = {}
         tables: list[TableMetrics] = []
-        for name, scored in self.score(self.collect(self.submit())).items():
+        for name, scored in self.group(self.collect(self.submit())).items():
             scores = eval_metrics(scored, self.config.group_size, list(self.config.pass_k))
             metrics |= {f"eval/{name}/{key}": value for key, value in scores.items()}
             if self.config.log_traces_n_prompts != 0:
@@ -83,23 +89,32 @@ class EvalWorker:
         return metrics, tables
 
     def submit(self) -> int:
-        samples = [Sample(e.name, 0, id, *e.render(id)) for e in self.envs.values() for id in range(len(e.problems))]
+        samples = [
+            Sample(e.name, 0, id, *e.render(id), n_rollouts=self.config.group_size, split=Split.EVAL)
+            for e in self.envs.values()
+            for id in range(len(e.problems))
+        ]
         for sample in samples:
             self.queues.eval_prompt_queue.put(sample)
         logger.info(f"[eval] waiting on {len(samples)} prompts", log_for_all=True)
         return len(samples)
 
-    def collect(self, n_prompts: int) -> list[InferenceRollout]:
-        rollouts = []
+    def collect(self, n_prompts: int) -> list[ScoredRollout]:
+        assert self.scorer is not None, "Only rank 0 scores evals"
         with tqdm(total=n_prompts, desc="[eval] rollouts", unit="prompt", mininterval=10) as bar:
             for _ in range(n_prompts):
-                rollouts.append(self.queues.eval_rollout_queue.get(timeout=self.timeout))
+                rollout = self.queues.eval_rollout_queue.get(timeout=self.timeout)
+                self.scorer.submit(self.envs[rollout.sample.env], rollout)
                 bar.update(1)
-        return rollouts
+        return [self.scorer.get() for _ in range(n_prompts)]
 
-    def score(self, rollouts: list[InferenceRollout]) -> dict[str, list[ScoredRollout]]:
+    def group(self, scored_rollouts: list[ScoredRollout]) -> dict[str, list[ScoredRollout]]:
         groups: dict[str, list[ScoredRollout]] = defaultdict(list)
-        for rollout in rollouts:
-            env = self.envs[rollout.sample.env]
-            groups[f"{env.name}/{env.dataset_names[rollout.sample.id]}"].append(score_rollout(env, rollout))
+        for scored in scored_rollouts:
+            env = self.envs[scored.rollout.sample.env]
+            groups[f"{env.name}/{env.dataset_names[scored.rollout.sample.id]}"].append(scored)
         return groups
+
+    def cleanup(self) -> None:
+        if self.scorer is not None:
+            self.scorer.close()

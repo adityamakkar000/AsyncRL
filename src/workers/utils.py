@@ -33,6 +33,10 @@ INFERENCE_REDUCTIONS: dict[str, Callable[[list[float]], float]] = {
 PER_WORKER_SUMS = {"ready_rollouts", "decode_steps", "decode_steps_subbed"}
 
 
+def to_steps(value: float, num_steps: int) -> int:
+    return value if isinstance(value, int) else int(value * num_steps)
+
+
 def memory_metrics(devices) -> dict[str, float]:
     stats = [d.memory_stats() or {} for d in devices]
     return {

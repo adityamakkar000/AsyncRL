@@ -34,8 +34,8 @@ class EnvStream:
         ids = np.arange(len(self.env.problems), dtype=np.int32)
         return np.random.default_rng([self.seed, name, self.epoch]).permutation(ids)
 
-    def sample(self, key: SampleKey) -> Sample:
-        return Sample(*key, *self.env.render(key.id))
+    def sample(self, key: SampleKey, n_rollouts: int) -> Sample:
+        return Sample(*key, *self.env.render(key.id), n_rollouts=n_rollouts)
 
     def save(self) -> dict[str, Any]:
         return {"epoch": self.epoch, "idx": self.idx, "hash": self.env.fingerprint}
@@ -49,9 +49,12 @@ class EnvStream:
 
 
 class DataLoader:
-    def __init__(self, envs: dict[str, Environment], events: Queue, seed: int, max_retries: int = 2) -> None:
+    def __init__(
+        self, envs: dict[str, Environment], events: Queue, seed: int, n_rollouts: int, max_retries: int = 2
+    ) -> None:
         self.events = events
         self.seed = seed
+        self.n_rollouts = n_rollouts
         self.max_retries = max_retries
         self.streams = {name: EnvStream(env, seed) for name, env in envs.items()}
         self.names = list(envs)
@@ -67,7 +70,7 @@ class DataLoader:
             self.drain()
             key, retries = self.sample()
             self.pending[key] = retries
-        return self.streams[key.env].sample(key)
+        return self.streams[key.env].sample(key, self.n_rollouts)
 
     def sample(self) -> ReplayKey:
         if self.replay:

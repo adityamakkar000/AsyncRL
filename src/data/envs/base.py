@@ -1,6 +1,7 @@
 import abc
 import hashlib
-from collections.abc import Callable, Mapping, Sequence
+import random
+from collections.abc import Callable, Mapping
 from functools import cached_property
 from typing import Any, ClassVar
 
@@ -9,8 +10,7 @@ from stax.logger import staxLogger as logger
 
 from ..config import DatasetConfig, Score
 
-Filter = Callable[[Any, "Environment"], bool]
-Transform = Callable[[list, Callable[[Any], str]], list]
+SAMPLE_SEED = 0
 
 
 class Loader(staticmethod):
@@ -37,14 +37,10 @@ class Environment[ProblemT](abc.ABC):
 
     def __init__(
         self,
-        datasets: Mapping[str, DatasetConfig],
-        filters: Sequence[Filter] = (),
-        transforms: Sequence[Transform] = (),
+        datasets: Mapping[str, Mapping[str, Any] | None],
         use_system_prompt: bool = False,
     ) -> None:
-        self.datasets = datasets
-        self.filters = filters
-        self.transforms = transforms
+        self.datasets = {name: DatasetConfig(**(config or {})) for name, config in datasets.items()}
         self.system_prompt = self.system_prompt if use_system_prompt else None
         self.problems: list[ProblemT] = []
         self.dataset_names: list[str] = []
@@ -52,19 +48,20 @@ class Environment[ProblemT](abc.ABC):
     def load(self) -> int:
         self.problems, self.dataset_names = [], []
         for name, dataset in self.datasets.items():
-            problems = self.process(name, dataset, self.registry[name]())
+            problems = self.subsample(self.registry[name](), dataset.n_samples)
+            logger.info(f"[env] {self.name}/{name}: {len(problems)} problems")
             self.problems += problems
             self.dataset_names += [name] * len(problems)
         return len(self.problems)
 
-    def process(self, name: str, dataset: DatasetConfig, problems: list[ProblemT]) -> list[ProblemT]:
-        kept = problems
-        for keep in [*self.filters, *dataset.filters]:
-            kept = [problem for problem in kept if keep(problem, self)]
-        for transform in [*self.transforms, *dataset.transforms]:
-            kept = transform(kept, self.question)
-        logger.info(f"[env] {self.name}/{name}: kept {len(kept)}/{len(problems)}")
-        return kept
+    def subsample(self, problems: list[ProblemT], n_samples: int | None) -> list[ProblemT]:
+        if n_samples is None or n_samples >= len(problems):
+            return problems
+        ids = sorted(random.Random(SAMPLE_SEED).sample(range(len(problems)), n_samples))
+        return [problems[i] for i in ids]
+
+    def __getstate__(self) -> dict[str, Any]:
+        return {**self.__dict__, "problems": [], "dataset_names": []}
 
     @cached_property
     def fingerprint(self) -> str:
@@ -76,9 +73,6 @@ class Environment[ProblemT](abc.ABC):
 
     def render(self, id: int) -> tuple[str | None, str]:
         return self.system_prompt, self.user_prompt(self.question(self.problems[id]))
-
-    def grade(self, id: int, completion: str) -> Score:
-        return self.score(self.problems[id], completion)
 
     @abc.abstractmethod
     def question(self, problem: ProblemT) -> str: ...

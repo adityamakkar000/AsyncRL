@@ -152,12 +152,12 @@ class RLOOLoss(LossFunction):
 
     def __init__(self, loss_config: LossConfig):
         super().__init__(loss_config)
-        assert loss_config.inference_config.group_size > 1, (
-            f"RLOO requires group_size > 1 for leave-one-out baseline, got {loss_config.inference_config.group_size}"
+        assert loss_config.group_size > 1, (
+            f"RLOO requires group_size > 1 for leave-one-out baseline, got {loss_config.group_size}"
         )
 
     def compute_advantage(self, batch: RLBatch, teacher_params: PyTree = None) -> Array:
-        G = self.config.inference_config.group_size
+        G = self.config.group_size
         loo_mean = (G * batch.group_mean - batch.rewards) / (G - 1)
         advantages = batch.rewards - loo_mean
         return advantages

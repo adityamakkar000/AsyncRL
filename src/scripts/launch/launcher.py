@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 import getpass
 import os
-import random
+import re
+import shlex
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -16,28 +16,37 @@ from .tpu import Runtime, TPUType, Zone
 
 load_dotenv()
 TPU_SERVER_URL = os.getenv("TPU_SERVER_URL", None)
+MAX_TAG_LENGTH = 64
+SWEEP_SEPARATOR = "_sweep_"
 
 
-class JOB_TYPES(str, Enum):
+class JobType(str, Enum):
     TRAIN = "src.train"
     EVAL = "src.eval"
 
 
 @dataclass
-class LAUNCH_JOB:
-    RUN: Cross | Zip | Vals
-    EXPERIMENT_PREFIX: str
-    FIXED_OVERRIDES: dict[str, Any]
-    BASE_CONFIG: str
-    ZONE: Zone
-    JOB_TYPE: JOB_TYPES
-    TPU_TYPE: TPUType
-    RUNTIME: Runtime
-    RETRIES: int = 3
-    DEBUG: bool = False
-    LAUNCH_ID: int | None = None
-    SWEEPS: list[int] | None = None
-    FRESH_CODE: bool = False
+class Job:
+    run: Cross | Zip | Vals
+    experiment_prefix: str
+    fixed_overrides: dict[str, Any]
+    base_config: str
+    job_type: JobType = JobType.TRAIN
+
+
+@dataclass
+class ResumeJob:
+    name: str
+    overrides: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Target:
+    zone: Zone
+    tpu_type: TPUType
+    runtime: Runtime
+    retries: int
+    debug: bool
 
 
 def submit(post_args: dict[str, Any]) -> str:
@@ -52,62 +61,119 @@ def submit(post_args: dict[str, Any]) -> str:
     return "resubmitted (replaced finished run)" if response.json().get("replaced") else "submitted"
 
 
-def command(job: LAUNCH_JOB, run_id: str, combo: dict[str, Any]) -> str:
-    parts = ["python", "-m", job.JOB_TYPE.value, f"--config-name {job.BASE_CONFIG}"]
-    if job.JOB_TYPE == JOB_TYPES.TRAIN:
-        parts.append(f"experiment_name={run_id}")
-    parts += [f"{k}={v}" for k, v in {**job.FIXED_OVERRIDES, **combo}.items()]
+def hydra_str(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def short_key(key: str) -> str:
+    return re.split(r"[./]", key)[-1]
+
+
+def notes(combo: dict[str, Any]) -> str:
+    return ", ".join(f"{k}={v}" for k, v in combo.items())
+
+
+def tags(job: Job, launch_name: str, index: int, combo: dict[str, Any]) -> list[str]:
+    candidates = [
+        job.experiment_prefix,
+        launch_name,
+        f"sweep_{index}",
+        *(f"{short_key(k)}={v}" for k, v in combo.items()),
+    ]
+    return [t for t in candidates if len(t) <= MAX_TAG_LENGTH]
+
+
+def command(job: Job, run_name: str, launch_name: str, index: int, combo: dict[str, Any]) -> str:
+    overrides = {**job.fixed_overrides, **combo}
+    if job.job_type == JobType.TRAIN:
+        overrides["experiment_name"] = run_name
+        overrides["wandb_config.tags"] = (
+            "[" + ",".join(hydra_str(t) for t in tags(job, launch_name, index, combo)) + "]"
+        )
+        if combo:
+            overrides["wandb_config.notes"] = hydra_str(notes(combo))
+    parts = ["python", "-m", job.job_type.value, "--config-name", job.base_config]
+    parts += [shlex.quote(f"{k}={v}") for k, v in overrides.items()]
     return " ".join(parts)
 
 
-def code_exists(name: str) -> bool:
-    response = requests.get(f"{TPU_SERVER_URL}/code/{name}", timeout=30)
-    response.raise_for_status()
-    return response.json()["exists"]
+def split_run_name(run_name: str) -> tuple[str, int]:
+    launch_name, sep, index = run_name.rpartition(SWEEP_SEPARATOR)
+    assert sep and index.isdigit(), f"{run_name} is not a <launch_name>{SWEEP_SEPARATOR}<i> run name"
+    return launch_name, int(index)
 
 
-def copy_code(job: LAUNCH_JOB, launch_id: int) -> str:
-    name = f"{job.EXPERIMENT_PREFIX}_{launch_id}"
-    run_dir = f"jobs/{name}"
-    if job.DEBUG:
-        return run_dir
-    if not job.FRESH_CODE and code_exists(name):
-        print(f"reusing code already on the server at ~/{run_dir} (set FRESH_CODE=True to replace it)")
-        return run_dir
-    copy = subprocess.run(["mesh", "copy", "server", f"~/{run_dir}"], cwd=os.getcwd(), check=False)
+def copy_code(launch_name: str) -> None:
+    copy = subprocess.run(["mesh", "copy", "server", f"~/jobs/{launch_name}"], cwd=os.getcwd(), check=False)
     if copy.returncode != 0:
         raise RuntimeError("mesh copy to the server failed, nothing was submitted")
-    return run_dir
 
 
-def launch(job: LAUNCH_JOB) -> None:
-    combos = job.RUN.expand()
-    sweeps = list(range(len(combos))) if job.SWEEPS is None else job.SWEEPS
-    bad = [i for i in sweeps if not 0 <= i < len(combos)]
-    if bad:
-        raise ValueError(f"SWEEPS {bad} out of range, this launch has {len(combos)} runs (0..{len(combos) - 1})")
-    if not job.DEBUG and not TPU_SERVER_URL:
+def stored_command(run_name: str) -> str:
+    response = requests.get(f"{TPU_SERVER_URL}/runs/{run_name}/command", timeout=30)
+    if response.status_code == 404:
+        raise RuntimeError(f"no stored command for {run_name} on the server")
+    response.raise_for_status()
+    return response.json()["command"]
+
+
+def post_args(target: Target, run_name: str, cmd: str) -> dict[str, Any]:
+    launch_name, _ = split_run_name(run_name)
+    return {
+        "node_id": run_name,
+        "zone": target.zone,
+        "tpu_type": target.tpu_type,
+        "runtime": target.runtime,
+        "cmd": cmd,
+        "retries": target.retries,
+        "cwd": f"jobs/{launch_name}",
+        "launched_by": getpass.getuser(),
+    }
+
+
+def send(target: Target, run_name: str, cmd: str, label: str) -> None:
+    args = post_args(target, run_name, cmd)
+    result = "debug, not submitted" if target.debug else submit(args)
+    print(f"  {run_name}  {label}  -> {result}")
+    if target.debug:
+        print(f"    {args}")
+
+
+def launch_new(target: Target, job: Job) -> None:
+    launch_name = f"{job.experiment_prefix}_{datetime.now().astimezone():%Y_%m_%d_%H_%M_%S}"
+    combos = job.run.expand()
+    print(f"\n{launch_name}: {len(combos)} runs")
+    if not target.debug:
+        copy_code(launch_name)
+    for i, combo in enumerate(combos):
+        run_name = f"{launch_name}{SWEEP_SEPARATOR}{i}"
+        send(target, run_name, command(job, run_name, launch_name, i, combo), notes(combo) or "-")
+
+
+def launch_resume(target: Target, jobs: list[ResumeJob]) -> None:
+    print(f"\nresuming {len(jobs)} runs")
+    for job in jobs:
+        split_run_name(job.name)
+        cmd = " ".join([stored_command(job.name), *(shlex.quote(f"{k}={v}") for k, v in job.overrides.items())])
+        send(target, job.name, cmd, f"resume {notes(job.overrides)}".strip())
+
+
+def launch_job(
+    *,
+    zone: Zone,
+    tpu_type: TPUType,
+    runtime: Runtime,
+    job: Job | None = None,
+    resume_from: list[ResumeJob] | None = None,
+    retries: int = 3,
+    debug: bool = False,
+) -> None:
+    assert (job is None) != (not resume_from), "give exactly one of job or resume_from"
+    if not TPU_SERVER_URL and not (debug and job is not None):
         raise RuntimeError("TPU_SERVER_URL is not set (check .env)")
-
-    launch_id = random.randint(0, 1000000) if job.LAUNCH_ID is None else job.LAUNCH_ID
-    run_dir = copy_code(job, launch_id)
-    user = getpass.getuser()
-    print(f"\n{job.EXPERIMENT_PREFIX}: launch_id={launch_id} (relaunch with LAUNCH_ID={launch_id})")
-    for i in sweeps:
-        combo = combos[i]
-        run_id = f"{job.EXPERIMENT_PREFIX}_sweep_{i}_{launch_id}"
-        post_args = {
-            "node_id": run_id,
-            "zone": job.ZONE,
-            "tpu_type": job.TPU_TYPE,
-            "runtime": job.RUNTIME,
-            "cmd": command(job, run_id, combo),
-            "retries": job.RETRIES,
-            "cwd": run_dir,
-            "launched_by": user,
-        }
-        result = "debug, not submitted" if job.DEBUG else submit(post_args)
-        changed = " ".join(f"{k}={v}" for k, v in combo.items()) or "-"
-        print(f"  {run_id}  {changed}  -> {result}")
-        if job.DEBUG:
-            print(f"    {post_args}")
+    target = Target(zone, tpu_type, runtime, retries, debug)
+    if job is not None:
+        launch_new(target, job)
+    else:
+        assert resume_from
+        launch_resume(target, resume_from)

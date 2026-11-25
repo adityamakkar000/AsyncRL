@@ -125,8 +125,8 @@ class TPUJob:
         return f"{os.path.expanduser('~')}/{self.cwd}"
 
     @property
-    def command(self) -> str:
-        return f'mesh run {self.node_id} "{self.cmd}"'
+    def command(self) -> list[str]:
+        return ["mesh", "run", self.node_id, self.cmd]
 
     @property
     def log_dir(self) -> str:
@@ -139,6 +139,15 @@ class TPUJob:
     @property
     def ranks_dir(self) -> str:
         return f"{self.log_dir}/ranks"
+
+    @property
+    def command_path(self) -> str:
+        return f"{self.log_dir}/command.txt"
+
+    def write_command(self):
+        os.makedirs(self.log_dir, exist_ok=True)
+        with open(self.command_path, "w") as f:
+            f.write(self.cmd)
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -345,7 +354,6 @@ class TPUJob:
         self.log_file = open(self.log_path, "a", buffering=1)
         self.process = subprocess.Popen(
             self.command,
-            shell=True,
             stdout=self.log_file,
             stderr=self.log_file,
             text=True,

@@ -1,0 +1,74 @@
+defaults:
+  - base 
+  - model_config: qwen_1.7b_base
+  - loss_config: loss
+  - train_envs/math@train_envs.math: [deepr_filtered]
+  - eval_config: deepr_val
+  - inference_config: debug
+  - override loss_config/rl_config: miscispo
+  - _self_
+
+train_batch_size: 512
+
+grad_accum_steps: 8
+seed: 123
+num_steps: 10000
+
+optimizer: "adamw"
+optimizer_kwargs: 
+  b1: 0.9
+  b2: 0.95
+  weight_decay: 0.01
+  eps: 1e-8
+  mu_dtype: float32
+grad_clip: 1.0
+
+learning_rate_init: 0.0
+learning_rate_peak: 1e-6
+learning_rate_end: 1e-7
+warmup_steps: 0.01
+decay_steps: 0.95
+
+checkpoint_interval: 50
+max_checkpoints_to_keep: 1
+keep_every: 100
+log_generations_every_n_steps: 100
+
+wandb_config: 
+  project: "CISPOScaling"
+  notes: null
+  tags: null
+
+loss_config:
+  group_size: 16
+
+inference_config:
+  max_seq_len: 2048
+  max_decode_batch_size: 48
+  prefill_batch_size: 48
+  warmup_seq_len: 1024
+  temperature: 1.0
+  reasoning_budget: null
+  think_mode: true
+
+model_config:
+  fused_chunk_size: 8192
+
+sharding_config:
+  opt_state_offload: false
+  min_bytes_for_fsdp: 10000000
+  weight_shard_dim: 0
+  data_shard_dim: 0
+  cp_shard_dim: 1
+  dp_group_size: 1
+  cp_group_size: 1 
+  fsdp_group_size: -1
+
+async_config:
+  train_workers: 2
+  max_lag: 4
+
+metrics_to_log:
+  - "train/loss"
+  - "train/mean_reward"
+  - "train/num_unparsable"

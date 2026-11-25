@@ -4,7 +4,7 @@ defaults:
   - loss_config: loss
   - train_envs/math@train_envs.math: [gsm8k]
   - eval_config: gsm8k_val
-  - override loss_config/inference_config: debug
+  - inference_config: debug
   - _self_
 
 debug: true
@@ -16,9 +16,7 @@ eval_config:
     math:
       datasets:
         gsm8k_val:
-          transforms:
-            - _target_: src.data.transformations.transforms.RandomSample
-              n: 16
+          n_samples: 16
 
 grad_accum_steps: 1
 seed: 0
@@ -45,15 +43,17 @@ wandb_config:
   notes: null
   tags: null
 
+inference_config:
+  max_seq_len: 512
+  warmup_seq_len: 256
+  max_decode_batch_size: 16
+  prefill_batch_size: 32
+  temperature: 1.0
+  reasoning_budget: null
+  think_mode: true
+
 loss_config:
-  inference_config:
-    max_seq_len: 512
-    warmup_seq_len: 256
-    max_decode_batch_size: 16
-    group_size: 16
-    temperature: 1.0
-    reasoning_budget: null 
-    think_mode: true
+  group_size: 16
   rl_config:
     _target_: src.workers.loss.CISPOLoss
     epsilon: 4

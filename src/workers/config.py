@@ -8,7 +8,6 @@ from flax import struct
 from jaxtyping import Array, PyTree
 from omegaconf import MISSING
 
-from src.data import EnvConfig
 from src.model import KVCache, ModelConfig
 from src.workers.utils import MPQueues
 
@@ -20,10 +19,9 @@ class InferenceConfig:
     top_p: float | None = MISSING
     max_seq_len: int = MISSING
     max_decode_batch_size: int = MISSING
-    prefill_multiplier: float = 2.0
+    prefill_batch_size: int = MISSING
     warmup_seq_len: int = 1024
     tp: int = 1
-    group_size: int = MISSING
     min_prefill_length: int = 128
     kv_cache_dtype: str = "bfloat16"
     params_dtype: str = "bfloat16"
@@ -148,7 +146,7 @@ class WandBConfig:
 @dataclass
 class LossConfig:
     rl_config: dict[str, Any] = MISSING
-    inference_config: InferenceConfig = field(default_factory=InferenceConfig)
+    group_size: int = 1
     filter_zero_variance: bool = False
 
 
@@ -165,7 +163,7 @@ class EvalConfig:
     log_traces_n_prompts: int = -1
     eval_every_n_steps: int = 50
     eval_on_step_0: bool = False
-    eval_envs: dict[str, EnvConfig] = field(default_factory=dict)
+    eval_envs: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -177,9 +175,10 @@ class TeacherConfig:
 @dataclass
 class TrainerConfig:
     experiment_name: str = MISSING  # The name of the experiment
-    train_envs: dict[str, EnvConfig] = MISSING
+    train_envs: dict[str, Any] = MISSING
     model_config: ModelConfig = MISSING  # The configuration for the model
     loss_config: LossConfig = MISSING  # The configuration for the loss function
+    inference_config: InferenceConfig = MISSING
 
     eval_config: EvalConfig = field(default_factory=EvalConfig)
 
@@ -202,8 +201,8 @@ class TrainerConfig:
     learning_rate_init: float = 0.0
     learning_rate_peak: float = 1e-4
     learning_rate_end: float = 1e-5
-    warmup_steps: float = 0.1  # fraction of total steps to use for learning rate warmup
-    decay_steps: float = 0.9  # fraction of total steps to use for learning rate decay
+    warmup_steps: Any = 0.1
+    decay_steps: Any = 0.9
 
     wandb_config: WandBConfig | None = None
     metrics_to_log: list[str] = field(default_factory=lambda: ["train/loss", "val/loss"])  # Metrics to log to terminal

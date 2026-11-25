@@ -1,0 +1,8 @@
+defaults:
+  - /eval_envs/math@eval_envs.math: [deepr_filtered_test]
+  - _self_
+
+group_size: 32
+pass_k: [32, 64]
+eval_every_n_steps: 100
+eval_on_step_0: true

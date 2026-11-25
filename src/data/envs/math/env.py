@@ -1,10 +1,12 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from datasets import load_dataset
 
-from ...config import Score
+from ...config import Score, ScoreStatus
 from ..base import Environment, register_dataset
+from .judge import judge_answer, require_api_key
 from .math_utils import extract_answer, grade_answer_verl
 from .prompts import SYSTEM_PROMPT, apply_prompt_template
 
@@ -44,6 +46,17 @@ class MathEnv(Environment[MathProblem]):
     name = "math"
     system_prompt = SYSTEM_PROMPT
 
+    def __init__(
+        self,
+        datasets: Mapping[str, Mapping[str, Any] | None],
+        use_system_prompt: bool = False,
+        llm_judge: bool = False,
+    ) -> None:
+        super().__init__(datasets, use_system_prompt)
+        if llm_judge:
+            require_api_key()
+        self.llm_judge = llm_judge
+
     def question(self, problem: MathProblem) -> str:
         return problem.question
 
@@ -54,9 +67,13 @@ class MathEnv(Environment[MathProblem]):
         response = completion.rpartition("</think>")[2]
         reward = grade_answer_verl(response, problem.answer)
         extracted = extract_answer(response)
+        if reward:
+            return Score(1.0, ScoreStatus.CORRECT, extracted, problem.answer)
         if reward is None:
-            return Score(0.0, "unparsable", extracted, problem.answer)
-        return Score(float(reward), "correct" if reward else "wrong", extracted, problem.answer)
+            return Score(0.0, ScoreStatus.UNPARSABLE, extracted, problem.answer)
+        if self.llm_judge and extracted and extracted.strip() and judge_answer(extracted, problem.answer):
+            return Score(1.0, ScoreStatus.JUDGED, extracted, problem.answer)
+        return Score(0.0, ScoreStatus.WRONG, extracted, problem.answer)
 
     @register_dataset("gsm8k")
     def load_gsm8k() -> list[MathProblem]:
@@ -81,6 +98,14 @@ class MathEnv(Environment[MathProblem]):
     @register_dataset("amc_25")
     def load_amc_25() -> list[MathProblem]:
         return load(fields("question"), "sonthenguyen/amc12-2025-non-figure")
+
+    @register_dataset("deepr-filtered-train")
+    def load_deepr_filtered_train() -> list[MathProblem]:
+        return load(fields(solution="solution"), "adityamakkar000/deepRFiltered", "train")
+
+    @register_dataset("deepr-filtered-test")
+    def load_deepr_filtered_test() -> list[MathProblem]:
+        return load(fields(solution="solution"), "adityamakkar000/deepRFiltered", "test")
 
     @register_dataset("troll-17k-train")
     def load_troll_17k() -> list[MathProblem]:
