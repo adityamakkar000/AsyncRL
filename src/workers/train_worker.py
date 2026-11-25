@@ -26,6 +26,7 @@ from src.model import Model, make_weight_shard_fn
 
 from .config import AsyncOptions, TrainerConfig
 from .constants import EVAL_TIMEOUT, TIMEOUT
+from .loss import ValueLossFunction
 from .rdma_transfer import RDMATransferServer
 from .utils import (
     PER_WORKER_SUMS,
@@ -129,6 +130,11 @@ class AsyncTrainerWorker(Worker):
         self.model = None
         self.tx = None
 
+        self.value_fn = None
+        self.value_tx = None
+        self.value_opt_state = None
+        self.value_opt_state_sharding = None
+
         self.params = None
         self.teacher_params = None
 
@@ -206,16 +212,8 @@ class AsyncTrainerWorker(Worker):
             self.config.loss_config.rl_config, _recursive_=False, loss_config=self.config.loss_config
         )
 
-        # val fn not needed since we just care about val reward, not loss
-        self.train_fn, _val_fn, shardings = stax.fn.get_steps_fn(
-            self.loss_fn,
-            self.model,
-            self.tx,
-            has_aux=True,
-            grad_steps=self.config.grad_accum_steps,
-            reduce_fn=self.loss_fn.compute_normalization,
-            val_steps=0,  # val steps is not used
-            sharding=stax.ShardingConfig(
+        def sharding_config(opt_state_shape: PyTree) -> stax.ShardingConfig:
+            return stax.ShardingConfig(
                 params_shape=params_shape,
                 opt_state_shape=opt_state_shape,
                 mesh_config=stax.MeshConfig(
@@ -228,12 +226,39 @@ class AsyncTrainerWorker(Worker):
                 data_shard_dim=self.config.sharding_config.data_shard_dim,
                 cp_shard_dim=self.config.sharding_config.cp_shard_dim,
                 weight_shard_fn=make_weight_shard_fn(self.config.sharding_config.weight_shard_dim),
-            ),
+            )
+
+        # val fn not needed since we just care about val reward, not loss
+        self.train_fn, _val_fn, shardings = stax.fn.get_steps_fn(
+            self.loss_fn,
+            self.model,
+            self.tx,
+            has_aux=True,
+            grad_steps=self.config.grad_accum_steps,
+            reduce_fn=self.loss_fn.compute_normalization,
+            val_steps=0,  # val steps is not used
+            sharding=sharding_config(opt_state_shape),
             # only use devices on the train worker's mesh
             devices=self.async_options.train_mesh.devices.reshape(-1),
             # jit kwargs
             train_jit_kwargs={"donate_argnums": (1,)},
         )
+
+        if self.value_tx is not None:
+            assert isinstance(self.loss_fn, ValueLossFunction), "critic_updates_per_step > 1 needs a value-based loss"
+            self.value_fn, _, value_shardings = stax.fn.get_steps_fn(
+                self.loss_fn.value_loss,
+                self.model,
+                self.value_tx,
+                has_aux=True,
+                grad_steps=self.config.grad_accum_steps,
+                reduce_fn=self.loss_fn.compute_normalization,
+                val_steps=0,
+                sharding=sharding_config(jax.eval_shape(self.value_tx.init, params_shape)),
+                devices=self.async_options.train_mesh.devices.reshape(-1),
+                train_jit_kwargs={"donate_argnums": (1,)},
+            )
+            self.value_opt_state_sharding = value_shardings.opt_state_sharding
 
         self.params_sharding, self.opt_state_sharding, self.shard_data_fn = (
             shardings.param_sharding,
@@ -296,6 +321,10 @@ class AsyncTrainerWorker(Worker):
             _teacher_step, teacher_params, _teacher_metadata = self.model.load_from_ckpt(
                 self.config.teacher_config.teacher_checkpoint, self.config.teacher_config.teacher_step
             )
+
+            if self.model.model.apply_value_head and "value_head" not in teacher_params:
+                kernel_dict = {"kernel": np.zeros((self.model.model.model_dim, 1), np.float32)}
+                teacher_params["value_head"] = kernel_dict
             self.teacher_params = jax.tree.map(lambda x, s: jax.device_put(x, s), teacher_params, self.params_sharding)
 
         if self.resumed:
@@ -308,6 +337,7 @@ class AsyncTrainerWorker(Worker):
 
         self.params: Any = out_state["params"]
         self.opt_state = out_state["opt_state"]
+        self.value_opt_state = self.init_value_opt_state()
 
         logger.info(
             f"Params intialized with total size: {self.model.count_params(self.params):_} parameters.", log_for_all=True
@@ -337,7 +367,39 @@ class AsyncTrainerWorker(Worker):
             optax.clip_by_global_norm(self.config.grad_clip) if self.config.grad_clip is not None else optax.identity()
         )
         optimizer_args: dict = {"learning_rate": lr_scheduler, **self.config.optimizer_kwargs}
-        self.tx = optax.chain(track_grad_norm(), clip, optax.inject_hyperparams(optimizer)(**optimizer_args))
+        tx = optax.inject_hyperparams(optimizer)(**optimizer_args)
+
+        if self.config.critic_learning_rate is not None:
+            scale = self.config.critic_learning_rate / self.config.learning_rate_peak
+            critic_tx = optax.inject_hyperparams(optimizer)(
+                **{**optimizer_args, "learning_rate": lambda step: lr_scheduler(step) * scale}
+            )
+
+            def label_params(params):
+                is_critic = lambda path: any(getattr(k, "key", None) == "value_head" for k in path)
+                return jax.tree_util.tree_map_with_path(lambda p, _: "critic" if is_critic(p) else "policy", params)
+
+            tx = optax.multi_transform({"policy": tx, "critic": critic_tx}, label_params)
+
+        if self.config.critic_updates_per_step > 1:
+            assert self.config.critic_learning_rate is not None, (
+                "critic_updates_per_step > 1 needs critic_learning_rate so the value head has its own optimizer"
+            )
+            self.value_tx = optax.chain(
+                clip, optax.multi_transform({"policy": optax.set_to_zero(), "critic": critic_tx}, label_params)
+            )
+
+        self.tx = optax.chain(track_grad_norm(), clip, tx)
+
+    def current_lrs(self) -> dict[str, Array]:
+        opt_state = self.opt_state[2]
+        if self.config.critic_learning_rate is None:
+            return {"train/lr": opt_state.hyperparams["learning_rate"]}
+        inner = opt_state.inner_states
+        return {
+            "train/lr": inner["policy"].inner_state.hyperparams["learning_rate"],
+            "train/critic_lr": inner["critic"].inner_state.hyperparams["learning_rate"],
+        }
 
     @partial(setup, component="checkpointer")
     def _setup_checkpointer(self):
@@ -353,6 +415,11 @@ class AsyncTrainerWorker(Worker):
             keep_every=self.config.keep_every,
         )
 
+    def init_value_opt_state(self) -> PyTree | None:
+        if self.value_tx is None:
+            return None
+        return jax.jit(self.value_tx.init, out_shardings=self.value_opt_state_sharding)(self.params)
+
     def make_save_tree(
         self,
         *,
@@ -366,6 +433,8 @@ class AsyncTrainerWorker(Worker):
             "params": self.params if params is None else params,
             "opt_state": self.opt_state if opt_state is None else opt_state,
         }
+        if self.value_opt_state is not None:
+            state["value_opt_state"] = self.value_opt_state
 
         metadata = {
             "writer_id": self.writer_id,
@@ -408,15 +477,27 @@ class AsyncTrainerWorker(Worker):
             return jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=s)
 
         abstract_state = self.model.init_state(jax.random.PRNGKey(0), tx=self.tx)
-        restored = self.checkpointer.restore(
-            state={
-                "params": jax.tree.map(with_sharding, abstract_state["params"], self.params_sharding),
-                "opt_state": jax.tree.map(with_sharding, abstract_state["opt_state"], self.opt_state_sharding),
-            }
-        )
+        target = {
+            "params": jax.tree.map(with_sharding, abstract_state["params"], self.params_sharding),
+            "opt_state": jax.tree.map(with_sharding, abstract_state["opt_state"], self.opt_state_sharding),
+        }
+        restored = None
+        if self.value_tx is not None:
+            abstract_value_opt_state = jax.eval_shape(self.value_tx.init, abstract_state["params"])
+            value_target = jax.tree.map(with_sharding, abstract_value_opt_state, self.value_opt_state_sharding)
+            try:
+                restored = self.checkpointer.restore(state=target | {"value_opt_state": value_target})
+            except (KeyError, ValueError) as e:  # checkpoint from a run that started with critic_updates_per_step=1
+                logger.warning(f"No value_opt_state in checkpoint ({type(e).__name__}); starting it fresh")
+        if restored is None:
+            restored = self.checkpointer.restore(state=target)
         state, metadata = restored["state"], restored["metadata"]
         self.params = state["params"]
         self.opt_state = state["opt_state"]
+        if self.value_tx is not None:
+            self.value_opt_state = state.get("value_opt_state")
+            if self.value_opt_state is None:
+                self.value_opt_state = self.init_value_opt_state()
 
         self.key.key = jax.numpy.asarray(metadata["key"], dtype=jax.numpy.uint32)
         if self.worker_rank == 0:
@@ -427,7 +508,9 @@ class AsyncTrainerWorker(Worker):
     def train_sync_weights(self):
         assert self.train_mesh is not None, "Train mesh must be set up to sync weights."
 
-        params_cast = self.replicate_params_fn(self.params)
+        # the value head is train-only; inference runs the policy without it
+        inference_params = {k: v for k, v in self.params.items() if k != "value_head"}
+        params_cast = self.replicate_params_fn(inference_params)
         if self.worker_rank == 0:
             for _ in range(self.async_options.inference_workers):
                 self.async_options.queues.weight_sync_queue.put("sync")
@@ -457,7 +540,7 @@ class AsyncTrainerWorker(Worker):
             | metrics_all_reduce(local_rollout_metrics | local_batch_metrics, self.async_options.train_mesh)
             | {f"devices/{k}": v for k, v in memory_metrics(jax.local_devices()).items()}
             | {
-                "train/lr": self.opt_state[2].hyperparams["learning_rate"],
+                **self.current_lrs(),
                 "train/grad_norm": self.opt_state[0].grad_norm,
                 "train/prep_batch_time": prep_batch_time,
                 "train/learner_step_time": learner_time,
@@ -533,11 +616,18 @@ class AsyncTrainerWorker(Worker):
         trace_path = f"{self.profile_path}/step_{self.global_step}" if profile else None
         with stax.Tracker(trace=trace_path):
             global_train_batch = self.global_train_batch(local_batch)
+
+            value_metrics = {}
+            for _ in range(self.config.critic_updates_per_step - 1):
+                value_out = self.value_fn(params, self.value_opt_state, global_train_batch)  # type: ignore
+                params, self.value_opt_state = value_out["params"], value_out["opt_state"]
+                value_metrics = value_out["metrics"]
+
             out = self.train_fn(params, opt_state, global_train_batch, teacher_params=teacher_params)
             # we have to sync weights so might as well block to get true step time
             jax.tree.map(lambda x: x.block_until_ready(), out)
 
-        return out["params"], out["opt_state"], out["metrics"]
+        return out["params"], out["opt_state"], value_metrics | out["metrics"]
 
     def compile_train_fn(self):
         assert self.train_fn is not None, "Train function not set up."
@@ -550,6 +640,10 @@ class AsyncTrainerWorker(Worker):
         self.train_fn.lower(  # type: ignore
             self.params, self.opt_state, self.global_train_batch(local_test_batch), teacher_params=self.teacher_params
         ).compile()
+        if self.value_fn is not None:
+            self.value_fn.lower(  # type: ignore
+                self.params, self.value_opt_state, self.global_train_batch(local_test_batch)
+            ).compile()
 
     def train(self):
         assert self.params is not None and self.opt_state is not None, "Train state not initialized."

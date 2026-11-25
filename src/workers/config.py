@@ -201,6 +201,8 @@ class TrainerConfig:
     learning_rate_init: float = 0.0
     learning_rate_peak: float = 1e-4
     learning_rate_end: float = 1e-5
+    critic_learning_rate: float | None = None
+    critic_updates_per_step: int = 1
     warmup_steps: Any = 0.1
     decay_steps: Any = 0.9
 

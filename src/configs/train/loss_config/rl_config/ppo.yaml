@@ -1,0 +1,11 @@
+_target_: src.workers.loss.PPOLoss
+epsilon_low: 0.2
+epsilon_high: 0.2
+gamma: 1.0
+lam_policy: 1.0
+lam_value: 1.0
+la_gae_alpha: null  # e.g. 0.4 for length-adaptive GAE (overrides lam_policy)
+vf_coeff: 0.5
+bound_values: "none" 
+r_min: 0.0
+r_max: 1.0

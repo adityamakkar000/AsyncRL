@@ -1,0 +1,13 @@
+defaults:
+  - debug
+  - override loss_config/rl_config: ppo
+  - _self_
+
+wandb_config:
+  project: "AnnealedRL"
+  notes: "PPO with value head on shared trunk"
+  tags: ["ppo"]
+
+model_config:
+  model_args:
+    apply_value_head: true
