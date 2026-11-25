@@ -4,36 +4,18 @@ defaults:
   - loss_config: loss
   - train_envs/math@train_envs.math: [gsm8k]
   - eval_config: gsm8k_val
-  - override loss_config/inference_config: debug
+  - inference_config: debug
   - override loss_config/rl_config: ppo
   - _self_
 
 train_batch_size: 512
-
-# prompt-length cap of 1024 (the env default is 256) to match the pre-refactor GSM8K runs
-train_envs:
-  math:
-    datasets:
-      gsm8k:
-        filters:
-          - _target_: src.data.transformations.filters.PromptLengthFilter
-            max_length: 1024
-            hf_model: ${model_config.hf_model_name}
-          - _target_: src.data.transformations.filters.EnglishFilter
 
 eval_config:
   eval_envs:
     math:
       datasets:
         gsm8k_val:
-          filters:
-            - _target_: src.data.transformations.filters.PromptLengthFilter
-              max_length: 1024
-              hf_model: ${model_config.hf_model_name}
-            - _target_: src.data.transformations.filters.EnglishFilter
-          transforms:
-            - _target_: src.data.transformations.transforms.RandomSample
-              n: 16
+          n_samples: 16
 
 grad_accum_steps: 1
 seed: 0
@@ -60,14 +42,16 @@ wandb_config:
   notes: "PPO with value head on shared trunk"
   tags: ["ppo"]
 
+inference_config:
+  max_seq_len: 512
+  max_decode_batch_size: 16
+  prefill_batch_size: 32
+  temperature: 1.0
+  reasoning_budget: null
+  think_mode: true
+
 loss_config:
-  inference_config:
-    max_seq_len: 512
-    max_decode_batch_size: 16
-    group_size: 16
-    temperature: 1.0
-    reasoning_budget: null
-    think_mode: true
+  group_size: 16
 
 model_config:
   fused_chunk_size: 8192
