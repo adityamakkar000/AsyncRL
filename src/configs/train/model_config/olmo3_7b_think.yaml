@@ -1,5 +1,5 @@
 model_args:
-  _target_: src.model.olmo3.Olmo3
+  _target_: src.model.models.olmo3.Olmo3
   vocab_size: 100278
   sequence_len: 16384 # SWA after 4096
   model_dim: 4096
