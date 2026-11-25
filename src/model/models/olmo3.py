@@ -1,5 +1,8 @@
+from typing import cast
+
 import jax.numpy as jnp
 from jaxtyping import Array
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 from .layers import RopeCorrection
 from .layers.transformer import Transformer
@@ -37,6 +40,11 @@ class Olmo3(Transformer):
     rope_scale: float = YARN_ATTENTION_FACTOR
     sliding_window: int | None = 4096
     full_attention_every: int = 4
+
+    @staticmethod
+    def eos_token_id(tokenizer: PreTrainedTokenizerBase) -> int | None:
+        # a chat turn ends with <|im_end|>, the tokenizer's own eos is <|endoftext|>
+        return cast(int | None, tokenizer.convert_tokens_to_ids("<|im_end|>"))
 
     @property
     def hf_mapping(self):

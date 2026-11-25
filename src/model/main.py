@@ -31,8 +31,9 @@ class Model(HFModelBase):
             f"Expected model to be an instance of BaseModel, got {type(self.model)}"
         )
         self.tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(config.hf_model_name)
-        self.eos_token: int = self.tokenizer.eos_token_id
-        assert self.eos_token is not None, f"tokenizer has no eos_token_id: {self.tokenizer}"
+        eos_token = self.model.eos_token_id(self.tokenizer)
+        assert eos_token is not None, f"tokenizer has no eos_token_id: {self.tokenizer}"
+        self.eos_token: int = eos_token
         pad_token = self.tokenizer.pad_token_id
         self.pad_token: int = self.eos_token if pad_token is None else pad_token
 
