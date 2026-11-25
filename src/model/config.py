@@ -116,6 +116,11 @@ class BaseModel(abc.ABC, nn.Module):
         pass
 
     @staticmethod
+    def eos_token_id(tokenizer: PreTrainedTokenizerBase) -> int | None:
+        """Token that ends a generation."""
+        return cast(int | None, tokenizer.eos_token_id)
+
+    @staticmethod
     def get_chat_template(system_prompt: str | None, prompt: str) -> list[dict[str, str]]:
         system = [{"role": "system", "content": system_prompt}] if system_prompt else []
         return [*system, {"role": "user", "content": prompt}]

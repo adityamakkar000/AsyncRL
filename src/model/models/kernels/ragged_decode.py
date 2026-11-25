@@ -22,6 +22,7 @@ def ragged_decode_kernel(
     # prefetch refs
     kv_lengths: jax.ArrayRef,  # [b,]
     layer_ref: jax.ArrayRef,  # [1,]
+    window_ref: jax.ArrayRef,  # [1,] attend to the last `window` tokens only (counting the new token)
     # input ref
     q_ref: jax.ArrayRef,
     k_ref: jax.ArrayRef,
@@ -160,7 +161,8 @@ def ragged_decode_kernel(
             if is_quantized:
                 scores *= k_scale[:, None, :]
 
-            scores = jnp.where(pos < kv_len, scores, min_val)
+            # keep the stored tokens that are inside the window, the new token itself was added at i == 0
+            scores = jnp.where((pos < kv_len) & (pos > kv_len - window_ref[0]), scores, min_val)
 
             prev_max_scores = max_logit_scratch_ref[idx][..., :1]  # [heads, groups, 1]
             max_scores = jnp.maximum(jnp.max(scores, axis=-1, keepdims=True), prev_max_scores)  # [heads, group, 1]
@@ -204,6 +206,7 @@ def _decode_ragged_attention(
     kv_cache: KVCache,
     layer: jax.Array,
     sm_scale: float,
+    window: jax.Array,
     block_kv: int = 1024,
     block_b: int = 1,
 ) -> tuple[Array, KVCache]:
@@ -235,10 +238,10 @@ def _decode_ragged_attention(
     def kv_tree(value, scale):
         return Int8Array(value, scale) if kv_cache.is_quantized else value
 
-    def kv_cache_index(b, i, kv_lengths, layer):
+    def kv_cache_index(b, i, kv_lengths, layer, window):
         return (layer[0], b, 0, kv_block(b, i, kv_lengths), 0)
 
-    def kv_scale_index(b, i, kv_lengths, layer):
+    def kv_scale_index(b, i, kv_lengths, layer, window):
         return (layer[0], b, 0, kv_block(b, i, kv_lengths))
 
     def make_kv_block_spec():
@@ -263,7 +266,7 @@ def _decode_ragged_attention(
         return [kv_tree(any_spec, any_spec)] * 2
 
     grid_spec = pltpu.PrefetchScalarGridSpec(
-        num_scalar_prefetch=2,
+        num_scalar_prefetch=3,
         grid=(b // block_b, kv_seq_len // block_kv),
         in_specs=[
             pl.BlockSpec((block_b, h_kv, h // h_kv, d), lambda b, i, *_: (b, 0, 0, 0)),  # q
@@ -294,8 +297,8 @@ def _decode_ragged_attention(
         out_shape=[jax.ShapeDtypeStruct(q.shape, q.dtype), kv_cache.shape_dtype, kv_cache.shape_dtype],
         grid_spec=grid_spec,
         compiler_params=pltpu.CompilerParams(dimension_semantics=("parallel", "arbitrary")),
-        input_output_aliases={5: 1, 6: 2, 7: 3, 8: 4} if kv_cache.is_quantized else {5: 1, 6: 2},
-    )(kv_lengths, layer[None], q, k, v, kv_cache.k, kv_cache.v)
+        input_output_aliases={6: 1, 7: 2, 8: 3, 9: 4} if kv_cache.is_quantized else {6: 1, 7: 2},
+    )(kv_lengths, layer[None], jnp.asarray(window, dtype=jnp.int32)[None], q, k, v, kv_cache.k, kv_cache.v)
 
     out_cache = kv_cache.replace(k=k_cache, v=v_cache)
 
@@ -310,6 +313,7 @@ def decode_ragged_attention(
     v,  # [b, hkv, 1, d]
     kv_cache: tuple[jax.Array, KVCache],
     sm_scale=1.0,
+    window: jax.Array | None = None,  # None: attend to every stored token
 ) -> tuple[Array, KVCache]:
     layer, cache = kv_cache
     assert k.shape == v.shape, "kv shapes should match"
@@ -317,4 +321,7 @@ def decode_ragged_attention(
     assert q.shape[2] == 1, "should get 1 query for decode"
 
     block_kv = fit_block(1024, cache.max_len)
-    return _decode_ragged_attention(q, k, v, cache, layer, sm_scale, block_kv=block_kv)
+    no_window = jnp.asarray(jnp.iinfo(jnp.int32).max)
+    return _decode_ragged_attention(
+        q, k, v, cache, layer, sm_scale, no_window if window is None else window, block_kv=block_kv
+    )
