@@ -54,9 +54,6 @@ inference_config:
 
 loss_config:
   group_size: 16
-  rl_config:
-    _target_: src.workers.loss.CISPOLoss
-    epsilon: 4
 
 model_config:
   fused_chunk_size: 8192
